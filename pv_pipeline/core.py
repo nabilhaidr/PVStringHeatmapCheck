@@ -77,6 +77,32 @@ class M2Engine:
             rows.append(d)
         return pd.DataFrame(rows)
 
+    @staticmethod
+    def write_xlsx(findings: List[M2Finding], all_strings_df: "pd.DataFrame", path: str) -> None:
+        """Write 2-sheet xlsx: Findings + AllStrings."""
+        findings_df = M2Engine.to_summary_df(findings)
+        try:
+            import openpyxl  # noqa: F401
+        except ImportError:
+            import subprocess
+            import sys
+            print("Installing openpyxl for xlsx output")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
+        empty_findings = pd.DataFrame(columns=[
+            "timestamp", "inverter_id", "pv_string", "sub_module",
+            "severity", "value", "threshold", "message", "extra",
+        ])
+        empty_all = pd.DataFrame(columns=[
+            "inverter_id", "pv_string", "status", "uptime_pct",
+            "downtime_minutes", "event_minutes", "n_events", "daylight_minutes",
+        ])
+        with pd.ExcelWriter(path, engine="openpyxl") as xw:
+            (findings_df if not findings_df.empty else empty_findings).to_excel(
+                xw, sheet_name="Findings", index=False,
+            )
+            (all_strings_df if all_strings_df is not None and not all_strings_df.empty
+             else empty_all).to_excel(xw, sheet_name="AllStrings", index=False)
+
 
 if __name__ == "__main__":
     from pv_pipeline.core import Severity

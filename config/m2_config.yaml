@@ -13,6 +13,9 @@ m2e:
   # auto | event | cumulative | status_only
   shutdown_time_detection: "auto"
 
+  # Path to YAML containing 'empty_pv_map' (skip these PV strings in proxy calc)
+  empty_pv_map_path: "config/strings.yaml"
+
   string_proxy:
     pstr_zero_threshold_kw:     0.1
     sibling_median_active_kw:   1.0

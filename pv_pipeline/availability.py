@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import Severity, M2Finding, SubModule
+from pv_pipeline.string_config import get_empty_pv_map
 
 
 def _classify_status(status: Optional[str], keymap: dict) -> str:
@@ -209,6 +210,7 @@ def _compute_string_proxy(
     pv_cols: list,
     cfg: dict,
     interval_minutes: float,
+    empty_pv_map: Optional[dict] = None,
 ) -> list:
     """Detect string proxy-down events.
 
@@ -246,7 +248,13 @@ def _compute_string_proxy(
         active_pct = 100.0 * active_count / max(n_pv_total, 1)
         qualified = (sib_median >= sib_med_th) & (active_pct >= min_act_pct)
 
+        empty_set = set()
+        if empty_pv_map:
+            empty_set = {f"PV{n} Power(kW)" for n in empty_pv_map.get(str(inv_id).upper(), [])}
+
         for pv_col in pv_cols:
+            if pv_col in empty_set:
+                continue
             pv_name = _label_to_pv_name(pv_col)
             pv_series = pv_vals[pv_col]
             cand = qualified & (pv_series < p_zero)
@@ -311,6 +319,118 @@ def _compute_string_proxy(
     return findings
 
 
+def _compute_all_strings_status(
+    df: "pd.DataFrame",
+    pv_cols: list,
+    cfg: dict,
+    interval_minutes: float,
+    empty_pv_map: Optional[dict] = None,
+) -> "pd.DataFrame":
+    """Per (Inverter_ID x PV_string) status row, including NORMAL and EMPTY."""
+    sp = cfg.get("string_proxy", {})
+    th = cfg.get("severity_thresholds", {})
+    p_zero = float(sp.get("pstr_zero_threshold_kw", 0.1))
+    sib_med_th = float(sp.get("sibling_median_active_kw", 1.0))
+    min_act_pct = float(sp.get("min_active_siblings_pct", 50))
+    debounce = int(sp.get("debounce_consecutive_steps", 2))
+
+    daylight_ts = set(
+        df.loc[df["_status_class"] == "ON", "Start Time"].dropna().unique()
+    )
+
+    rows = []
+    n_pv_total = len(pv_cols)
+
+    for inv_id, sub in df.groupby("Inverter_ID", sort=True):
+        sub = sub.sort_values("Start Time").reset_index(drop=True)
+        on_mask = (sub["_status_class"] == "ON") & sub["Start Time"].isin(daylight_ts)
+        sub_on = sub[on_mask]
+        daylight_minutes_inv = float(len(sub_on)) * float(interval_minutes)
+
+        empty_set = set()
+        if empty_pv_map:
+            empty_set = {f"PV{n} Power(kW)" for n in empty_pv_map.get(str(inv_id).upper(), [])}
+
+        if not sub_on.empty:
+            pv_vals = sub_on[pv_cols].astype(float)
+            sib_median = pv_vals.median(axis=1, skipna=True)
+            active_count = (pv_vals > p_zero).sum(axis=1)
+            active_pct = 100.0 * active_count / max(n_pv_total, 1)
+            qualified = (sib_median >= sib_med_th) & (active_pct >= min_act_pct)
+        else:
+            pv_vals = None
+            qualified = None
+
+        for pv_col in pv_cols:
+            pv_name = _label_to_pv_name(pv_col)
+
+            if pv_col in empty_set:
+                rows.append({
+                    "inverter_id": str(inv_id),
+                    "pv_string": pv_name,
+                    "status": "EMPTY",
+                    "uptime_pct": float("nan"),
+                    "downtime_minutes": float("nan"),
+                    "event_minutes": float("nan"),
+                    "n_events": 0,
+                    "daylight_minutes": round(daylight_minutes_inv, 2),
+                })
+                continue
+
+            if sub_on.empty:
+                rows.append({
+                    "inverter_id": str(inv_id),
+                    "pv_string": pv_name,
+                    "status": "NO_DAYLIGHT",
+                    "uptime_pct": float("nan"),
+                    "downtime_minutes": float("nan"),
+                    "event_minutes": float("nan"),
+                    "n_events": 0,
+                    "daylight_minutes": 0.0,
+                })
+                continue
+
+            pv_series = pv_vals[pv_col]
+            cand = qualified & (pv_series < p_zero)
+
+            cand_arr = cand.to_numpy()
+            run_lens = []
+            run_start_idx = None
+            for i, v in enumerate(cand_arr):
+                if v:
+                    if run_start_idx is None:
+                        run_start_idx = i
+                else:
+                    if run_start_idx is not None:
+                        run_lens.append((run_start_idx, i - 1))
+                        run_start_idx = None
+            if run_start_idx is not None:
+                run_lens.append((run_start_idx, len(cand_arr) - 1))
+
+            qualified_runs = [(a, b) for (a, b) in run_lens if (b - a + 1) >= debounce]
+            event_minutes_total = sum(
+                (b - a + 1) * float(interval_minutes) for (a, b) in qualified_runs
+            )
+            string_uptime_pct = max(
+                0.0,
+                100.0 - 100.0 * event_minutes_total / max(daylight_minutes_inv, 1e-9),
+            )
+            sev, _ = _severity_for_uptime(string_uptime_pct, th)
+
+            rows.append({
+                "inverter_id": str(inv_id),
+                "pv_string": pv_name,
+                "status": sev.value,
+                "uptime_pct": round(string_uptime_pct, 4),
+                "downtime_minutes": round(event_minutes_total, 2),
+                "event_minutes": round(event_minutes_total, 2),
+                "n_events": len(qualified_runs),
+                "daylight_minutes": round(daylight_minutes_inv, 2),
+            })
+
+    return pd.DataFrame(rows)
+
+
 _PV_POWER_COL_RE = re.compile(r"PV\s*0*?(\d+)\s+Power\(kW\)", flags=re.I)
 
 
@@ -341,9 +461,20 @@ def _estimate_interval_minutes(start_times: "pd.Series") -> float:
 class M2eAvailability(SubModule):
     """Hybrid M2e: inverter-level + string-proxy availability."""
     name = "M2e_hybrid"
+    last_all_strings_df: Optional["pd.DataFrame"] = None
 
     def run(self, combined_df: "pd.DataFrame", config: dict) -> list:
         cfg = (config or {}).get("m2e", {}) or {}
+        self.last_all_strings_df = None
+
+        empty_pv_map_path = cfg.get("empty_pv_map_path")
+        empty_pv_map: dict = {}
+        if empty_pv_map_path:
+            try:
+                empty_pv_map = get_empty_pv_map(empty_pv_map_path, pv_max_allowed=28)
+            except Exception as e:
+                warnings.warn(f"[M2e] failed to load empty_pv_map from {empty_pv_map_path!r}: {e}")
+                empty_pv_map = {}
 
         required = ["Inverter_ID", "Start Time", "Inverter status"]
         missing = [c for c in required if c not in combined_df.columns]
@@ -380,9 +511,15 @@ class M2eAvailability(SubModule):
         if not pv_cols:
             warnings.warn("[M2e] no PV power columns found; skipping string-proxy")
             str_findings = []
+            self.last_all_strings_df = pd.DataFrame()
         else:
             str_findings = _compute_string_proxy(
                 df, pv_cols=pv_cols, cfg=cfg, interval_minutes=interval_min,
+                empty_pv_map=empty_pv_map,
+            )
+            self.last_all_strings_df = _compute_all_strings_status(
+                df, pv_cols=pv_cols, cfg=cfg, interval_minutes=interval_min,
+                empty_pv_map=empty_pv_map,
             )
 
         return inv_findings + str_findings
@@ -524,4 +661,10 @@ if __name__ == "__main__":
     sub_string = [f for f in res if f.sub_module == "M2e_string_proxy"]
     assert len(sub_string) == 1
     assert sub_string[0].pv_string == "PV1"
+
+    # all_strings_df side-channel
+    assert sm.last_all_strings_df is not None
+    assert len(sm.last_all_strings_df) == 8  # 2 inverters x 4 PV strings (PV1-4 only in test)
+    # PV1-4 not in empty_pv_map (which lists 19-28), so no EMPTY rows here
+    assert "EMPTY" not in set(sm.last_all_strings_df["status"].unique())
     print("[availability] M2eAvailability.run() smoke OK")

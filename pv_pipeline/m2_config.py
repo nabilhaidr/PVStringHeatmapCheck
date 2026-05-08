@@ -29,6 +29,7 @@ DEFAULT_M2_CONFIG: Dict[str, Any] = {
             ],
         },
         "shutdown_time_detection": "auto",
+        "empty_pv_map_path": "config/strings.yaml",
         "string_proxy": {
             "pstr_zero_threshold_kw": 0.1,
             "sibling_median_active_kw": 1.0,
