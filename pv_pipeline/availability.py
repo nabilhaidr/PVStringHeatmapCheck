@@ -4,12 +4,13 @@ Spec: docs/superpowers/specs/2026-05-08-m2e-hybrid-availability-design.md
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from pv_pipeline.core import Severity
+from pv_pipeline.core import Severity, M2Finding
 
 
 def _classify_status(status: Optional[str], keymap: dict) -> str:
@@ -122,6 +123,76 @@ def _severity_for_uptime(uptime_pct: float, thresholds: dict) -> Tuple[Severity,
     return Severity.NORMAL, float(thresholds.get("info_below", 99))
 
 
+def _compute_inverter_availability(
+    df: "pd.DataFrame",
+    mode: str,
+    cfg: dict,
+    interval_minutes: float,
+    sd_parsed: Optional["pd.Series"] = None,
+    st_parsed: Optional["pd.Series"] = None,
+) -> list:
+    """Compute per-inverter daily uptime% + emit M2Finding(s).
+
+    `df` harus berisi kolom: Inverter_ID, Start Time, _status_class.
+    Untuk mode EVENT, opsional pass `sd_parsed`/`st_parsed` (datetime series
+    aligned to df index) untuk hitung downtime_minutes lebih akurat;
+    fallback selalu n_down x interval_minutes.
+    """
+    th = cfg.get("severity_thresholds", {})
+    emit_normal = bool(th.get("emit_normal", False))
+
+    findings = []
+    for inv_id, sub in df.groupby("Inverter_ID", sort=True):
+        n_on = int((sub["_status_class"] == "ON").sum())
+        n_down = int((sub["_status_class"] == "DOWN").sum())
+        denom = n_on + n_down
+
+        if denom == 0:
+            continue
+
+        uptime_pct = 100.0 * n_on / denom
+
+        downtime_min = float(n_down) * float(interval_minutes)
+        if mode == "EVENT" and sd_parsed is not None and st_parsed is not None:
+            try:
+                sd_sub = sd_parsed.loc[sub.index]
+                st_sub = st_parsed.loc[sub.index]
+                ev_down = (sd_sub > st_sub) & sd_sub.notna() & st_sub.notna()
+                if ev_down.any():
+                    down_rows = sub.loc[ev_down, "Start Time"]
+                    if len(down_rows) >= 2:
+                        delta_min = (down_rows.max() - down_rows.min()).total_seconds() / 60.0
+                        downtime_min = float(max(downtime_min, delta_min))
+            except Exception:
+                pass
+
+        sev, threshold = _severity_for_uptime(uptime_pct, th)
+        if sev == Severity.NORMAL and not emit_normal:
+            continue
+
+        ts_min = sub["Start Time"].min()
+        ts_dt = ts_min.to_pydatetime() if hasattr(ts_min, "to_pydatetime") else ts_min
+
+        findings.append(M2Finding(
+            timestamp=ts_dt if isinstance(ts_dt, datetime) else datetime.utcnow(),
+            inverter_id=str(inv_id),
+            pv_string=None,
+            sub_module="M2e_inverter",
+            severity=sev,
+            value=round(uptime_pct, 4),
+            threshold=threshold,
+            message=f"inverter uptime {uptime_pct:.2f}% (n_on={n_on}, n_down={n_down})",
+            extra={
+                "n_on": n_on,
+                "n_down": n_down,
+                "downtime_minutes": round(downtime_min, 2),
+                "mode": mode,
+            },
+        ))
+
+    return findings
+
+
 if __name__ == "__main__":
     from pv_pipeline.availability import _classify_status
 
@@ -169,3 +240,29 @@ if __name__ == "__main__":
     assert _severity_for_uptime(99.5, th) == (Severity.NORMAL, 99)
     assert _severity_for_uptime(float("nan"), th)[0] == Severity.NORMAL
     print("[availability] _severity_for_uptime smoke OK")
+
+    # _compute_inverter_availability test
+    from pv_pipeline.availability import _compute_inverter_availability
+
+    df_test = pd.DataFrame({
+        "Inverter_ID": ["WB02-INV01"]*12 + ["WB02-INV02"]*12,
+        "Start Time": list(pd.date_range("2026-05-07 06:00", periods=12, freq="5min"))*2,
+        "_status_class": (
+            ["ON"]*8 + ["DOWN"]*4   # INV01 -> uptime 8/12 = 66.67% -> CRITICAL
+            + ["ON"]*12              # INV02 -> uptime 100% -> NORMAL (skipped)
+        ),
+    })
+    cfg = {
+        "severity_thresholds": {"critical_below": 90, "high_below": 95,
+                                "medium_below": 97, "info_below": 99,
+                                "emit_normal": False},
+    }
+    findings = _compute_inverter_availability(df_test, mode="STATUS_ONLY", cfg=cfg,
+                                              interval_minutes=5)
+    assert len(findings) == 1, f"expected 1 finding, got {len(findings)}"
+    f0 = findings[0]
+    assert f0.inverter_id == "WB02-INV01"
+    assert f0.severity.value == "CRITICAL"
+    assert abs(f0.value - 66.6667) < 0.01
+    assert f0.extra["downtime_minutes"] == 20
+    print("[availability] _compute_inverter_availability smoke OK")
