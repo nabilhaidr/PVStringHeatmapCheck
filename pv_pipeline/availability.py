@@ -91,13 +91,13 @@ def _detect_shutdown_time_mode(
     sd_dt = pd.to_datetime(sd_clean, errors="coerce")
     st_dt = pd.to_datetime(st_clean, errors="coerce")
     ratio_event = (sd_dt.notna().sum() + st_dt.notna().sum()) / (2 * n)
-    if ratio_event >= 0.70:
+    if ratio_event >= 0.80:
         return "EVENT", sd_dt, st_dt
 
     sd_num = pd.to_numeric(sd_clean, errors="coerce")
     st_num = pd.to_numeric(st_clean, errors="coerce")
     ratio_num = (sd_num.notna().sum() + st_num.notna().sum()) / (2 * n)
-    if ratio_num >= 0.70:
+    if ratio_num >= 0.80:
         return "CUMULATIVE", sd_num, st_num
 
     return "STATUS_ONLY", shutdown_series, startup_series
@@ -408,12 +408,12 @@ if __name__ == "__main__":
     import pandas as pd
     from pv_pipeline.availability import _detect_shutdown_time_mode
 
-    s_dt = pd.Series(["2026/05/06 18:26:40", "2026/05/06 18:21:02", "-", "2026/05/06 18:25:01"])
-    s_st = pd.Series(["2026/05/06 06:08:46", "2026/05/06 06:08:48", "-", "2026/05/06 06:09:03"])
+    s_dt = pd.Series(["2026/05/06 18:26:40", "2026/05/06 18:21:02", "2026/05/06 18:30:00", "2026/05/06 18:25:01"])
+    s_st = pd.Series(["2026/05/06 06:08:46", "2026/05/06 06:08:48", "2026/05/06 06:09:30", "2026/05/06 06:09:03"])
     mode, sd_dt, st_dt = _detect_shutdown_time_mode(s_dt, s_st, force=None)
     assert mode == "EVENT", f"expected EVENT got {mode}"
-    assert sd_dt.notna().sum() == 3
-    assert st_dt.notna().sum() == 3
+    assert sd_dt.notna().sum() == 4
+    assert st_dt.notna().sum() == 4
 
     s_empty = pd.Series([None, None, None])
     mode2, _, _ = _detect_shutdown_time_mode(s_empty, s_empty, force=None)
