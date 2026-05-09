@@ -196,6 +196,80 @@ def _compute_inverter_availability(
     return findings
 
 
+def _compute_inverter_operation_log(
+    df: "pd.DataFrame",
+    mode: str,
+    sd_parsed: Optional["pd.Series"] = None,
+    st_parsed: Optional["pd.Series"] = None,
+) -> "pd.DataFrame":
+    """Per-inverter daily operation log.
+
+    Returns one row per Inverter_ID with columns:
+        inverter_id, startup_time, shutdown_time,
+        operation_duration_minutes, status
+    """
+    rows = []
+    has_event = (mode == "EVENT" and sd_parsed is not None and st_parsed is not None)
+
+    for inv_id, sub in df.groupby("Inverter_ID", sort=True):
+        sub_sorted = sub.sort_values("Start Time")
+        last_row_idx = sub_sorted.index[-1]
+
+        last_status_raw = sub_sorted.loc[last_row_idx, "Inverter status"]
+        last_status_str = "" if pd.isna(last_status_raw) else str(last_status_raw)
+        last_status_class = sub_sorted.loc[last_row_idx, "_status_class"]
+
+        startup_dt = pd.NaT
+        shutdown_dt = pd.NaT
+        if has_event:
+            try:
+                sd_sub = sd_parsed.loc[sub_sorted.index]
+                st_sub = st_parsed.loc[sub_sorted.index]
+                if st_sub.notna().any():
+                    startup_dt = st_sub.dropna().max()
+                if sd_sub.notna().any():
+                    shutdown_dt = sd_sub.dropna().max()
+            except Exception:
+                pass
+
+        startup_str = startup_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(startup_dt) else ""
+        shutdown_str = ""
+        duration_min = float("nan")
+
+        last_obs = sub_sorted["Start Time"].max()
+
+        if last_status_class == "ON":
+            if pd.notna(startup_dt) and pd.notna(last_obs):
+                duration_min = (last_obs - startup_dt).total_seconds() / 60.0
+            shutdown_str = ""
+        elif last_status_class == "DOWN":
+            if pd.notna(shutdown_dt):
+                shutdown_str = shutdown_dt.strftime("%Y-%m-%d %H:%M:%S")
+            if pd.notna(startup_dt) and pd.notna(shutdown_dt) and shutdown_dt > startup_dt:
+                duration_min = (shutdown_dt - startup_dt).total_seconds() / 60.0
+        else:
+            if pd.notna(shutdown_dt) and pd.notna(startup_dt):
+                if shutdown_dt > startup_dt:
+                    shutdown_str = shutdown_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    duration_min = (shutdown_dt - startup_dt).total_seconds() / 60.0
+                else:
+                    if pd.notna(last_obs):
+                        duration_min = (last_obs - startup_dt).total_seconds() / 60.0
+
+        rows.append({
+            "inverter_id": str(inv_id),
+            "startup_time": startup_str,
+            "shutdown_time": shutdown_str,
+            "operation_duration_minutes": round(duration_min, 2) if duration_min == duration_min else float("nan"),
+            "status": last_status_str,
+        })
+
+    return pd.DataFrame(rows, columns=[
+        "inverter_id", "startup_time", "shutdown_time",
+        "operation_duration_minutes", "status",
+    ])
+
+
 _PV_NUM_RE = re.compile(r"PV\s*0*?(\d+)\s+Power\(kW\)", flags=re.I)
 
 
@@ -462,10 +536,12 @@ class M2eAvailability(SubModule):
     """Hybrid M2e: inverter-level + string-proxy availability."""
     name = "M2e_hybrid"
     last_all_strings_df: Optional["pd.DataFrame"] = None
+    last_inverter_log_df: Optional["pd.DataFrame"] = None
 
     def run(self, combined_df: "pd.DataFrame", config: dict) -> list:
         cfg = (config or {}).get("m2e", {}) or {}
         self.last_all_strings_df = None
+        self.last_inverter_log_df = None
 
         empty_pv_map_path = cfg.get("empty_pv_map_path")
         empty_pv_map: dict = {}
@@ -505,6 +581,10 @@ class M2eAvailability(SubModule):
         inv_findings = _compute_inverter_availability(
             df, mode=mode, cfg=cfg, interval_minutes=interval_min,
             sd_parsed=sd_parsed, st_parsed=st_parsed,
+        )
+
+        self.last_inverter_log_df = _compute_inverter_operation_log(
+            df, mode=mode, sd_parsed=sd_parsed, st_parsed=st_parsed,
         )
 
         pv_cols = _detect_pv_power_cols(df, pv_max_allowed=28)
@@ -635,6 +715,27 @@ if __name__ == "__main__":
     assert f0.extra["n_events"] >= 1
     print("[availability] _compute_string_proxy smoke OK")
 
+    # _compute_inverter_operation_log test
+    from pv_pipeline.availability import _compute_inverter_operation_log
+    times2 = list(pd.date_range("2026-05-07 06:00", periods=12, freq="5min"))
+    df_log = pd.DataFrame({
+        "Inverter_ID": ["WB02-INV01"] * 12,
+        "Start Time": times2,
+        "Inverter status": ["Grid connected"] * 12,
+        "_status_class": ["ON"] * 12,
+    })
+    sd_log = pd.Series([pd.NaT] * 12)
+    st_log = pd.Series([pd.Timestamp("2026-05-07 06:00:00")] * 12)
+    log_df = _compute_inverter_operation_log(df_log, mode="EVENT",
+                                              sd_parsed=sd_log, st_parsed=st_log)
+    assert len(log_df) == 1
+    assert log_df.iloc[0]["inverter_id"] == "WB02-INV01"
+    assert log_df.iloc[0]["startup_time"] == "2026-05-07 06:00:00"
+    assert log_df.iloc[0]["shutdown_time"] == ""
+    assert abs(log_df.iloc[0]["operation_duration_minutes"] - 55.0) < 0.1
+    assert log_df.iloc[0]["status"] == "Grid connected"
+    print("[availability] _compute_inverter_operation_log smoke OK")
+
     # M2eAvailability.run() end-to-end smoke
     from pv_pipeline.availability import M2eAvailability
 
@@ -664,6 +765,8 @@ if __name__ == "__main__":
 
     # all_strings_df side-channel
     assert sm.last_all_strings_df is not None
+    assert sm.last_inverter_log_df is not None
+    assert len(sm.last_inverter_log_df) == 2  # 2 inverters in synthetic e2e test
     assert len(sm.last_all_strings_df) == 8  # 2 inverters x 4 PV strings (PV1-4 only in test)
     # PV1-4 not in empty_pv_map (which lists 19-28), so no EMPTY rows here
     assert "EMPTY" not in set(sm.last_all_strings_df["status"].unique())
