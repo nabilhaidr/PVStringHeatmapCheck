@@ -1,0 +1,160 @@
+# PLTS-IKN site geometry & pyranometer configuration
+# Konsumen: pv_pipeline/poa/* (PyranometerLoader, PvlibClearSkyEstimator, POAProvider)
+#
+# Catatan:
+# - latitude/longitude diambil dari koordinat user, presisi penuh (16 desimal) dipertahankan.
+# - elevation_m: PLTS terrain tidak rata (65-105 m). 85 m = nilai tengah untuk pvlib calc.
+#   Bila perlu per-WB elevation, override di field terrain_elevation_range_m atau extend
+#   panels.height_above_ground_per_wb (saat ini hanya informational).
+# - timezone "Asia/Makassar" = WITA = UTC+8 (tanpa DST, sesuai zona Kalimantan Timur / IKN).
+# - tilt_deg=10 dan azimuth_deg=0 (= North per konvensi pvlib) dari user.
+#   PLTS-IKN berada di lat -0.99 (sedikit selatan ekuator), face-north memang optimal.
+
+site:
+  name: "PLTS-IKN"
+  latitude: -0.9911713315158186
+  longitude: 116.63811127764585
+  terrain_elevation_range_m: [65, 105]   # informational, range terrain tidak rata
+  elevation_m: 85                         # mean elevation untuk pvlib Location()
+  timezone: "Asia/Makassar"               # WITA = UTC+8
+  albedo_pct: null                        # Static fallback (null -> pvlib_estimator default 0.20).
+                                          # NB: dynamic albedo dari NSRDB xlsx (lihat 'albedo:' section
+                                          # di bawah) lebih diutamakan; field ini hanya dipakai saat
+                                          # AlbedoLoader gagal load atau timestamp out-of-range.
+
+panels:
+  tilt_deg: 10
+  azimuth_deg: 0                          # 0 = North (pvlib convention)
+  # Tinggi panel dari tanah (informational, belum dipakai aktif).
+  # Format: angka tunggal (cm) untuk panel rata, atau {min_cm, max_cm} untuk range.
+  height_above_ground_per_wb:
+    WB01: 70
+    WB02: 70
+    WB03: {min_cm: 50, max_cm: 250}
+    WB04: {min_cm: 50, max_cm: 250}
+    WB05: {min_cm: 50, max_cm: 250}
+    WB06: {min_cm: 50, max_cm: 250}
+    WB07: {min_cm: 50, max_cm: 250}
+    WB08: {min_cm: 50, max_cm: 250}
+    WB09: {min_cm: 50, max_cm: 250}
+    WB10: {min_cm: 50, max_cm: 250}
+
+# Albedo dataset (NSRDB TMY 5-year average forecast).
+# Tidak ada albedometer di site -> ini forecast, bukan pengukuran aktual.
+# Konsumen: pv_pipeline.poa.AlbedoLoader (auto-loaded oleh PvlibClearSkyEstimator).
+albedo:
+  xlsx_path: "raw data input/Surface Albedo Forecast TMY NSRDB PLTS IKN.xlsx"
+  sheet: "Sheet1"
+  timestamp_col: "Date/Time"              # kolom A, naive WITA, 30-min interval
+  value_col: "Surface Albedo"             # kolom B, fraction 0..1 (NSRDB convention)
+  # 17520 rows untuk full year 2026, value range ~0.134..0.166 (mean 0.153).
+
+# PV Module Temperature (Tcell) measurement dataset.
+# Konsumen: pv_pipeline.cell_temp.CellTempProvider.
+cell_temp:
+  xlsx_path: "raw data input/PV Module Temperature PLTS IKN.xlsx"
+  sheet: "PV Module Temp"
+  # Layout 18 kolom:
+  #   A : Datetime (5-min, naive WITA)
+  #   B-D : WS-1 sensor 1, 2, 3       | E : Average WS-1
+  #   F-H : WS-2 sensor 1, 2, 3       | I : Average WS-2
+  #   J-L : WS-3 sensor 1, 2, 3       | M : Average WS-3
+  #   N-P : WS-4 sensor 1, 2, 3       | Q : Average WS-4
+  #   R   : Overall Average (rata-rata 4 WS-avg)
+  # WS-5 tidak punya sensor Tcell -> WB01/WB02 piggyback via ws_to_wb_tcell.
+
+  # Model fallback bila measured NaN. Saat ini strict_nan (no model).
+  # Pilihan future: sapm | pvsyst | faiman (butuh ambient temp dataset).
+  fallback_model:
+    type: null                            # null = strict NaN (default)
+    params: null
+
+  # Wave 6 SAPM cell-temperature model fallback.
+  # Active saat CellTempProvider.from_geometry_yaml(..., enable_sapm=True) (default).
+  # Pakai pvlib.temperature.sapm_cell(POA, T_air, wind_speed, a, b, deltaT).
+  # Preset Jinko JKM625N (bifacial Tiger Neo, dual-glass) = "open_rack_glass_glass".
+  sapm_model: "open_rack_glass_glass"
+  # sapm_params:                              # optional override (kalau null pakai preset)
+  #   a: -3.47
+  #   b: -0.0594
+  #   deltaT: 3.0
+
+# Mapping Weather Station -> Inverter Block UNTUK PYRANOMETER (POA).
+# Saat POAProvider.get_poa(wb_id=...) dipanggil, cari WS yang mencakup WB tersebut.
+ws_to_wb:
+  WS-1: [WB08, WB09, WB10]
+  WS-2: [WB05, WB07]
+  WS-3: [WB06]
+  WS-4: [WB03, WB04]
+  WS-5: [WB01, WB02]
+
+# Mapping Weather Station -> Inverter Block UNTUK TCELL (PV Module Temperature).
+# BERBEDA dari ws_to_wb karena WS-5 tidak punya sensor Tcell.
+# WB01 dan WB02 piggyback ke WS-4 (closest geographic neighbor).
+ws_to_wb_tcell:
+  WS-1: [WB08, WB09, WB10]
+  WS-2: [WB05, WB07]
+  WS-3: [WB06]
+  WS-4: [WB01, WB02, WB03, WB04]          # WB01/02 piggyback ke WS-4
+
+# Pyranometer dataset paths (multi-year: 2025+2026 concat).
+# Konsumen: pv_pipeline.poa.PyranometerLoader. Accept string atau list of strings.
+pyranometer:
+  xlsx_path:
+    - "raw data input/POA PLTS IKN 2025.xlsx"
+    - "raw data input/POA PLTS IKN 2026.xlsx"
+  sheet: "POA PLTS IKN"
+  # Kolom expected di sheet:
+  #   - "Date time"                        (timestamp 5-min interval)
+  #   - "POA Irradiance (W/m2) WS 1"..."POA Irradiance (W/m2) WS 5"
+  #   - "Rata-rata WS 1 - WS 5"
+
+# Mapping Weather Station -> Inverter Block UNTUK WEATHER (Ambient/Wind/WindDir).
+# Sama dengan ws_to_wb_tcell: 4 WS (1-4), WB01/02 piggyback ke WS-4.
+# Ambient Temperature, Wind Speed, Wind Direction tidak punya WS-5.
+ws_to_wb_weather:
+  WS-1: [WB08, WB09, WB10]
+  WS-2: [WB05, WB07]
+  WS-3: [WB06]
+  WS-4: [WB01, WB02, WB03, WB04]         # WB01/02 piggyback ke WS-4
+
+# Weather dataset paths (multi-year 2025+2026). Konsumen: pv_pipeline.weather.*
+# Tiga variabel share xlsx layout yang sama: Date time + WS-1..4 + Rata-rata.
+weather:
+  ambient_temperature:
+    xlsx_path:
+      - "raw data input/Ambient Temperature PLTS IKN 2025.xlsx"
+      - "raw data input/Ambient Temperature PLTS IKN 2026.xlsx"
+    sheet: "Ambient Temperature PLTS IKN"
+    # Cols: "Ambient Temp (oC) WS {1..4}" + "Rata-rata WS 1 - WS 4"
+  wind_speed:
+    xlsx_path:
+      - "raw data input/Wind Speed PLTS IKN 2025.xlsx"
+      - "raw data input/Wind Speed PLTS IKN 2026.xlsx"
+    sheet: "Wind Speed PLTS IKN"
+    # Cols: "Wind Speed (m/s) WS {1..4}" + "Rata-rata WS 1 - WS 4"
+    # Unit: m/s
+  wind_direction:
+    xlsx_path:
+      - "raw data input/Wind Direction PLTS IKN 2025.xlsx"
+      - "raw data input/Wind Direction PLTS IKN 2026.xlsx"
+    sheet: "Wind Direction PLTS IKN"
+    # Cols: "Wind Direction (o) WS {1..4}" + "Rata-rata WS 1 - WS 4"
+    # Konvensi: 0 deg = North, range 0-360. WS-1 sensor missing (data NaN).
+
+# Wave 7: IKN Generation daily energy data (untuk PR analysis).
+# Konsumen: pv_pipeline.generation.GenerationLoader.
+generation:
+  xlsx_path: "raw data input/IKN Generation.xlsx"
+  sheet: "Summary (PV)"
+  # Row 0 = section labels (skip), row 1 = column names, row 2+ = data.
+  header_row: 1
+  # Layout per inspeksi:
+  #   A     : Date
+  #   B-K   : WB01..WB10 STS Generation (kWh, daily)
+  #   L     : Total STS Generation (kWh) = sum WB01..10
+  #   M     : PAE Energy (kWh) from 00.00 to 24.00 (Projected Available Energy)
+  #   N     : Generation STS (kWh) = MAX(L, M) gated busbar setpoint
+  #            (busbar1 = WB01-05 < 24300 kW, busbar2 = WB06-10 < 25700 kW)
+  #   O     : Busbar 1 (WB 01 - WB 5) propotional setpoint (kW)
+  #   P     : Busbar 2 (WB 06 - WB 10) propotional setpoint (kW)

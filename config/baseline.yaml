@@ -1,0 +1,65 @@
+# Sprint 3.3 - Baseline accumulator config.
+# Konsumen: pv_pipeline.baseline.BaselineAccumulator.from_yaml(...).
+#
+# Hybrid NORMAL labeling strategy:
+#   1. User mark major maintenance windows di section 'maintenance_periods'.
+#   2. Detector findings (severity CRITICAL/HIGH dari Cell 6 detectors) auto-skip
+#      scoped by 'skip_scope' setting (see below).
+#
+# Output: baseline/{YYYY-MM}/{YYYY-MM-DD}.{parquet,csv} (di REPO_DIR).
+# Manifest: baseline/manifest.csv (audit trail per accumulated date).
+
+accumulator:
+  base_dir: "baseline"                    # root output (relative ke cwd notebook)
+  output_formats: ["parquet", "csv"]      # parquet primary + csv backup
+  auto_skip_severity: ["CRITICAL", "HIGH"] # severity yang trigger auto-skip
+
+  # skip_scope (2026-05-23+): granularity of auto-skip from findings.
+  #
+  #   "pv_string"  (DEFAULT, granular):
+  #       Per-PV findings (finding.pv_string set, e.g. PV3): NaN-out only
+  #       that PV's input voltage(V), input current(A), and Power(kW) cols.
+  #       Inverter's other PV strings tetap valid -- jangan buang healthy
+  #       data karena 1 string fault. Cocok untuk M2b detectors (per-PV
+  #       findings dominan).
+  #       Inverter-level findings (pv_string=None, e.g. M2eAvailability,
+  #       M2a Soiling SITE): drop whole inverter-day (can't isolate).
+  #
+  #   "inverter_day"  (LEGACY, conservative):
+  #       Drop seluruh inverter-day untuk ANY finding regardless of pv_string.
+  #       Sebelumnya default (pre-2026-05-23). Pilih ini kalau mau aman:
+  #       satu PV fault bisa indikasi systemic issue di inverter tsb.
+  skip_scope: "pv_string"
+
+  min_rows_per_inverter: 30               # drop inverter dengan < 30 rows setelah filter
+  overwrite: false                        # true = replace existing; false = skip + warn
+
+# User-marked maintenance windows. Tambahkan saat user tahu ada major event
+# (cleaning, inverter replacement, sub-station outage, dst.) yang bikin
+# data periode itu tidak representatif NORMAL operation.
+#
+# Format per entry:
+#   - start    : ISO datetime "YYYY-MM-DD HH:MM" atau date "YYYY-MM-DD" (= 00:00)
+#   - end      : ISO datetime. Kalau date saja, di-convert ke 23:59:59 hari itu.
+#   - affected : "all" | ["WB02-INV05", ...] | ["WB02"] (WB prefix wildcard)
+#   - reason   : free text, untuk audit trail
+#
+# Contoh (commented out, uncomment + isi sesuai kondisi aktual):
+#
+# maintenance_periods:
+#   - start: "2026-04-15 08:00"
+#     end: "2026-04-15 16:00"
+#     affected: ["WB02-INV05", "WB02-INV06"]
+#     reason: "Inverter maintenance INV05/06"
+#
+#   - start: "2026-04-20"
+#     end: "2026-04-22"
+#     affected: "all"
+#     reason: "Sub-station outage Busbar 1"
+#
+#   - start: "2026-05-10 09:00"
+#     end: "2026-05-10 11:00"
+#     affected: ["WB08"]
+#     reason: "PV string cleaning WB08"
+
+maintenance_periods: []

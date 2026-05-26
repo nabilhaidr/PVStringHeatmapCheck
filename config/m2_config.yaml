@@ -1,5 +1,6 @@
-# Fase 1 — M2e Hybrid Availability config
+# Fase 1 - M2e Hybrid Availability config
 # Edited: 2026-05-08 (initial)
+# Edited: 2026-05-15 (Sprint 3.1+3.2: add poa + panel sections)
 m2e:
   inverter_status_map:
     # Substring match (lowercased) terhadap nilai kolom 'Inverter status'.
@@ -20,7 +21,7 @@ m2e:
     pstr_zero_threshold_kw:     0.1
     sibling_median_active_kw:   1.0
     min_active_siblings_pct:    50
-    debounce_consecutive_steps: 2
+    debounce_consecutive_steps: 20
 
   severity_thresholds:
     critical_below: 90
@@ -31,3 +32,210 @@ m2e:
 
   output_dir: "outputs"
   show_overlay:  false
+
+# Sprint 3.1 - POA (Plane-of-Array irradiance) configuration.
+# Konsumen: pv_pipeline.poa.POAProvider (saat dipanggil dari M2 detector).
+poa:
+  # Path ke site geometry yaml (lat/lon/elev/tz, tilt/azimuth, ws_to_wb, pyranometer xlsx).
+  site_geometry_path: "config/site_geometry.yaml"
+
+  # Default source untuk get_poa(...) saat caller tidak specify.
+  # Pilihan: pyranometer_per_ws | pyranometer_avg | pvlib_clearsky_ineichen
+  #        | pvlib_clearsky_simplified_solis | pvlib_clearsky_haurwitz | auto
+  default_source: "auto"
+
+  # Multi-source comparison: detector akan dipanggil sekali per source dan emit
+  # finding ber-tag source masing-masing supaya hasilnya bisa dibandingkan.
+  emit_all_sources: true
+  sources_to_emit:
+    - pyranometer_per_ws
+    - pyranometer_avg
+    - pvlib_clearsky_ineichen
+    - pvlib_clearsky_simplified_solis
+    - pvlib_clearsky_haurwitz
+
+  # Fallback chain saat source="auto": per timestamp, pakai source pertama yang non-NaN.
+  auto_fallback_chain:
+    - pyranometer_per_ws
+    - pyranometer_avg
+    - pvlib_clearsky_ineichen
+
+  # Transposisi GHI -> POA (pvlib). Pilihan: haydavies | isotropic | perez.
+  # Fase 2 (2026-05-16): Perez default per Master Context (paling akurat tropical clear-sky).
+  transposition_model: "perez"
+
+# Sprint 3.2 - Panel datasheet config.
+# Konsumen: pv_pipeline.panel_spec.PanelSpec.from_yaml(...).
+panel:
+  spec_path: "config/panel_spec.yaml"
+
+# Sprint 4.A - M2b detector thresholds (POA-gated).
+# Spec 4.2.1 + 4.2.3 di Master Context (M2_PV_Performance_Master_Context.docx).
+m2b:
+  poa_threshold_wm2:     300.0   # per spec: Z-score Rstr hanya saat POA > 300 W/m^2
+  poa_floor_wm2:         50.0    # 2026-05-16 sunset fix (dual-protect dengan poa_threshold)
+  hour_cutoff_end:       18.0    # Dipakai saat filter_mode="hour_cutoff"
+  respect_inverter_shutdown: true # 2026-05-16 sunset fix (skip rows >= Inverter shutdown time)
+  filter_mode:           "solar_elevation"  # Fase 2: "solar_elevation" | "hour_cutoff"
+  solar_elevation_min_deg: 5.0   # Fase 2: filter samples saat sun apparent_elevation > 5 deg
+  z_threshold:           2.5     # |z| > 2.5 -> flag (per spec)
+  voc_ratio_threshold:   0.95    # AND voc_ratio > 0.95 -> emit high_R (per spec)
+  stat_method:           "median" # mean | median | both (mana yang dipakai untuk z_primary)
+  pv_max:                28      # max PV channels per inverter (Huawei default)
+  min_peer_strings:      3       # minimum sibling strings untuk valid peer comparison
+  min_daylight_samples:  10      # minimum samples di mask POA untuk valid analysis
+
+m2b_open_circuit:
+  poa_threshold_wm2:           700.0  # per spec: daylight gate utama untuk open-circuit
+  poa_floor_wm2:               50.0   # 2026-05-16 fix: hard floor sunset/twilight
+                                      # Pyranometer punya sensor lag di sunset (residual 100-300 W/m^2
+                                      # padahal sun sudah di bawah horizon). Floor ini di-AND dengan
+                                      # poa_threshold untuk dual-protect.
+  hour_cutoff_end:             18.0   # Dipakai saat filter_mode="hour_cutoff".
+  respect_inverter_shutdown:   true   # 2026-05-16 fix: kalau combined_df punya kolom
+                                      # 'Inverter shutdown time', skip rows setelah timestamp itu.
+                                      # Tiap inverter punya shutdown time sendiri di Huawei xlsx.
+  filter_mode:                 "solar_elevation"  # Fase 2: "solar_elevation" | "hour_cutoff"
+  solar_elevation_min_deg:     5.0    # Fase 2: filter saat sun apparent_elevation > 5 deg
+                                      # Replace heuristic hour_cutoff dengan physical filter.
+  i_ratio_threshold:           0.05   # I_string < 5% * I_q95 (per spec)
+  debounce_consecutive_steps:  20      # >=N langkah konsekutif -> genuine event
+  confidence_pct:              95.0   # per spec
+  pv_max:                      28
+  min_peer_strings:            3
+  min_daylight_samples:        5
+
+m2b_ground_fault:
+  poa_threshold_wm2:           200.0  # daylight gate
+  poa_floor_wm2:               50.0   # 2026-05-16 sunset fix
+  hour_cutoff_end:             18.0   # Dipakai saat filter_mode="hour_cutoff"
+  respect_inverter_shutdown:   true   # 2026-05-16 sunset fix
+  filter_mode:                 "solar_elevation"  # Fase 2: "solar_elevation" | "hour_cutoff"
+  solar_elevation_min_deg:     5.0    # Fase 2: filter saat sun > 5 deg
+  v_to_ground_abs_threshold_v: 50.0   # |V_PV_to_ground| > 50V -> "absolute" trigger
+  adaptive_z_threshold:        3.0    # V_to_ground inverter > 3 sigma dari fleet -> "adaptive" trigger
+  voc_ratio_threshold:         0.85   # per spec 4.2.3: Voc drop signifikan
+  i_high_z_threshold:          2.0    # peer I_z > 2.0 -> I abnormal tinggi
+  pv_max:                      28
+  min_daylight_samples:        5
+
+# Sprint 3.3 - Baseline accumulator config.
+# Konsumen: pv_pipeline.baseline.BaselineAccumulator.from_yaml(config_path).
+baseline:
+  config_path: "config/baseline.yaml"     # path ke maintenance_periods + accumulator settings
+
+# Wave 7 - IKN Generation + PR config.
+# Konsumen: pv_pipeline.generation.GenerationLoader + pv_pipeline.physics.compute_pr.
+generation:
+  site_geometry_path: "config/site_geometry.yaml"   # path utk Generation xlsx
+  capacity_kwp: 71500.0                              # site total DC capacity (kWp)
+
+# Wave 9 - Hampel preprocessing feature flag (A/B test recall/precision delta).
+# Default false: detector pakai raw V/I tanpa cleaning (backwards compat).
+# Set true untuk apply pvanalytics.Hampel outlier removal sebelum detector mask.
+preprocessing:
+  enabled: true              # toggle ON/OFF untuk A/B comparison
+  window: 15                  # rolling window samples (~75 min @ 5-min)
+  max_deviation: 3.0          # MAD-sigma threshold (3 = konservatif)
+
+# Sprint 3.1 extension - PV Module Temperature (Tcell) source preferences.
+# Konsumen: pv_pipeline.cell_temp.CellTempProvider (saat dipanggil dari M2 detector).
+cell_temp:
+  # Path geometry yaml yang punya cell_temp.xlsx_path + ws_to_wb_tcell.
+  site_geometry_path: "config/site_geometry.yaml"
+
+  # Default source untuk get_tcell(...) saat caller tidak specify.
+  # Pilihan: measured_per_ws | measured_overall_avg | auto
+  default_source: "auto"
+
+  # Multi-source comparison.
+  emit_all_sources: true
+  sources_to_emit:
+    - measured_per_ws
+    - measured_overall_avg
+    - sapm                             # Wave 6: SAPM cell temp model
+
+  # Fallback chain saat source="auto": per timestamp, pakai source pertama yang non-NaN.
+  # Wave 6: SAPM (Sandia model) sebagai last fallback. Butuh POA + ambient temp + wind
+  # speed loader; auto-load via CellTempProvider.from_geometry_yaml(enable_sapm=True).
+  auto_fallback_chain:
+    - measured_per_ws
+    - measured_overall_avg
+    - sapm
+
+# Fase 3 Part 2 Task #4 - M2a Shading detector (Diurnal CV + PR-proxy).
+# Default OFF (opt-in). Detects whole-inverter uniform shading (terrain
+# shadow / building shadow / fog band) via hour-of-day CV + PR-proxy joint
+# low signal + diurnal asymmetry classification:
+#   shading_morning   - east-side terrain shadow
+#   shading_afternoon - west-side terrain shadow
+#   shading_uniform   - symmetric (likely soiling/cloud, weaker signal)
+m2a_shading:
+  enabled: true                    # Opt-in feature flag (mirror Wave 9 default OFF)
+  poa_threshold_wm2: 100.0           # Daylight gate (lower than M2b -- broader window)
+  hour_range: [6.0, 18.0]            # Analysis window (sunrise..sunset)
+  cv_low_multiplier: 0.5             # CV_h < 0.5 * median(CV) -> low (uniform reduction)
+  pr_low_multiplier: 0.85            # PR_h < 0.85 * median(PR) -> low (underperform)
+  min_samples_per_hour: 5            # Skip hours with too few per-PV samples
+  min_hours_for_analysis: 4          # Need >=4 hours for stable median reference
+  am_pm_split_hour: 12.0             # Diurnal asymmetry boundary
+  asymmetry_threshold: 0.5           # |N_am - N_pm|/total >= 0.5 -> asymmetric
+  pv_max: 28                         # PV string inventory upper bound
+
+# Fase 3 Part 2 Task #5 - M2a Soiling SRR via rdtools (SKELETON).
+# Default OFF. BLOCKED on >=6 months data + optional BMKG precipitation.
+# Detector gracefully emits "insufficient_data" finding (severity INFO)
+# sampai baseline window >= min_days. Build baseline via
+# pv_pipeline.baseline.BaselineAccumulator (Sprint 3.3).
+m2a_soiling:
+  enabled: false                     # Opt-in feature flag
+  min_days: 90                       # Minimum data window for SRR run
+  recommended_days: 180              # Recommended window (6 months)
+  capacity_kwp: 71500.0              # PLTS-IKN site total DC capacity
+  cleaning_cost_idr: 0.0             # USER MUST PROVIDE -- cost per cleaning event
+  electricity_tariff_idr_per_kwh: 1500.0  # IKN PLTS PPA estimate
+  payback_threshold_days: 30.0       # payback < threshold -> recommend cleaning
+  precipitation_path: ""             # Optional BMKG CSV/xlsx daily mm path
+  rdtools_reps: 1000                 # Monte Carlo iterations
+  rdtools_confidence_level: 68.2     # 1-sigma confidence
+  sample_freq_hours: 0.08333333      # 5/60 = 5-min Huawei sampling
+  pv_max: 28                         # PV string inventory upper bound
+
+# Fase 3 Part 2 Task #6 - M2a Low Irradiance Performance Check.
+# Default OFF (opt-in). Detects modules underperforming specifically di low
+# POA range (50-250 W/m^2) via linear regression PR_proxy vs POA. Distinguish
+# vs uniform soiling: low band slope flagged + mid band slope OK =
+# low_irradiance_underperform (high series resistance modules); both bands
+# flagged = general_underperform (soiling-like).
+m2a_low_irradiance:
+  enabled: true                     # Opt-in feature flag
+  poa_low_range: [50.0, 250.0]       # Low POA band (W/m^2) -- target analysis range
+  poa_mid_range: [300.0, 800.0]      # Mid POA band -- soiling vs low-light cross-check
+  min_low_samples: 30                # Min samples di low band for regression
+  min_mid_samples: 30                # Min samples di mid band for cross-check
+  slope_threshold: 0.0               # slope_low < threshold -> flag (default 0 = negative)
+  r_squared_min: 0.3                 # Min R^2 for finding emission
+  hour_range: [6.0, 18.0]            # Analysis window (sunrise..sunset)
+  hour_cutoff_end: 18.0              # Defensive sunset
+  solar_elevation_min_deg: 5.0       # Fase 2 elevation filter
+  respect_inverter_shutdown: true    # Honor shutdown column
+  pv_max: 28                         # PV string inventory upper bound
+
+# Fase 3 Part 2 Task #2 - M2_iforest sklearn IsolationForest detector.
+# Per inverter, 5-dim feature: V, I, V_dev, I_dev, R. Anomaly score per
+# (inverter, PV, timestamp). All other keys default dari DEFAULT_M2_CONFIG;
+# di-surface here hanya untuk exclude_from_findings_sheet flag.
+m2_iforest:
+  # 2026-05-23: True -> findings iforest TIDAK masuk Findings sheet utama
+  # dan tidak trigger Cell 7 auto-skip baseline. Artifact sheets
+  # (M2_iforest_AnomalyScores + AnomalySummary) tetap di-emit di xlsx.
+  # Useful karena iforest sangat noisy (1% contamination per default ->
+  # ribuan findings per hari) yang bisa flood Findings sheet + buang
+  # baseline data.
+  # Set False kalau mau iforest masuk Findings + ikut auto-skip seperti
+  # detector M2b yang lebih konservatif.
+  exclude_from_findings_sheet: true
+  enabled: true                     # Opt-in feature flag (default OFF)
+m2a_shading:
+  exclude_from_findings_sheet: true
+  enabled: true                     # Opt-in feature flag (default OFF)

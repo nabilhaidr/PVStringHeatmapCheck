@@ -1,0 +1,82 @@
+# PV Module datasheet specification untuk PLTS-IKN.
+# Sumber: Jinko Solar JKM625N 78HL4-BDV datasheet.pdf (Tiger Neo N-type, bifacial dual-glass).
+# Konsumen: pv_pipeline/panel_spec.py (PanelSpec.from_yaml) dan downstream M2b detector.
+#
+# Catatan signing convention temperature coefficients:
+#   - temp_coef_voc_pct_per_c   = -0.25  (Voc TURUN saat sel panas)
+#   - temp_coef_pmax_pct_per_c  = -0.29  (Pmax TURUN saat sel panas)
+#   - temp_coef_isc_pct_per_c   = +0.045 (Isc NAIK sedikit saat sel panas)
+#
+# Modules per string per WB (dari design PLTS, user-provided):
+#   WB01-WB02: 24 modules/string -> Voc_string_nominal_STC = 55.72 * 24 = 1337.28 V (89% of 1500V)
+#   WB03-WB10: 26 modules/string -> Voc_string_nominal_STC = 55.72 * 26 = 1448.72 V (96% of 1500V)
+
+panel_model: "Jinko Solar JKM625N 78HL4-BDV"
+technology: "N-type Mono-crystalline (Tiger Neo, bifacial, dual-glass)"
+
+# Electrical performance @ STC (1000 W/m^2, 25 C cell, AM=1.5)
+electrical_stc:
+  pmax_w: 625
+  vmp_v: 46.10
+  imp_a: 13.56
+  voc_v: 55.72
+  isc_a: 14.27
+  module_efficiency_pct: 22.36
+
+# Electrical performance @ NOCT (800 W/m^2, 20 C ambient, AM=1.5, wind 1 m/s)
+electrical_noct:
+  pmax_w: 470
+  vmp_v: 42.68
+  imp_a: 11.01
+  voc_v: 52.93
+  isc_a: 11.52
+
+# Temperature dependence
+temperature:
+  operating_min_c: -40
+  operating_max_c: 85
+  noct_c: 45                       # +/- 2
+  noct_tolerance_c: 2
+  temp_coef_pmax_pct_per_c: -0.29
+  temp_coef_voc_pct_per_c: -0.25
+  temp_coef_isc_pct_per_c: 0.045
+
+# Mekanikal
+mechanical:
+  cells_per_module: 156            # 2 x 78
+  dimensions_mm: [2465, 1134, 30]  # [length, width, thickness]
+  weight_kg: 34.6
+  front_glass: "2.0mm Anti-Reflection Coating"
+  back_glass: "2.0mm Heat Strengthened Glass"
+  frame: "Anodized Aluminium Alloy"
+  junction_box_rating: "IP68"
+
+# Bifacial gain reference (dari datasheet "Bifacial Output-Rearside Power Gain")
+bifacial:
+  bifacial_factor_pct: 80          # +/- 5
+  bifacial_factor_tolerance_pct: 5
+  rear_gain_at_5pct_w: 656         # Pmax saat 5% rear irradiance
+  rear_gain_at_15pct_w: 719
+  rear_gain_at_25pct_w: 781
+
+# System limits
+system:
+  max_system_voltage_v: 1500       # IEC
+  max_series_fuse_a: 30
+  power_tolerance_pct: [0, 3]      # 0 ~ +3% positive tolerance
+
+# Default modules-per-string (digunakan saat WB tidak ada di strings_per_wb).
+default_modules_per_string: 26
+
+# Per-WB string config (override default).
+strings_per_wb:
+  WB01: {modules_per_string: 24}
+  WB02: {modules_per_string: 24}
+  WB03: {modules_per_string: 26}
+  WB04: {modules_per_string: 26}
+  WB05: {modules_per_string: 26}
+  WB06: {modules_per_string: 26}
+  WB07: {modules_per_string: 26}
+  WB08: {modules_per_string: 26}
+  WB09: {modules_per_string: 26}
+  WB10: {modules_per_string: 26}
