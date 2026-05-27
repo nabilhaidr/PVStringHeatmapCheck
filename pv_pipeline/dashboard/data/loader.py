@@ -11,6 +11,7 @@ import pandas as pd
 
 
 _FINDINGS_RE = re.compile(r"^m2_findings_(\d{8})\.xlsx$", re.IGNORECASE)
+_FINDINGS_JSONL_RE = re.compile(r"^m2_findings_(\d{8})\.jsonl$", re.IGNORECASE)
 _BASELINE_CSV_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.csv$", re.IGNORECASE)
 _PV_POWER_RE = re.compile(r"^PV\d+\s+Power\(kW\)$", re.IGNORECASE)
 
@@ -18,6 +19,17 @@ _PV_POWER_RE = re.compile(r"^PV\d+\s+Power\(kW\)$", re.IGNORECASE)
 def parse_findings_date(filename: str) -> date | None:
     """Return date from ``m2_findings_YYYYMMDD.xlsx`` or None for other names."""
     match = _FINDINGS_RE.match(str(filename).strip())
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def parse_findings_jsonl_date(filename: str) -> date | None:
+    """Return date from ``m2_findings_YYYYMMDD.jsonl`` or None."""
+    match = _FINDINGS_JSONL_RE.match(str(filename).strip())
     if not match:
         return None
     try:
@@ -45,6 +57,16 @@ def load_findings_workbook(bytes_io: BytesIO) -> Dict[str, pd.DataFrame]:
             sheet_name: pd.read_excel(workbook, sheet_name=sheet_name)
             for sheet_name in workbook.sheet_names
         }
+
+
+def load_findings_jsonl(bytes_io: BytesIO) -> Dict[str, pd.DataFrame]:
+    """Read ``m2_findings_YYYYMMDD.jsonl`` as a Findings-only workbook."""
+    bytes_io.seek(0)
+    try:
+        findings = pd.read_json(bytes_io, lines=True)
+    except ValueError:
+        findings = pd.DataFrame()
+    return {"Findings": findings}
 
 
 def concat_findings_range(
