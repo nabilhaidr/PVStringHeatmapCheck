@@ -1,0 +1,10 @@
+pandas
+numpy
+openpyxl
+matplotlib
+seaborn
+PyYAML
+altair
+streamlit>=1.35
+google-api-python-client
+google-auth
