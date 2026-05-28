@@ -376,3 +376,45 @@ def test_manifest_includes_dashboard_artifact_placeholders(df_pv):
             "findings_jsonl_url",
         ]:
             assert pd.isna(row[column]) or row[column] == ""
+
+
+def test_manifest_schema_upgrade_keeps_existing_manifest_readable(df_pv):
+    """Appending after a schema change rewrites old rows so pandas can read CSV."""
+    old_row = {
+        "date": "2026-05-14",
+        "rows_total": 10,
+        "rows_kept": 10,
+        "rows_skipped_maintenance": 0,
+        "rows_skipped_findings": 0,
+        "rows_skipped_min_rows": 0,
+        "rows_pv_nanned": 0,
+        "inverters_total": 1,
+        "inverters_kept": 1,
+        "inverters_skipped_findings": "",
+        "inverters_skipped_min_rows": "",
+        "pv_strings_skipped_findings": "",
+        "maintenance_matches": 0,
+        "file_parquet": "",
+        "file_csv": "baseline/2026-05/2026-05-14.csv",
+        "saved_at": "2026-05-14T12:00:00",
+    }
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        base_dir = os.path.join(td, "baseline")
+        os.makedirs(base_dir, exist_ok=True)
+        manifest_path = os.path.join(base_dir, "manifest.csv")
+        pd.DataFrame([old_row]).to_csv(manifest_path, index=False)
+
+        acc = BaselineAccumulator(
+            base_dir=base_dir,
+            output_formats=("csv",),
+            min_rows_per_inverter=30,
+            overwrite=True,
+        )
+        acc.run(df_pv, "2026-05-15", findings=None)
+
+        manifest = pd.read_csv(manifest_path)
+        assert len(manifest) == 2
+        assert "baseline_csv_name" in manifest.columns
+        assert pd.isna(manifest.loc[0, "baseline_csv_name"]) or manifest.loc[0, "baseline_csv_name"] == ""
+        assert manifest.loc[1, "baseline_csv_name"] == "2026-05-15.csv"

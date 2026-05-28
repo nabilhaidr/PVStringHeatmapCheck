@@ -533,12 +533,34 @@ class BaselineAccumulator:
             "findings_jsonl_url": "",
             "saved_at": datetime.now().isoformat(timespec="seconds"),
         }
-        file_exists = os.path.exists(manifest_file)
-        with open(manifest_file, "a", encoding="utf-8", newline="") as fp:
-            w = csv.DictWriter(fp, fieldnames=list(row.keys()))
-            if not file_exists:
-                w.writeheader()
-            w.writerow(row)
+        fieldnames = list(row.keys())
+        rows: List[Dict[str, Any]] = []
+        if os.path.exists(manifest_file):
+            with open(manifest_file, "r", encoding="utf-8", newline="") as fp:
+                reader = csv.reader(fp)
+                header = next(reader, [])
+                for existing_row in reader:
+                    if not any(existing_row):
+                        continue
+                    if len(existing_row) == len(header):
+                        rows.append(dict(zip(header, existing_row)))
+                    elif len(existing_row) == len(fieldnames):
+                        rows.append(dict(zip(fieldnames, existing_row)))
+                    else:
+                        parsed = dict(zip(header, existing_row[:len(header)]))
+                        extra_columns = [col for col in fieldnames if col not in header]
+                        for col, value in zip(extra_columns, existing_row[len(header):]):
+                            parsed[col] = value
+                        rows.append(parsed)
+                for col in header:
+                    if col and col not in fieldnames:
+                        fieldnames.append(col)
+
+        rows.append(row)
+        with open(manifest_file, "w", encoding="utf-8", newline="") as fp:
+            w = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(rows)
 
     # ---------- All-in-one ----------
 
