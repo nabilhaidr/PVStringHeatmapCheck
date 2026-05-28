@@ -184,6 +184,33 @@ def test_list_artifacts_uses_public_manifest_with_manual_findings_columns(
     assert baseline[date(2026, 5, 14)].file_id.endswith("id=baseline-id")
 
 
+def test_public_manifest_accepts_drive_link_alias_columns(
+    monkeypatch,
+    tmp_path,
+):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "\n".join([
+            "date,baseline_csv_name,baseline_csv_drive_link,findings_xlsx_drive_link,findings_jsonl_drive_link",
+            (
+                "2026-05-14,2026-05-14.csv,"
+                "https://drive.google.com/file/d/csv-id/view,"
+                "https://drive.google.com/file/d/xlsx-id/view,"
+                "https://drive.google.com/file/d/jsonl-id/view"
+            ),
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "pv_pipeline.dashboard.data.gdrive._streamlit_secrets",
+        lambda: {"gdrive_public": {"manifest_csv_path": str(manifest)}},
+    )
+
+    assert list_artifacts("baseline_csv")[date(2026, 5, 14)].file_id.endswith("id=csv-id")
+    assert list_artifacts("findings")[date(2026, 5, 14)].file_id.endswith("id=xlsx-id")
+    assert list_artifacts("findings_jsonl")[date(2026, 5, 14)].file_id.endswith("id=jsonl-id")
+
+
 def test_public_manifest_can_keep_existing_file_csv_path_without_download_source(
     monkeypatch,
     tmp_path,

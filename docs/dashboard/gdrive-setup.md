@@ -8,7 +8,8 @@ Cloud.
 1. Upload file data ke Google Drive.
 2. Set file data yang akan dibaca dashboard ke "Anyone with the link can view".
 3. Buka manifest Google Sheet yang sudah ada.
-4. Tambahkan kolom URL/file ID di sheet yang sama.
+4. Jalankan Apps Script `docs/dashboard/apps-script-manifest-sync.js` untuk
+   mengisi kolom URL/file ID otomatis dari folder Drive.
 5. Publish sheet sebagai CSV.
 6. Isi Streamlit secrets:
 
@@ -22,7 +23,8 @@ use_service_account = false
 
 Manifest lama dari baseline tetap boleh dipakai. Kolom `file_csv` yang berisi
 path seperti `baseline/2026-05/2026-05-14.csv` dipakai sebagai nama/path
-display. Agar file bisa didownload tanpa API, tambahkan salah satu kolom berikut:
+display. Agar file bisa didownload tanpa API, sheet manifest harus punya salah
+satu kolom berikut:
 
 ```csv
 date,file_csv,baseline_csv_file_id,findings_xlsx_file_id,findings_jsonl_file_id
@@ -39,6 +41,45 @@ date,file_csv,baseline_csv_url,findings_xlsx_url,findings_jsonl_url
 Kolom findings boleh kosong per tanggal. Dashboard tetap memilih xlsx sebagai
 primary input jika `findings_xlsx_*` tersedia, dan memakai jsonl hanya sebagai
 fallback Findings-only.
+
+### Auto-fill Manifest Gratis Dengan Apps Script
+
+Google Sheet bisa mengisi kolom link tanpa Google Cloud Console:
+
+1. Buka Google Sheet manifest.
+2. Pilih `Extensions > Apps Script`.
+3. Paste isi `docs/dashboard/apps-script-manifest-sync.js`.
+4. Isi:
+
+```javascript
+FINDINGS_FOLDER_ID: "folder-output-id",
+BASELINE_FOLDER_ID: "folder-baseline-id",
+```
+
+5. Run function `syncDashboardManifest`.
+6. Approve permission prompt dari Google.
+7. Publish sheet sebagai CSV, lalu pakai URL publish itu di
+   `[gdrive_public].manifest_csv_url`.
+
+Script ini scan folder output untuk:
+
+- `m2_findings_YYYYMMDD.xlsx`
+- `m2_findings_YYYYMMDD.jsonl`
+
+Script juga scan baseline folder beserta subfolder bulan untuk:
+
+- `YYYY-MM-DD.csv`
+
+Kolom yang ditambahkan/diisi:
+
+```csv
+baseline_csv_name,baseline_csv_file_id,baseline_csv_url
+findings_xlsx_name,findings_xlsx_file_id,findings_xlsx_url
+findings_jsonl_name,findings_jsonl_file_id,findings_jsonl_url
+```
+
+Kolom metric lama seperti `rows_kept`, `rows_skipped_findings`, dan `file_csv`
+tetap dipertahankan.
 
 `use_service_account = false` mematikan fallback service account. Key
 `service_account_json` boleh tetap ada di secrets, tetapi tidak akan dipakai

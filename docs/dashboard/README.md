@@ -55,7 +55,7 @@ use_service_account = false
 ```
 
 Kolom manifest minimal mengikuti file `manifest.csv` dari baseline. Kolom baru
-bisa ditambahkan manual di Google Sheet yang sama, tanpa membuat manifest baru:
+bisa ditambahkan di Google Sheet yang sama, tanpa membuat manifest baru:
 
 ```csv
 date,file_csv,baseline_csv_file_id,findings_xlsx_file_id,findings_jsonl_file_id
@@ -64,6 +64,19 @@ date,file_csv,baseline_csv_file_id,findings_xlsx_file_id,findings_jsonl_file_id
 
 Alternatif kolom `*_url` juga didukung, misalnya `baseline_csv_url`,
 `findings_xlsx_url`, dan `findings_jsonl_url`.
+
+Untuk auto-fill gratis tanpa Google Cloud Console, pakai template
+`docs/dashboard/apps-script-manifest-sync.js` di Google Sheet manifest. Script
+itu membaca folder Drive output dan baseline, lalu mengisi:
+
+```csv
+baseline_csv_name,baseline_csv_file_id,baseline_csv_url
+findings_xlsx_name,findings_xlsx_file_id,findings_xlsx_url
+findings_jsonl_name,findings_jsonl_file_id,findings_jsonl_url
+```
+
+Dashboard juga menerima alias `*_drive_link` / `*_drive_url` kalau manifest
+dibuat dengan nama kolom tersebut.
 
 Service account fallback:
 
