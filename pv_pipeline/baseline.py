@@ -500,6 +500,9 @@ class BaselineAccumulator:
         """Append row ke manifest CSV."""
         paths_resolved = self._resolve_paths(date_str)
         ymd = paths_resolved["ymd"]
+        compact_ymd = ymd.replace("-", "")
+        csv_path = paths.get("csv") or ""
+        csv_name = os.path.basename(csv_path or paths_resolved["csv"])
         manifest_file = self.manifest_path()
         os.makedirs(self.base_dir, exist_ok=True)
 
@@ -518,7 +521,16 @@ class BaselineAccumulator:
             "pv_strings_skipped_findings": ";".join(summary.pv_strings_skipped_findings),
             "maintenance_matches": summary.maintenance_matches,
             "file_parquet": paths.get("parquet") or "",
-            "file_csv": paths.get("csv") or "",
+            "file_csv": csv_path,
+            "baseline_csv_name": csv_name,
+            "baseline_csv_file_id": "",
+            "baseline_csv_url": "",
+            "findings_xlsx_name": f"m2_findings_{compact_ymd}.xlsx",
+            "findings_xlsx_file_id": "",
+            "findings_xlsx_url": "",
+            "findings_jsonl_name": f"m2_findings_{compact_ymd}.jsonl",
+            "findings_jsonl_file_id": "",
+            "findings_jsonl_url": "",
             "saved_at": datetime.now().isoformat(timespec="seconds"),
         }
         file_exists = os.path.exists(manifest_file)

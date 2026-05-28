@@ -335,3 +335,44 @@ def test_manifest_includes_new_columns(df_pv):
         assert "pv_strings_skipped_findings" in manifest.columns
         assert int(manifest["rows_pv_nanned"].iloc[0]) == 145
         assert "WB05-INV01:PV1" in str(manifest["pv_strings_skipped_findings"].iloc[0])
+
+
+def test_manifest_includes_dashboard_artifact_placeholders(df_pv):
+    """Baseline manifest exposes dashboard artifact names and empty Drive link slots."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        acc = BaselineAccumulator(
+            base_dir=os.path.join(td, "baseline"),
+            output_formats=("csv",),
+            min_rows_per_inverter=30,
+            overwrite=True,
+        )
+        acc.run(df_pv, "2026-05-14", findings=None)
+
+        manifest = pd.read_csv(acc.manifest_path())
+        row = manifest.iloc[0]
+        expected_columns = [
+            "baseline_csv_name",
+            "baseline_csv_file_id",
+            "baseline_csv_url",
+            "findings_xlsx_name",
+            "findings_xlsx_file_id",
+            "findings_xlsx_url",
+            "findings_jsonl_name",
+            "findings_jsonl_file_id",
+            "findings_jsonl_url",
+        ]
+        for column in expected_columns:
+            assert column in manifest.columns
+
+        assert row["baseline_csv_name"] == "2026-05-14.csv"
+        assert row["findings_xlsx_name"] == "m2_findings_20260514.xlsx"
+        assert row["findings_jsonl_name"] == "m2_findings_20260514.jsonl"
+        for column in [
+            "baseline_csv_file_id",
+            "baseline_csv_url",
+            "findings_xlsx_file_id",
+            "findings_xlsx_url",
+            "findings_jsonl_file_id",
+            "findings_jsonl_url",
+        ]:
+            assert pd.isna(row[column]) or row[column] == ""
