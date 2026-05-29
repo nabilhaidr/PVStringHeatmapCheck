@@ -615,6 +615,14 @@ for i, pv_n in enumerate(range(1, 6)):
         f'"")'
     )).border = BORDER
 
+# PV5 EMPTY by design (WB05-INV05): R_str="EMPTY" (text) -> ABS("") di formula
+# flagged_by_z (col E) menghasilkan #VALUE!, lalu menjalar ke emit_finding (col G).
+# Python skip empty PV sebelum z-score logic, jadi EMPTY tidak boleh punya decision.
+# Blank D/E/F/G untuk baris PV5 supaya konsisten (no decision shown).
+pv5_decision_row = decision_row + 2 + 4
+for _col in (4, 5, 6, 7):
+    ws.cell(row=pv5_decision_row, column=_col, value="")
+
 # Conditional formatting severity
 sev_range_c = f"I{decision_row+2}:I{decision_row+6}"
 for sev_name, fill in SEV_FILL.items():
@@ -745,7 +753,9 @@ ws["A2"] = ("Demo Wave 9: rolling median window 15 (75-min) + MAD-based outlier 
             "Approximation of pvanalytics.quality.outliers.hampel(). Toggle via cfg_enabled.")
 ws["A2"].font = Font(italic=True, color="595959")
 
-ws["A4"] = "Note: window 15 butuh ≥15 samples. Dummy 24 timestep cukup untuk demo."
+ws["A4"] = ("Note: rolling_MAD pakai AVEDEV (mean-abs-dev) = proxy MAD universal-compatible "
+            "(MEDIAN(IF()) array gagal tanpa CSE di LibreOffice). True Hampel = median-abs-dev x 1.4826; "
+            "AVEDEV strict ~1.2533. Demo mekanisme, bukan filter produksi (preprocessing.py pakai pvanalytics).")
 ws["A4"].font = Font(italic=True, size=9, color="A0A0A0")
 
 set_header(ws, 5, [
@@ -780,10 +790,12 @@ for ri in range(6, 6 + 24):
             value=f"=ABS(B{ri}-C{ri})").border = BORDER
     ws.cell(row=ri, column=4).number_format = "0.00"
 
-    # rolling MAD (median of absolute deviations from median, in window)
-    # Approximation: MEDIAN of |B-C| values in window. Use array formula or simpler.
+    # rolling MAD proxy. AVEDEV (mean-abs-dev) = universal-compatible, non-array.
+    # Array MEDIAN(IF(...)) butuh CSE entry -> gagal recalc headless di LibreOffice.
+    # Caveat: AVEDEV = mean-abs-dev (true Hampel = median-abs-dev x 1.4826; AVEDEV
+    # strict konsisten ~1.2533). Sheet demo/approx, bukan filter produksi.
     ws.cell(row=ri, column=5,
-            value=f"=MEDIAN(IF(B{win_start}:B{ri}>0,ABS(B{win_start}:B{ri}-C{ri})))").border = BORDER
+            value=f"=AVEDEV(B{win_start}:B{ri})").border = BORDER
     ws.cell(row=ri, column=5).number_format = "0.00"
 
     # deviation_in_MAD_sigma = abs_dev / (1.4826 * MAD) — constant for normal dist
@@ -844,7 +856,7 @@ for i in range(5):
                 value=f"=cfg_z_threshold").border = BORDER
         ws.cell(row=last_row, column=8,
                 value=f"=M2b_PeerZScore!K{decision_data_row}").border = BORDER
-    last_row += 1
+        last_row += 1
 
 # Update auto_filter range
 ws.auto_filter.ref = f"A4:H{last_row-1}"
