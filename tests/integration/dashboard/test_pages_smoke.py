@@ -17,6 +17,7 @@ from pv_pipeline.dashboard.widgets.detector_tab import first_available_sheet
         "pv_pipeline.dashboard.pages.heatmap",
         "pv_pipeline.dashboard.pages.findings",
         "pv_pipeline.dashboard.pages.detectors",
+        "pv_pipeline.dashboard.pages.underperform",
     ],
 )
 def test_dashboard_page_modules_import_without_gdrive_calls(module_name):
