@@ -21,6 +21,7 @@ from pv_pipeline.dashboard.data.underperform import (
 from pv_pipeline.dashboard.styles import inject_dense_css
 from pv_pipeline.dashboard.widgets.date_picker import pick_date_range
 from pv_pipeline.dashboard.widgets.filters import normalize_findings_df
+from pv_pipeline.dashboard.widgets.json_display import render_jsonish
 
 
 def _default_range() -> tuple[date, date]:
@@ -259,7 +260,7 @@ def main() -> None:
         if not details.empty and "evidence" in details.columns:
             first_evidence = details.iloc[0].get("evidence")
             if pd.notna(first_evidence):
-                st.json(first_evidence)
+                render_jsonish("evidence", first_evidence)
 
     if show_baseline:
         _render_baseline_context(selected)

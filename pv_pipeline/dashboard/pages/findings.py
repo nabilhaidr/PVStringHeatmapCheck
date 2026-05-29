@@ -11,6 +11,7 @@ from pv_pipeline.dashboard.data.cache import cached_findings_range, clear_dashbo
 from pv_pipeline.dashboard.styles import inject_dense_css
 from pv_pipeline.dashboard.widgets.date_picker import pick_date_range
 from pv_pipeline.dashboard.widgets.filters import normalize_findings_df
+from pv_pipeline.dashboard.widgets.json_display import render_jsonish
 
 
 def _default_range() -> tuple[date, date]:
@@ -85,6 +86,6 @@ def main() -> None:
         with st.expander("Detail finding", expanded=True):
             st.write(row.drop(labels=["extra", "evidence"], errors="ignore").to_frame("value"))
             if "extra" in row:
-                st.json(row["extra"])
+                render_jsonish("extra", row["extra"])
             if "evidence" in row:
-                st.json(row["evidence"])
+                render_jsonish("evidence", row["evidence"])
