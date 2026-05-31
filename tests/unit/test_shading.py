@@ -551,3 +551,53 @@ class TestM2aShadingConfigOverrides:
         f_strict = sm_strict.run(df, cfg_strict)
         # Strict should produce fewer or equal findings than loose.
         assert len(f_strict) <= len(f_loose)
+
+
+class _DupSafeMockPOA:
+    """Mock POA returning UNIQUE-indexed series (mimics real POAProvider yang
+    reindex ke pyranometer/clearsky timestamps unik).
+
+    Penting untuk regression test duplicate-timestamp: real provider PASS di
+    reindex (source unik), lalu OLD code crash di group_clean.loc[ts_day]
+    -> .iloc[mask_poa]. Conftest mock_poa index-by-passed-ts gagal lebih awal
+    di reindex -- tidak faithfully reproduce. Mock ini replikasi real provider.
+    """
+
+    def get_poa(self, timestamps, wb_id, source="auto"):
+        ts = pd.DatetimeIndex(timestamps)
+        ts_u = ts[~ts.duplicated(keep="first")]
+        hrs = (ts_u.hour - 6) + (ts_u.minute / 60.0)
+        poa = np.where((hrs >= 0) & (hrs <= 12),
+                       1000.0 * np.sin(np.pi * hrs / 12) ** 2, 0.0)
+        return pd.Series(poa, index=ts_u)
+
+    def get_solar_elevation(self, timestamps):
+        ts = pd.DatetimeIndex(timestamps)
+        ts_u = ts[~ts.duplicated(keep="first")]
+        hrs = (ts_u.hour - 6) + (ts_u.minute / 60.0)
+        elev = np.where((hrs >= 0) & (hrs <= 12),
+                        85.0 * np.sin(np.pi * hrs / 12), -45.0)
+        return pd.Series(elev, index=ts_u, name="solar_elevation_deg")
+
+
+class TestM2aShadingDuplicateTimestamps:
+    """Regression (2026-06-01): duplicate 'Start Time' di data Huawei
+    (mis. notebook 20260410 Cell 4) tidak boleh bikin
+    'IndexError: Boolean index has wrong length'.
+    """
+
+    def test_duplicate_start_time_no_indexerror(self, shading_cfg):
+        df = _make_uniform_shading_df(shade_hours=[7, 8, 9])
+        # Inject 2 duplicate rows verbatim -> Start Time duplikat.
+        dup = df.iloc[[30, 60]].copy()
+        df_dup = (
+            pd.concat([df, dup], ignore_index=True)
+            .sort_values("Start Time")
+            .reset_index(drop=True)
+        )
+        assert df_dup["Start Time"].duplicated().any()  # confirm dupes injected
+        sm = M2aShading(poa=_DupSafeMockPOA())
+        findings = sm.run(df_dup, shading_cfg)  # OLD code -> IndexError
+        assert isinstance(findings, list)
+        # Artifact tetap ke-emit (detector run sampai selesai, no crash).
+        assert "HourlyMetrics" in sm.artifacts

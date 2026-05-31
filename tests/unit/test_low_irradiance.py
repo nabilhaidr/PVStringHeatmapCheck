@@ -437,3 +437,47 @@ class TestM2aLowIrradianceMultipleInverters:
             # All 3 inverters should appear (even if skipped due to insufficient
             # low-band samples).
             assert fit["inverter_id"].nunique() == 3
+
+
+class _DupSafeMockPOA:
+    """Mock POA UNIQUE-indexed (mimics real POAProvider). Lihat
+    test_shading.py untuk rationale -- replikasi real provider supaya
+    reindex PASS dan kita exercise path .loc/.iloc yang di-fix 2026-06-01.
+    """
+
+    def get_poa(self, timestamps, wb_id, source="auto"):
+        ts = pd.DatetimeIndex(timestamps)
+        ts_u = ts[~ts.duplicated(keep="first")]
+        hrs = (ts_u.hour - 6) + (ts_u.minute / 60.0)
+        poa = np.where((hrs >= 0) & (hrs <= 12),
+                       1000.0 * np.sin(np.pi * hrs / 12) ** 2, 0.0)
+        return pd.Series(poa, index=ts_u)
+
+    def get_solar_elevation(self, timestamps):
+        ts = pd.DatetimeIndex(timestamps)
+        ts_u = ts[~ts.duplicated(keep="first")]
+        hrs = (ts_u.hour - 6) + (ts_u.minute / 60.0)
+        elev = np.where((hrs >= 0) & (hrs <= 12),
+                        85.0 * np.sin(np.pi * hrs / 12), -45.0)
+        return pd.Series(elev, index=ts_u, name="solar_elevation_deg")
+
+
+class TestM2aLowIrradianceDuplicateTimestamps:
+    """Regression (2026-06-01): duplicate 'Start Time' tidak boleh bikin
+    'IndexError: Boolean index has wrong length' (sama seperti bug shading).
+    """
+
+    def test_duplicate_start_time_no_indexerror(self, low_irr_cfg):
+        df = _make_inverter_df("WB05-INV01", rs_high=True)
+        dup = df.iloc[[30, 60]].copy()
+        df_dup = (
+            pd.concat([df, dup], ignore_index=True)
+            .sort_values("Start Time")
+            .reset_index(drop=True)
+        )
+        assert df_dup["Start Time"].duplicated().any()  # confirm dupes injected
+        sm = M2aLowIrradiance(poa=_DupSafeMockPOA())
+        findings = sm.run(df_dup, low_irr_cfg)  # OLD code -> IndexError
+        assert isinstance(findings, list)
+        # Detector run sampai selesai -> fit artifact ke-emit.
+        assert "LowIrradianceFit" in sm.artifacts

@@ -398,7 +398,13 @@ class M2aShading(SubModule):
             if mask_daylight.sum() == 0:
                 continue
             ts_day = ts_clean[mask_daylight]
-            group_day = group_clean.loc[ts_day]
+            # 2026-06-01 fix: pakai boolean mask (positional), BUKAN
+            # group_clean.loc[ts_day] (label-based). Kalau data punya
+            # duplicate "Start Time" timestamps (Huawei export glitch),
+            # .loc[ts_day] mengembalikan SEMUA baris matching tiap label
+            # -> row count inflate -> downstream .iloc[mask_poa] IndexError
+            # ("Boolean index has wrong length"). Mask posisional kebal dupe.
+            group_day = group_clean.loc[mask_daylight]
             hours_day = hours[mask_daylight]
 
             # POA gate.

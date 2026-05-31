@@ -375,7 +375,11 @@ class M2aLowIrradiance(SubModule):
                 summary_counts["skipped"] += 1
                 continue
             ts_h = ts_clean[mask_hour]
-            group_h = group_clean.loc[ts_h]
+            # 2026-06-01 fix: boolean mask posisional, BUKAN .loc[ts_h]
+            # (label-based). Duplicate "Start Time" timestamps bikin
+            # .loc[ts_h] inflate row count -> .iloc[mask_gate_arr] IndexError.
+            # Lihat shading.py untuk penjelasan lengkap.
+            group_h = group_clean.loc[mask_hour]
 
             mask_gate, poa_values = self._build_gate_mask(
                 group_h, ts_h, wb_id, cfg, shutdown_col,
