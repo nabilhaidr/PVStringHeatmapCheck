@@ -259,3 +259,46 @@ def test_get_period_total_sums_deem_dispatch(synthetic_generation_xlsx):
     total = loader.get_period_total("2026-05-10", "2026-05-14", "deem_dispatch_kwh")
     # 0 + 1500 + 0 + 2200 + 500 = 4200.
     assert total == pytest.approx(4200.0)
+
+
+# ---------- 2026-06-12: SetpointLoader (sheet 'Setpoint', 10-menit) ----------
+
+
+@pytest.fixture
+def synthetic_setpoint_xlsx(tmp_path):
+    """Mimics sheet Setpoint: Tanggal/Waktu + Setpoint Busbar 1/2, 10-min."""
+    ts = pd.date_range("2026-05-13 00:00", "2026-05-14 23:50", freq="10min")
+    df = pd.DataFrame({
+        "Tanggal/Waktu": ts,
+        "Setpoint Busbar 1": 24000,
+        "Setpoint Busbar 2": 26000,
+    })
+    # 2026-05-14 10:00-14:00 curtailed: busbar1 turun ke 12000.
+    cur = (ts >= "2026-05-14 10:00") & (ts < "2026-05-14 14:00")
+    df.loc[cur, "Setpoint Busbar 1"] = 12000
+    path = tmp_path / "gen.xlsx"
+    df.to_excel(path, sheet_name="Setpoint", index=False)
+    return str(path)
+
+
+def test_setpoint_loader_totals_and_day_slice(synthetic_setpoint_xlsx):
+    from pv_pipeline.generation import SetpointLoader
+
+    loader = SetpointLoader(synthetic_setpoint_xlsx)
+    assert list(loader.df.columns) == ["busbar1_kw", "busbar2_kw", "total_kw"]
+    day = loader.get_day_total("2026-05-14")
+    assert len(day) == 144  # 24h x 6 slot 10-menit
+    assert float(day.max()) == 50000.0
+    # Slot curtailed 10:00-14:00 -> total 38000.
+    assert float(day.loc["2026-05-14 11:00"]) == 38000.0
+    # Hari di luar sheet -> Series kosong.
+    assert loader.get_day_total("2026-01-01").empty
+
+
+def test_setpoint_loader_missing_columns_raises(tmp_path):
+    from pv_pipeline.generation import SetpointLoader
+
+    path = tmp_path / "bad.xlsx"
+    pd.DataFrame({"Foo": [1]}).to_excel(path, sheet_name="Setpoint", index=False)
+    with pytest.raises(KeyError, match="missing column"):
+        SetpointLoader(str(path))

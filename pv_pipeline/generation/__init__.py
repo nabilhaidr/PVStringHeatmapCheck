@@ -6,6 +6,6 @@ Load ``IKN Generation.xlsx`` sheet ``Summary (PV)`` -> daily energy per WB
 """
 from __future__ import annotations
 
-from .loader import GenerationLoader
+from .loader import GenerationLoader, SetpointLoader
 
-__all__ = ["GenerationLoader"]
+__all__ = ["GenerationLoader", "SetpointLoader"]

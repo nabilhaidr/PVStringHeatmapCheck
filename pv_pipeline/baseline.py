@@ -122,6 +122,9 @@ class FilterSummary:
     pv_strings_skipped_findings: List[str] = field(default_factory=list)
     """Per-PV NaN list, format ``"WB05-INV01:PV3"`` (scope=pv_string only)."""
     maintenance_matches: int = 0
+    # 2026-06-12: day-level skip (outage / curtailment via setpoint).
+    day_skipped: bool = False
+    day_skip_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -183,6 +186,118 @@ class MaintenancePeriod:
         return False
 
 
+# 2026-06-12: day-filter untuk baseline LSTM + M2A. Hari dengan ampere & kW
+# konsisten rendah/sangat kecil karena outage, atau curtailment berdasarkan
+# setpoint real-time (sheet 'Setpoint' IKN Generation.xlsx, 10-menit), di-skip
+# dari akumulasi. Default DISABLED di kode (backward compat); diaktifkan via
+# config/baseline.yaml section 'day_filter'.
+DEFAULT_DAY_FILTER: Dict[str, Any] = {
+    "enabled": True,
+    "setpoint_xlsx_path": "raw data input/IKN Generation.xlsx",
+    "setpoint_sheet": "Setpoint",
+    "daylight_start_hour": 8.0,
+    "daylight_end_hour": 16.0,
+    "outage_power_floor_kw": 1000.0,       # fleet total < 1 MW saat daylight = "sangat kecil"
+    "outage_current_floor_a": 1.0,         # median arus string daylight < 1 A
+    "outage_min_fraction": 0.8,            # >=80% slot daylight low -> outage day
+    "curtail_setpoint_threshold_kw": 50000.0,  # total setpoint busbar1+2 di bawah ini = curtailed slot
+    "curtail_min_fraction": 0.3,           # >=30% slot daylight curtailed -> skip day
+}
+
+
+@dataclass
+class DayQualityResult:
+    """Hasil evaluasi kualitas satu hari untuk baseline."""
+
+    skip: bool = False
+    reasons: List[str] = field(default_factory=list)
+    metrics: Dict[str, float] = field(default_factory=dict)
+
+
+def evaluate_day_quality(
+    df: pd.DataFrame,
+    *,
+    setpoint_total_kw: Optional[pd.Series] = None,
+    daylight_start_hour: float = 8.0,
+    daylight_end_hour: float = 16.0,
+    outage_power_floor_kw: float = 1000.0,
+    outage_current_floor_a: float = 1.0,
+    outage_min_fraction: float = 0.8,
+    curtail_setpoint_threshold_kw: float = 50000.0,
+    curtail_min_fraction: float = 0.3,
+) -> DayQualityResult:
+    """Cek apakah satu hari layak masuk baseline (LSTM + M2A).
+
+    Dua sinyal independen; salah satu menyala -> skip hari:
+
+    1. ``outage``      : data-driven. Fleet total ``Active power(kW)`` DAN
+       median arus string konsisten di bawah floor selama jendela daylight.
+       (Bila salah satu kolom tidak ada, pakai sinyal yang tersedia saja.)
+    2. ``curtailment`` : setpoint-driven. Fraksi slot 10-menit daylight dengan
+       total setpoint (busbar1+2) di bawah threshold >= ``curtail_min_fraction``.
+       Hari curtailed punya profil daya terdistorsi (capped) -> bukan NORMAL.
+    """
+    result = DayQualityResult()
+
+    # --- Sinyal 1: outage (ampere & kW konsisten rendah) ---
+    if "Start Time" in df.columns and not df.empty:
+        ts = pd.to_datetime(df["Start Time"], errors="coerce")
+        hour = ts.dt.hour + ts.dt.minute / 60.0
+        day_mask = ts.notna() & (hour >= daylight_start_hour) & (hour < daylight_end_hour)
+        day_rows = df.loc[day_mask]
+        ts_day = ts.loc[day_mask]
+        low_kw: Optional[pd.Series] = None
+        low_a: Optional[pd.Series] = None
+        if not day_rows.empty:
+            if "Active power(kW)" in day_rows.columns:
+                kw = pd.to_numeric(day_rows["Active power(kW)"], errors="coerce")
+                fleet_kw = kw.groupby(ts_day.values).sum(min_count=1)
+                if fleet_kw.notna().any():
+                    result.metrics["fleet_kw_daylight_median"] = float(fleet_kw.median())
+                    low_kw = fleet_kw < outage_power_floor_kw
+            cur_cols = [c for c in day_rows.columns if "input current(a)" in str(c).lower()]
+            if cur_cols:
+                cur = day_rows[cur_cols].apply(pd.to_numeric, errors="coerce")
+                med_per_row = cur.median(axis=1)
+                fleet_a = med_per_row.groupby(ts_day.values).median()
+                if fleet_a.notna().any():
+                    result.metrics["string_current_daylight_median_a"] = float(fleet_a.median())
+                    low_a = fleet_a < outage_current_floor_a
+        if low_kw is not None and low_a is not None:
+            idx = low_kw.index.union(low_a.index)
+            low = low_kw.reindex(idx, fill_value=False) & low_a.reindex(idx, fill_value=False)
+        else:
+            low = low_kw if low_kw is not None else low_a
+        if low is not None and len(low) > 0:
+            frac_low = float(low.mean())
+            result.metrics["outage_low_slot_fraction"] = frac_low
+            if frac_low >= outage_min_fraction:
+                result.reasons.append(
+                    f"outage: {frac_low:.0%} slot daylight low "
+                    f"(kW<{outage_power_floor_kw:.0f} & A<{outage_current_floor_a:.1f})"
+                )
+
+    # --- Sinyal 2: curtailment berdasarkan setpoint ---
+    if setpoint_total_kw is not None and len(setpoint_total_kw) > 0:
+        sp = setpoint_total_kw.dropna()
+        if len(sp) > 0:
+            sp_hour = sp.index.hour + sp.index.minute / 60.0
+            sp_day = sp[(sp_hour >= daylight_start_hour) & (sp_hour < daylight_end_hour)]
+            if len(sp_day) > 0:
+                frac_curtail = float((sp_day < curtail_setpoint_threshold_kw).mean())
+                result.metrics["curtail_slot_fraction"] = frac_curtail
+                result.metrics["setpoint_daylight_min_kw"] = float(sp_day.min())
+                if frac_curtail >= curtail_min_fraction:
+                    result.reasons.append(
+                        f"curtailment: {frac_curtail:.0%} slot setpoint daylight "
+                        f"< {curtail_setpoint_threshold_kw:.0f} kW "
+                        f"(min {float(sp_day.min()):.0f} kW)"
+                    )
+
+    result.skip = bool(result.reasons)
+    return result
+
+
 class BaselineAccumulator:
     """Filter NORMAL periods + save daily snapshot ke parquet/csv + manifest.
 
@@ -214,6 +329,7 @@ class BaselineAccumulator:
         min_rows_per_inverter: int = DEFAULT_MIN_ROWS_PER_INVERTER,
         overwrite: bool = DEFAULT_OVERWRITE,
         maintenance_periods: Optional[List[MaintenancePeriod]] = None,
+        day_filter: Optional[Dict[str, Any]] = None,
     ):
         self.base_dir = str(base_dir)
         self.output_formats = tuple(str(f).lower() for f in output_formats)
@@ -229,6 +345,12 @@ class BaselineAccumulator:
         self.min_rows_per_inverter = int(min_rows_per_inverter)
         self.overwrite = bool(overwrite)
         self.maintenance_periods: List[MaintenancePeriod] = list(maintenance_periods or [])
+        # 2026-06-12: day-filter outage/curtailment (lihat DEFAULT_DAY_FILTER).
+        self.day_filter: Dict[str, Any] = dict(DEFAULT_DAY_FILTER)
+        if day_filter:
+            self.day_filter.update(day_filter)
+        self._setpoint_loader = None
+        self._setpoint_load_failed = False
 
     # ---------- IO helpers ----------
 
@@ -282,6 +404,7 @@ class BaselineAccumulator:
             min_rows_per_inverter=int(acc_cfg.get("min_rows_per_inverter", DEFAULT_MIN_ROWS_PER_INVERTER)),
             overwrite=bool(acc_cfg.get("overwrite", DEFAULT_OVERWRITE)),
             maintenance_periods=periods,
+            day_filter=cfg.get("day_filter") or None,
         )
 
     # ---------- Filtering ----------
@@ -520,6 +643,7 @@ class BaselineAccumulator:
             "inverters_skipped_min_rows": ";".join(summary.inverters_skipped_min_rows),
             "pv_strings_skipped_findings": ";".join(summary.pv_strings_skipped_findings),
             "maintenance_matches": summary.maintenance_matches,
+            "day_skip_reason": "; ".join(summary.day_skip_reasons),
             "file_parquet": paths.get("parquet") or "",
             "file_csv": csv_path,
             "baseline_csv_name": csv_name,
@@ -564,6 +688,30 @@ class BaselineAccumulator:
 
     # ---------- All-in-one ----------
 
+    def _setpoint_day_total(self, date_str: str) -> Optional[pd.Series]:
+        """Lazy-load SetpointLoader + ambil total setpoint 10-menit hari ini.
+
+        Graceful: bila file/sheet tidak tersedia, warn sekali lalu None
+        (curtailment check off; outage check tetap jalan dari data).
+        """
+        if self._setpoint_load_failed:
+            return None
+        if self._setpoint_loader is None:
+            path = str(self.day_filter.get("setpoint_xlsx_path", ""))
+            sheet = str(self.day_filter.get("setpoint_sheet", "Setpoint"))
+            try:
+                from pv_pipeline.generation.loader import SetpointLoader
+                self._setpoint_loader = SetpointLoader(path, sheet=sheet)
+            except Exception as exc:
+                warnings.warn(
+                    f"[baseline] setpoint load failed ({path!r} sheet={sheet!r}): "
+                    f"{exc.__class__.__name__}: {exc}; curtailment check di-skip.",
+                    stacklevel=2,
+                )
+                self._setpoint_load_failed = True
+                return None
+        return self._setpoint_loader.get_day_total(self._resolve_paths(date_str)["ymd"])
+
     def run(
         self,
         combined_df: pd.DataFrame,
@@ -571,6 +719,48 @@ class BaselineAccumulator:
         findings: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """Filter + save + update manifest. Returns ringkasan dict."""
+        # 2026-06-12: day-filter gate SEBELUM filter per-row. Hari outage /
+        # curtailment (setpoint) di-skip total dari baseline LSTM + M2A.
+        if bool(self.day_filter.get("enabled", False)):
+            quality = evaluate_day_quality(
+                combined_df,
+                setpoint_total_kw=self._setpoint_day_total(date_str),
+                daylight_start_hour=float(self.day_filter["daylight_start_hour"]),
+                daylight_end_hour=float(self.day_filter["daylight_end_hour"]),
+                outage_power_floor_kw=float(self.day_filter["outage_power_floor_kw"]),
+                outage_current_floor_a=float(self.day_filter["outage_current_floor_a"]),
+                outage_min_fraction=float(self.day_filter["outage_min_fraction"]),
+                curtail_setpoint_threshold_kw=float(self.day_filter["curtail_setpoint_threshold_kw"]),
+                curtail_min_fraction=float(self.day_filter["curtail_min_fraction"]),
+            )
+            if quality.skip:
+                reason_str = "; ".join(quality.reasons)
+                warnings.warn(
+                    f"[baseline] {date_str}: hari DI-SKIP dari baseline: {reason_str}",
+                    stacklevel=2,
+                )
+                summary = FilterSummary(
+                    rows_total=len(combined_df),
+                    inverters_total=(
+                        combined_df["Inverter_ID"].astype(str).str.upper().nunique()
+                        if "Inverter_ID" in combined_df.columns else 0
+                    ),
+                    day_skipped=True,
+                    day_skip_reasons=list(quality.reasons),
+                )
+                paths: Dict[str, Optional[str]] = {"parquet": None, "csv": None}
+                self.update_manifest(date_str, summary, paths)
+                return {
+                    "date_str": date_str,
+                    "summary": summary,
+                    "paths": paths,
+                    "rows_kept": 0,
+                    "inverters_kept": 0,
+                    "day_skipped": True,
+                    "day_skip_reasons": list(quality.reasons),
+                    "day_metrics": dict(quality.metrics),
+                }
+
         filtered, summary = self.filter_combined_df(combined_df, findings=findings)
         paths = self.save_daily(filtered, date_str)
         self.update_manifest(date_str, summary, paths)
@@ -580,6 +770,7 @@ class BaselineAccumulator:
             "paths": paths,
             "rows_kept": summary.rows_kept,
             "inverters_kept": summary.inverters_kept,
+            "day_skipped": False,
         }
 
 

@@ -63,3 +63,32 @@ accumulator:
 #     reason: "PV string cleaning WB08"
 
 maintenance_periods: []
+
+# 2026-06-12 - Day-filter untuk baseline LSTM + M2A.
+# Hari dengan ampere & kW konsisten rendah/sangat kecil (outage), atau
+# curtailment berdasarkan setpoint real-time, di-SKIP total dari akumulasi
+# baseline (tercatat di manifest kolom 'day_skip_reason').
+#
+# Sinyal:
+#   1. outage      : fleet total Active power(kW) < outage_power_floor_kw DAN
+#                    median arus string < outage_current_floor_a pada
+#                    >= outage_min_fraction slot daylight.
+#   2. curtailment : total setpoint (Busbar 1 + Busbar 2, sheet 'Setpoint'
+#                    IKN Generation.xlsx, interval 10 menit) di bawah
+#                    curtail_setpoint_threshold_kw pada >= curtail_min_fraction
+#                    slot daylight. (Nominal AC site ~50,000-54,030 kW; 45,000
+#                    berarti reduksi >~10% baru dihitung curtailed.)
+#
+# Bila file/sheet setpoint tidak tersedia: warning + curtailment check off;
+# outage check tetap jalan dari data. Set enabled: false untuk mematikan.
+day_filter:
+  enabled: true
+  setpoint_xlsx_path: "raw data input/IKN Generation.xlsx"
+  setpoint_sheet: "Setpoint"
+  daylight_start_hour: 8.0
+  daylight_end_hour: 16.0
+  outage_power_floor_kw: 1000.0
+  outage_current_floor_a: 1.0
+  outage_min_fraction: 0.8
+  curtail_setpoint_threshold_kw: 50000.0
+  curtail_min_fraction: 0.3

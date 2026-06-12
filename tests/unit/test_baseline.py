@@ -8,7 +8,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from pv_pipeline.baseline import BaselineAccumulator, MaintenancePeriod
+from pv_pipeline.baseline import BaselineAccumulator, MaintenancePeriod, evaluate_day_quality
 
 
 # ---------- MaintenancePeriod ----------
@@ -418,3 +418,131 @@ def test_manifest_schema_upgrade_keeps_existing_manifest_readable(df_pv):
         assert "baseline_csv_name" in manifest.columns
         assert pd.isna(manifest.loc[0, "baseline_csv_name"]) or manifest.loc[0, "baseline_csv_name"] == ""
         assert manifest.loc[1, "baseline_csv_name"] == "2026-05-15.csv"
+
+
+# ---------- 2026-06-12: day-filter (outage / curtailment via setpoint) ----------
+
+
+def _df_day_profile(power_scale: float = 1.0, current_scale: float = 1.0) -> pd.DataFrame:
+    """Synthetic 1 hari 06:00-18:00 @5min, 2 inverter, profil segitiga noon-peak."""
+    rows = []
+    t = pd.date_range("2026-05-14 06:00", "2026-05-14 18:00", freq="5min")
+    for inv in ["WB01-INV01", "WB01-INV02"]:
+        for ts in t:
+            hour = ts.hour + ts.minute / 60.0
+            sun = max(0.0, 1.0 - abs(hour - 12.0) / 6.0)
+            rows.append({
+                "Inverter_ID": inv,
+                "Start Time": ts,
+                "Active power(kW)": 1500.0 * sun * power_scale,
+                "PV1 input current(A)": 12.0 * sun * current_scale,
+                "PV2 input current(A)": 12.0 * sun * current_scale,
+            })
+    return pd.DataFrame(rows)
+
+
+def _setpoint_series(curtail_windows=()) -> pd.Series:
+    """Total setpoint 10-menit 1 hari: 50000 kW nominal, 30000 saat curtailed."""
+    ts = pd.date_range("2026-05-14 00:00", "2026-05-14 23:50", freq="10min")
+    vals = pd.Series(50000.0, index=ts, name="setpoint_total_kw")
+    hour = ts.hour + ts.minute / 60.0
+    for h0, h1 in curtail_windows:
+        vals[(hour >= h0) & (hour < h1)] = 30000.0
+    return vals
+
+
+def test_day_quality_normal_day_not_skipped():
+    result = evaluate_day_quality(_df_day_profile(), setpoint_total_kw=_setpoint_series())
+    assert result.skip is False
+    assert result.reasons == []
+    assert result.metrics["outage_low_slot_fraction"] == 0.0
+    assert result.metrics["curtail_slot_fraction"] == 0.0
+
+
+def test_day_quality_outage_day_skipped_without_setpoint():
+    # Ampere & kW konsisten sangat kecil sepanjang daylight -> outage,
+    # terdeteksi murni dari data (setpoint tidak tersedia).
+    df = _df_day_profile(power_scale=0.001, current_scale=0.01)
+    result = evaluate_day_quality(df, setpoint_total_kw=None)
+    assert result.skip is True
+    assert any(r.startswith("outage") for r in result.reasons)
+
+
+def test_day_quality_curtailment_day_skipped():
+    # Setpoint daylight turun ke 30000 kW selama 10:00-16:00 (75% slot >= 30%).
+    result = evaluate_day_quality(
+        _df_day_profile(),
+        setpoint_total_kw=_setpoint_series(curtail_windows=[(10.0, 16.0)]),
+    )
+    assert result.skip is True
+    assert any("curtailment" in r for r in result.reasons)
+    assert result.metrics["curtail_slot_fraction"] == pytest.approx(0.75)
+
+
+def test_day_quality_brief_curtailment_below_fraction_not_skipped():
+    # Hanya 1 jam dari 8 jam daylight (12.5% < 30%) -> hari tetap dipakai.
+    result = evaluate_day_quality(
+        _df_day_profile(),
+        setpoint_total_kw=_setpoint_series(curtail_windows=[(12.0, 13.0)]),
+    )
+    assert result.skip is False
+    assert result.metrics["curtail_slot_fraction"] == pytest.approx(0.125)
+
+
+def test_accumulator_day_filter_skips_day_and_records_manifest():
+    # Outage day + setpoint file tidak ada: curtailment check off (warn),
+    # outage tetap men-skip hari; tidak ada file tersimpan; manifest mencatat.
+    df = _df_day_profile(power_scale=0.001, current_scale=0.01)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        acc = BaselineAccumulator(
+            base_dir=os.path.join(td, "baseline"),
+            output_formats=("csv",),
+            overwrite=True,
+            day_filter={"enabled": True, "setpoint_xlsx_path": os.path.join(td, "missing.xlsx")},
+        )
+        with pytest.warns(UserWarning):
+            result = acc.run(df, "2026-05-14", findings=None)
+
+        assert result["day_skipped"] is True
+        assert result["rows_kept"] == 0
+        assert result["paths"] == {"parquet": None, "csv": None}
+        assert not os.path.exists(os.path.join(td, "baseline", "2026-05", "2026-05-14.csv"))
+        manifest = pd.read_csv(acc.manifest_path())
+        assert manifest.loc[0, "rows_kept"] == 0
+        assert "outage" in str(manifest.loc[0, "day_skip_reason"])
+
+
+def test_accumulator_day_filter_disabled_by_default():
+    # Backward compat: tanpa config day_filter, behavior lama (hari tersimpan).
+    df = _df_day_profile()
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        acc = BaselineAccumulator(
+            base_dir=os.path.join(td, "baseline"),
+            output_formats=("csv",),
+            overwrite=True,
+        )
+        result = acc.run(df, "2026-05-14", findings=None)
+        assert result["day_skipped"] is False
+        assert result["paths"]["csv"] is not None
+
+
+def test_from_yaml_parses_day_filter_block(tmp_path):
+    import yaml
+
+    cfg = {
+        "accumulator": {"base_dir": str(tmp_path / "baseline")},
+        "day_filter": {
+            "enabled": True,
+            "setpoint_xlsx_path": "raw data input/IKN Generation.xlsx",
+            "curtail_setpoint_threshold_kw": 42000.0,
+        },
+    }
+    yp = tmp_path / "baseline.yaml"
+    yp.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    acc = BaselineAccumulator.from_yaml(str(yp))
+
+    assert acc.day_filter["enabled"] is True
+    assert acc.day_filter["curtail_setpoint_threshold_kw"] == 42000.0
+    # Key yang tidak di-override tetap dari DEFAULT_DAY_FILTER.
+    assert acc.day_filter["outage_min_fraction"] == 0.8

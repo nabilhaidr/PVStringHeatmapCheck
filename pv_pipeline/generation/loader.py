@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -268,6 +268,67 @@ class GenerationLoader:
         end = pd.Timestamp(end_date).floor("D")
         mask = (self.df.index >= start) & (self.df.index <= end)
         return float(self.df.loc[mask, column].sum(skipna=True))
+
+
+DEFAULT_SETPOINT_SHEET: str = "Setpoint"
+_SETPOINT_TS_COL: str = "Tanggal/Waktu"
+_SETPOINT_BUSBAR_COLS: Tuple[str, str] = ("Setpoint Busbar 1", "Setpoint Busbar 2")
+
+
+class SetpointLoader:
+    """Loader sheet ``Setpoint`` (real-time 10-menit) dari IKN Generation.xlsx.
+
+    Layout sheet: ``Tanggal/Waktu`` (datetime, interval 10 menit) +
+    ``Setpoint Busbar 1`` + ``Setpoint Busbar 2`` (kW). Konsumen utama:
+    day-filter baseline (skip hari curtailment, 2026-06-12).
+
+    Attributes
+    ----------
+    df : pd.DataFrame
+        Indexed by timestamp; kolom ``busbar1_kw``, ``busbar2_kw``,
+        ``total_kw`` (= busbar1 + busbar2).
+    """
+
+    def __init__(self, xlsx_path: str, sheet: str = DEFAULT_SETPOINT_SHEET):
+        if not os.path.exists(xlsx_path):
+            raise FileNotFoundError(
+                f"[setpoint] {xlsx_path!r} not found. Cwd={os.getcwd()!r}."
+            )
+        _ensure_openpyxl()
+
+        raw = pd.read_excel(xlsx_path, sheet_name=sheet)
+        missing = [c for c in (_SETPOINT_TS_COL, *_SETPOINT_BUSBAR_COLS) if c not in raw.columns]
+        if missing:
+            raise KeyError(
+                f"[setpoint] Sheet {sheet!r} missing column(s) {missing}. "
+                f"Found: {list(raw.columns)}"
+            )
+
+        ts = pd.to_datetime(raw[_SETPOINT_TS_COL], errors="coerce")
+        valid = ts.notna()
+        b1 = pd.to_numeric(raw.loc[valid, _SETPOINT_BUSBAR_COLS[0]], errors="coerce")
+        b2 = pd.to_numeric(raw.loc[valid, _SETPOINT_BUSBAR_COLS[1]], errors="coerce")
+        df = pd.DataFrame(
+            {"busbar1_kw": b1.values, "busbar2_kw": b2.values},
+            index=pd.DatetimeIndex(ts[valid].values),
+        ).sort_index()
+        df = df[~df.index.duplicated(keep="first")]
+        df["total_kw"] = df["busbar1_kw"] + df["busbar2_kw"]
+
+        self.df: pd.DataFrame = df
+        self.xlsx_path: str = xlsx_path
+        self.sheet: str = sheet
+
+    def get_day_total(self, day) -> pd.Series:
+        """Total setpoint (busbar1+2, kW) per slot 10-menit untuk satu hari.
+
+        Returns Series kosong bila tanggal tidak ada di sheet.
+        """
+        start = pd.Timestamp(day).normalize()
+        end = start + pd.Timedelta(days=1)
+        out = self.df.loc[(self.df.index >= start) & (self.df.index < end), "total_kw"]
+        out.name = "setpoint_total_kw"
+        return out
 
 
 if __name__ == "__main__":
