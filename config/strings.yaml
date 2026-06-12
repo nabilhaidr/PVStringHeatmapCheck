@@ -280,3 +280,44 @@ empty_pv_map:
   WB10-INV15: [19, 24]
   WB10-INV16: [19, 24]
   WB10-INV17: [5, 19, 24]
+
+# =============================================================================
+# MPPT mapping: grouping sibling PV string per MPPT input inverter (fix).
+# -----------------------------------------------------------------------------
+# Sumber: konfigurasi MPPT Huawei per model inverter (user-confirmed 2026-06-11).
+# String dalam satu MPPT share voltage operating point yang sama -> peer
+# comparison paling apple-to-apple adalah sesama anggota MPPT group.
+#
+# Format:
+#   mppt_map:
+#     <model>:
+#       wbs:  [<WB id>, ...]          # WB yang memakai model ini
+#       mppt: {<mppt_n>: [<pv_index>, ...]}
+# =============================================================================
+
+mppt_map:
+
+  # WB01-WB02: 9 MPPT x 2 string (PV1..PV18; PV19..PV28 slot kosong by design)
+  SUN2000-215KTL-H0:
+    wbs: [WB01, WB02]
+    mppt:
+      1: [1, 2]
+      2: [3, 4]
+      3: [5, 6]
+      4: [7, 8]
+      5: [9, 10]
+      6: [11, 12]
+      7: [13, 14]
+      8: [15, 16]
+      9: [17, 18]
+
+  # WB03-WB10: 6 MPPT, campuran 4-5 string per MPPT (PV1..PV28)
+  SUN2000-330KTL-H1:
+    wbs: [WB03, WB04, WB05, WB06, WB07, WB08, WB09, WB10]
+    mppt:
+      1: [1, 2, 3, 4]
+      2: [5, 6, 7, 8, 9]
+      3: [10, 11, 12, 13, 14]
+      4: [15, 16, 17, 18]
+      5: [19, 20, 21, 22, 23]
+      6: [24, 25, 26, 27, 28]

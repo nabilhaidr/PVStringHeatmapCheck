@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import warnings as _warnings
 
-__version__ = "0.20.0"  # Fase 3 Part 2 Task #5: M2a Soiling skeleton (rdtools SRR)
+__version__ = "0.21.0"  # M2b MPPT-partner ratio detector (sibling grouping per MPPT)
 
 
 def _try_import(name: str):
@@ -89,6 +89,9 @@ from . import panel_spec, poa, cell_temp  # noqa: E402
 
 # Sprint 4.A - M2b detectors (POA-gated) + Voc_actual helper.
 from . import voc_estimator, peer_zscore, open_circuit, ground_fault  # noqa: E402
+
+# 2026-06-12 - M2b MPPT-partner ratio detector (sibling se-MPPT, user-approved design).
+from . import mppt_ratio  # noqa: E402
 
 # Sprint 3.3 - Baseline accumulator.
 from . import baseline  # noqa: E402
@@ -133,6 +136,7 @@ __all__ = [
     "peer_zscore",
     "open_circuit",
     "ground_fault",
+    "mppt_ratio",
     # Sprint 3.3
     "baseline",
     # Sprint 4 skeleton

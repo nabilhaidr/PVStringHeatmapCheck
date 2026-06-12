@@ -105,6 +105,49 @@ def test_build_string_timeseries_allows_power_only_baseline_csv():
     assert ts["pv_power_kw"].tolist() == [1.0, 2.0, 3.0]
 
 
+def test_build_string_timeseries_uses_mppt_partner_as_sibling():
+    # PV1+PV2 satu MPPT: sibling median PV1 harus = power partner PV2 saja
+    # (same MPPT voltage -> apple-to-apple), bukan median PV2+PV3 inverter-wide.
+    ts, message = build_string_timeseries(
+        _baseline_df(),
+        "WB05-INV01",
+        "PV1",
+        mppt_groups={"WB05": {1: [1, 2], 2: [3, 4]}},
+    )
+
+    assert message == ""
+    assert ts["sibling_median_power_kw"].tolist() == [2.0, 2.0, 2.0]
+    assert ts["power_ratio_to_sibling"].tolist() == [0.5, 1.0, 1.5]
+
+
+def test_build_string_timeseries_falls_back_when_pv_not_in_mppt_map():
+    # PV3 tidak terdaftar di mppt_map -> fallback sibling seluruh inverter
+    # supaya konteks tetap tampil (bukan kosong).
+    ts, _ = build_string_timeseries(
+        _baseline_df(),
+        "WB05-INV01",
+        "PV3",
+        mppt_groups={"WB05": {1: [1, 2]}},
+    )
+
+    assert ts["sibling_median_power_kw"].tolist() == [1.5, 2.0, 2.5]
+
+
+def test_analyze_inverter_strings_reports_mppt_group():
+    analysis = analyze_inverter_strings(
+        _baseline_df(),
+        "WB05-INV01",
+        mppt_groups={"WB05": {1: [1, 2], 2: [3, 4]}},
+    )
+
+    by_pv = analysis.set_index("pv_string")["mppt"]
+    assert by_pv["PV1"] == 1
+    assert by_pv["PV2"] == 1
+    assert by_pv["PV3"] == 2
+    pv1 = analysis.loc[analysis["pv_string"] == "PV1"].iloc[0]
+    assert pv1["median_sibling_power_kw"] == 2.0
+
+
 def test_build_string_timeseries_reports_all_nan_selected_pv():
     df = _baseline_df()
     df["PV2 Power(kW)"] = float("nan")

@@ -134,6 +134,7 @@ DEFAULT_SUBMODULE_TO_CFG_KEY: Dict[str, str] = {
     "M2b_peer_zscore":    "m2b",
     "M2b_open_circuit":   "m2b_open_circuit",
     "M2b_ground_fault":   "m2b_ground_fault",
+    "M2b_mppt_ratio":     "m2b_mppt_ratio",
 }
 
 

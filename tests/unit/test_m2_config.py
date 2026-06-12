@@ -115,6 +115,26 @@ def test_baseline_section():
     assert cfg["config_path"] == "config/baseline.yaml"
 
 
+def test_generation_capacity_per_wb():
+    # 2026-06-12: pembagi DC PR dipisah per WB (user-provided), bukan site/10.
+    cfg = DEFAULT_M2_CONFIG["generation"]
+    per_wb = cfg["capacity_kwp_per_wb"]
+    assert set(per_wb) == {f"WB{n:02d}" for n in range(1, 11)}
+    assert per_wb["WB01"] == 6750.0
+    assert per_wb["WB02"] == 6750.0
+    assert per_wb["WB03"] == 5996.0
+    assert per_wb["WB04"] == 7621.0
+    assert per_wb["WB05"] == 7865.0
+    assert per_wb["WB06"] == 7995.0
+    assert per_wb["WB07"] == 6793.0
+    assert per_wb["WB08"] == 6793.0
+    assert per_wb["WB09"] == 7881.0
+    assert per_wb["WB10"] == 7069.0
+    # Total per-WB 71,513 kWp; pr_site tetap pakai capacity_kwp site 71,500.
+    assert sum(per_wb.values()) == 71513.0
+    assert cfg["capacity_kwp"] == 71500.0
+
+
 # ---------- load_m2_config behavior ----------
 
 

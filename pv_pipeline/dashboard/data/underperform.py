@@ -8,6 +8,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from pv_pipeline.string_config import mppt_of_pv, mppt_siblings_of_pv
+
 
 SEVERITY_RANK = {
     "NORMAL": 0,
@@ -182,8 +184,15 @@ def build_string_timeseries(
     *,
     empty_pv_map: dict | None = None,
     pv_max_allowed: int = 28,
+    mppt_groups: dict | None = None,
 ) -> tuple[pd.DataFrame, str]:
-    """Build one PV string baseline context using Cell-3-compatible metrics."""
+    """Build one PV string baseline context using Cell-3-compatible metrics.
+
+    ``mppt_groups`` (per-WB ``{mppt_n: [pv,...]}`` dari
+    ``string_config.get_mppt_groups``) membatasi sibling ke string se-MPPT.
+    Fallback ke seluruh string inverter bila PV tidak terdaftar atau semua
+    sibling se-MPPT kosong/empty-slot.
+    """
     pv_n = _extract_pv_index(pv_string)
     if pv_n is None:
         return pd.DataFrame(), f"Invalid pv_string: {pv_string!r}"
@@ -199,7 +208,13 @@ def build_string_timeseries(
     norm = _cell3_normalized(power_by_pv)
 
     pv_name = f"PV{pv_n}"
-    sibling_cols = [col for col in power_by_pv.columns if col != pv_name]
+    wb_groups = (mppt_groups or {}).get(_wb_from_inverter(inverter_id), {})
+    sibling_cols = [
+        f"PV{n}" for n in mppt_siblings_of_pv(wb_groups, pv_n)
+        if f"PV{n}" in power_by_pv.columns
+    ]
+    if not sibling_cols:
+        sibling_cols = [col for col in power_by_pv.columns if col != pv_name]
     sibling_median = power_by_pv[sibling_cols].median(axis=1, skipna=True) if sibling_cols else pd.Series(np.nan, index=sub.index)
     pv_power = power_by_pv[pv_name]
 
@@ -227,12 +242,14 @@ def analyze_inverter_strings(
     *,
     empty_pv_map: dict | None = None,
     pv_max_allowed: int = 28,
+    mppt_groups: dict | None = None,
 ) -> pd.DataFrame:
     """Return display-only baseline metrics per PV string for one inverter."""
     sub, power_cols = _prepare_inverter_frame(df, inverter_id, empty_pv_map, pv_max_allowed)
     if sub.empty or not power_cols:
         return pd.DataFrame()
 
+    wb_groups = (mppt_groups or {}).get(_wb_from_inverter(inverter_id), {})
     rows = []
     for pv_n in power_cols:
         ts, _ = build_string_timeseries(
@@ -241,6 +258,7 @@ def analyze_inverter_strings(
             f"PV{pv_n}",
             empty_pv_map=empty_pv_map,
             pv_max_allowed=pv_max_allowed,
+            mppt_groups=mppt_groups,
         )
         if ts.empty:
             continue
@@ -249,6 +267,7 @@ def analyze_inverter_strings(
         row = {
             "inverter_id": str(inverter_id),
             "pv_string": f"PV{pv_n}",
+            "mppt": mppt_of_pv(wb_groups, pv_n),
             "median_power_kw": float(ts["pv_power_kw"].median()) if ts["pv_power_kw"].notna().any() else np.nan,
             "median_sibling_power_kw": float(ts["sibling_median_power_kw"].median())
             if ts["sibling_median_power_kw"].notna().any() else np.nan,

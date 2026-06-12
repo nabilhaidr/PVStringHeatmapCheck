@@ -14,6 +14,7 @@ DETECTOR_SHEETS = {
     "Availability": ["M2e_hybrid_AllStrings", "M2e_hybrid_InverterLog"],
     "PeerZ": ["M2b_peer_zscore_StringStatus"],
     "OpenCircuit": ["M2b_open_circuit_StringStatus"],
+    "MpptRatio": ["M2b_mppt_ratio_StringStatus"],
     "GroundFault": ["M2b_ground_fault_StringStatus"],
     "IForest": ["M2_iforest_AnomalyScores", "M2_iforest_AnomalySummary"],
     "Shading": ["M2a_shading_HourlyMetrics", "M2a_shading_ShadingSummary"],

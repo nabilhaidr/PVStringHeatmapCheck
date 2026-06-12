@@ -104,6 +104,26 @@ DEFAULT_M2_CONFIG: Dict[str, Any] = {
         "min_peer_strings": 3,
         "min_daylight_samples": 5,
     },
+    # 2026-06-12 - M2b MPPT-partner ratio (sibling se-MPPT, user-approved design).
+    # Z-score tidak feasible dalam grup MPPT kecil (|z| max = (N-1)/sqrt(N) < 2.5),
+    # jadi sinyal = rasio arus string vs median arus partner se-MPPT.
+    "m2b_mppt_ratio": {
+        "enabled": True,
+        "poa_threshold_wm2": 300.0,           # moderate sun: arus stabil & proporsional
+        "poa_floor_wm2": 50.0,                # sunset fix pattern (2026-05-16)
+        "hour_cutoff_end": 18.0,
+        "respect_inverter_shutdown": True,
+        "filter_mode": "solar_elevation",
+        "solar_elevation_min_deg": 5.0,
+        "ratio_threshold": 0.85,              # I_string < 85% median partner -> qualifying
+        "ratio_high": 0.50,                   # ratio_event_median < 0.50 -> HIGH
+        "ratio_critical": 0.20,               # ratio_event_median < 0.20 -> CRITICAL
+        "debounce_consecutive_steps": 20,     # ~100 menit @ 5-min sampling
+        "pv_max": 28,
+        "min_partner_strings": 1,             # grup 2-string (WB01-02) tetap dianalisis
+        "min_daylight_samples": 5,
+        "mppt_map_path": "config/strings.yaml",
+    },
     "m2b_ground_fault": {
         "poa_threshold_wm2": 200.0,
         "poa_floor_wm2": 50.0,                # 2026-05-16 sunset fix
@@ -128,6 +148,20 @@ DEFAULT_M2_CONFIG: Dict[str, Any] = {
         # Per-site installed DC capacity (kWp). Pakai untuk PR denominator.
         # Source: IKN Generation Detail1 sheet -> PV Capacity (kWp) = 71500.
         "capacity_kwp": 71500.0,
+        # 2026-06-12: pembagi DC PR per WB (user-provided). Total = 71,513 kWp;
+        # pr_site tetap pakai capacity_kwp site di atas.
+        "capacity_kwp_per_wb": {
+            "WB01": 6750.0,
+            "WB02": 6750.0,
+            "WB03": 5996.0,
+            "WB04": 7621.0,
+            "WB05": 7865.0,
+            "WB06": 7995.0,
+            "WB07": 6793.0,
+            "WB08": 6793.0,
+            "WB09": 7881.0,
+            "WB10": 7069.0,
+        },
     },
     # Wave 9 - Hampel outlier preprocessing (A/B test feature flag).
     # Default OFF supaya backwards-compat. Detector check enabled flag di run().

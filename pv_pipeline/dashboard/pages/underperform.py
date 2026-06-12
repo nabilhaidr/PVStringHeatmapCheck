@@ -88,6 +88,14 @@ def _load_empty_map() -> dict:
         return {}
 
 
+def _load_mppt_groups() -> dict:
+    try:
+        from pv_pipeline.string_config import get_mppt_groups  # noqa: WPS433
+        return get_mppt_groups("config/strings.yaml", pv_max_allowed=28)
+    except Exception:
+        return {}
+
+
 def _highlight_heatmap_row(ax, pivot: pd.DataFrame, pv_string: str) -> bool:
     """Draw an outline around the selected PV row in a Cell-3 heatmap."""
     label = f"{str(pv_string).strip().upper()} Power(kW)"
@@ -161,6 +169,7 @@ def _render_baseline_context(selected: pd.Series) -> None:
         return
 
     empty_map = _load_empty_map()
+    mppt_groups = _load_mppt_groups()
     inverter_id = str(selected["inverter_id"])
     pv_string = str(selected["pv_string"])
     ts_df, message = build_string_timeseries(
@@ -168,6 +177,7 @@ def _render_baseline_context(selected: pd.Series) -> None:
         inverter_id,
         pv_string,
         empty_pv_map=empty_map,
+        mppt_groups=mppt_groups,
     )
     if ts_df.empty:
         st.info(message or "Baseline time-series tidak tersedia untuk string ini.")
@@ -176,6 +186,8 @@ def _render_baseline_context(selected: pd.Series) -> None:
         st.warning(message + " Baseline mungkin sudah dinormalisasi oleh auto-skip per-PV.")
 
     st.subheader("Baseline Time-Series Context")
+    if mppt_groups:
+        st.caption("Sibling = string se-MPPT (mppt_map config/strings.yaml); fallback seluruh inverter bila PV tak terdaftar.")
     chart_df = ts_df.melt(
         id_vars=["Start Time"],
         value_vars=["pv_power_kw", "sibling_median_power_kw"],
@@ -202,6 +214,7 @@ def _render_baseline_context(selected: pd.Series) -> None:
         result.dataframe,
         inverter_id,
         empty_pv_map=empty_map,
+        mppt_groups=mppt_groups,
     )
     if not analysis.empty:
         with st.expander("Display-only inverter string metrics", expanded=False):

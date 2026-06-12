@@ -147,11 +147,12 @@ def _mk_finding(sub_module, sev=Severity.HIGH, inv="WB05-INV01", pv="PV3"):
 
 
 def test_default_submodule_to_cfg_key_covers_all_detectors():
-    """Mapping harus include 7 detector aktif (M2b x3 + M2_iforest + M2a x3)."""
+    """Mapping harus include 8 detector aktif (M2b x4 + M2_iforest + M2a x3)."""
     from pv_pipeline.core import DEFAULT_SUBMODULE_TO_CFG_KEY
     expected = {
         "M2_iforest", "M2a_shading", "M2a_low_irradiance", "M2a_soiling",
         "M2b_peer_zscore", "M2b_open_circuit", "M2b_ground_fault",
+        "M2b_mppt_ratio",
     }
     assert set(DEFAULT_SUBMODULE_TO_CFG_KEY.keys()) == expected
     # iforest -> m2_iforest cfg key
