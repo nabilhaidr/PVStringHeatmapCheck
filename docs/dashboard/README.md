@@ -24,15 +24,18 @@ Data yang didukung:
 - Baseline folder:
   - subfolder `YYYY-MM/`
   - file `YYYY-MM-DD.csv` di dalam subfolder bulan tersebut.
+- Folder "CSV Export PV String":
+  - file `YYYYMMDD.csv` (df_plot export dari notebook Cell 8, folder flat)
+    untuk halaman Heatmap.
 
 Kalau `m2_findings_YYYYMMDD.xlsx` tersedia, dashboard selalu memakai xlsx
 sebagai primary input supaya detector artifact sheets tetap tersedia. JSONL
 hanya mengisi sheet `Findings`, jadi Detectors page akan menampilkan info state
 untuk artifact sheets yang tidak ada.
 
-Heatmap M0 memakai baseline CSV. File ini sudah difilter oleh
-`BaselineAccumulator`, jadi row fault/high-severity yang dibuang oleh baseline
-filter tidak akan terlihat di heatmap.
+Heatmap memakai CSV export df_plot (`YYYYMMDD.csv`), data penuh tanpa filter
+NORMAL, jadi string fault tetap terlihat di heatmap. Halaman Underperform tetap
+memakai baseline CSV yang sudah difilter `BaselineAccumulator`.
 
 ## Local Run
 
@@ -63,7 +66,8 @@ date,file_csv,baseline_csv_file_id,findings_xlsx_file_id,findings_jsonl_file_id
 ```
 
 Alternatif kolom `*_url` juga didukung, misalnya `baseline_csv_url`,
-`findings_xlsx_url`, dan `findings_jsonl_url`.
+`findings_xlsx_url`, dan `findings_jsonl_url`. Halaman Heatmap membaca kolom
+`pv_export_csv_file_id` / `pv_export_csv_url` untuk file `YYYYMMDD.csv`.
 
 Untuk auto-fill gratis tanpa Google Cloud Console, pakai template
 `docs/dashboard/apps-script-manifest-sync.js` di Google Sheet manifest. Script
@@ -73,6 +77,7 @@ itu membaca folder Drive output dan baseline, lalu mengisi:
 baseline_csv_name,baseline_csv_file_id,baseline_csv_url
 findings_xlsx_name,findings_xlsx_file_id,findings_xlsx_url
 findings_jsonl_name,findings_jsonl_file_id,findings_jsonl_url
+pv_export_csv_name,pv_export_csv_file_id,pv_export_csv_url
 ```
 
 Dashboard juga menerima alias `*_drive_link` / `*_drive_url` kalau manifest
@@ -85,6 +90,7 @@ Service account fallback:
 use_service_account = true
 findings_folder_id = "folder-output-id"
 baseline_folder_id = "folder-baseline-id"
+pv_export_folder_id = "folder-pv-export-id"
 service_account_json = '''
 { ... }
 '''

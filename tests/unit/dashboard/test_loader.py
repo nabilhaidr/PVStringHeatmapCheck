@@ -14,6 +14,7 @@ from pv_pipeline.dashboard.data.loader import (
     parse_baseline_csv_date,
     parse_findings_date,
     parse_findings_jsonl_date,
+    parse_pv_export_csv_date,
 )
 
 
@@ -42,6 +43,16 @@ def test_parse_baseline_csv_date_accepts_baseline_output_name():
 def test_parse_baseline_csv_date_rejects_other_csv_names():
     assert parse_baseline_csv_date("manifest.csv") is None
     assert parse_baseline_csv_date("20260514.csv") is None
+
+
+def test_parse_pv_export_csv_date_accepts_cell8_export_name():
+    assert parse_pv_export_csv_date("20260514.csv") == date(2026, 5, 14)
+
+
+def test_parse_pv_export_csv_date_rejects_other_csv_names():
+    assert parse_pv_export_csv_date("2026-05-14.csv") is None
+    assert parse_pv_export_csv_date("20250101-20250224.csv") is None
+    assert parse_pv_export_csv_date("manifest.csv") is None
 
 
 def test_load_findings_workbook_preserves_sheet_names():

@@ -1,11 +1,11 @@
-"""Heatmap page backed by one baseline CSV day."""
+"""Heatmap page backed by one df_plot export CSV day (CSV Export PV String)."""
 
 from __future__ import annotations
 
 from datetime import date
 
 from pv_pipeline.dashboard.auth import require_auth
-from pv_pipeline.dashboard.data.cache import cached_baseline_csv_day, clear_dashboard_cache
+from pv_pipeline.dashboard.data.cache import cached_pv_export_csv_day, clear_dashboard_cache
 
 
 def _render_inverter_heatmap(df, inv_id: str, empty_map: dict) -> None:
@@ -40,7 +40,10 @@ def main() -> None:
     require_auth()
 
     st.title("Heatmap String PV")
-    st.caption("Source: baseline YYYY-MM-DD.csv. Data ini sudah filtered NORMAL oleh BaselineAccumulator.")
+    st.caption(
+        "Source: CSV Export PV String YYYYMMDD.csv (df_plot dari notebook Cell 8, "
+        "data penuh tanpa filter NORMAL)."
+    )
     with st.sidebar:
         selected_day = st.date_input("Date", value=date.today(), key="heatmap_date")
         show_all = st.toggle("Tampilkan semua inverter", value=False, key="heatmap_show_all")
@@ -48,18 +51,18 @@ def main() -> None:
             clear_dashboard_cache()
             st.rerun()
 
-    result = cached_baseline_csv_day(selected_day)
+    result = cached_pv_export_csv_day(selected_day)
     if result.error:
         st.error(result.error)
         return
     if result.missing:
-        st.info("Baseline CSV untuk tanggal ini tidak tersedia di Google Drive.")
+        st.info("CSV export (YYYYMMDD.csv) untuk tanggal ini tidak tersedia di Google Drive.")
         if result.available_dates:
             st.caption("Tanggal tersedia: " + ", ".join(d.isoformat() for d in result.available_dates[-10:]))
         return
     df = result.dataframe
     if df.empty:
-        st.info("Baseline CSV kosong.")
+        st.info("CSV export kosong.")
         return
 
     inverters = sorted(df["Inverter_ID"].dropna().astype(str).unique())

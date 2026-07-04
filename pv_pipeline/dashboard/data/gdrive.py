@@ -13,10 +13,11 @@ from pv_pipeline.dashboard.data.loader import (
     parse_baseline_csv_date,
     parse_findings_date,
     parse_findings_jsonl_date,
+    parse_pv_export_csv_date,
 )
 
 
-ArtifactKind = Literal["findings", "findings_jsonl", "baseline_csv"]
+ArtifactKind = Literal["findings", "findings_jsonl", "baseline_csv", "pv_export_csv"]
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 PUBLIC_SOURCE_COLUMNS = {
     "findings": (
@@ -70,11 +71,19 @@ PUBLIC_SOURCE_COLUMNS = {
         "csv_drive_link",
         "file_csv",
     ),
+    "pv_export_csv": (
+        "pv_export_csv_file_id",
+        "pv_export_csv_url",
+        "pv_export_csv_drive_url",
+        "pv_export_csv_drive_link",
+        "file_pv_export_csv",
+    ),
 }
 PUBLIC_NAME_COLUMNS = {
     "findings": ("findings_xlsx_name", "findings_xlsx_path", "file_xlsx"),
     "findings_jsonl": ("findings_jsonl_name", "findings_jsonl_path", "file_jsonl"),
     "baseline_csv": ("baseline_csv_name", "baseline_csv_path", "file_csv"),
+    "pv_export_csv": ("pv_export_csv_name", "pv_export_csv_path", "file_pv_export_csv"),
 }
 DRIVE_FILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{3,}$")
 
@@ -169,7 +178,12 @@ def _has_service_account_config() -> bool:
         return False
     return bool(
         cfg.get("service_account_json")
-        and (cfg.get("folder_id") or cfg.get("findings_folder_id") or cfg.get("baseline_folder_id"))
+        and (
+            cfg.get("folder_id")
+            or cfg.get("findings_folder_id")
+            or cfg.get("baseline_folder_id")
+            or cfg.get("pv_export_folder_id")
+        )
     )
 
 
@@ -238,6 +252,8 @@ def _artifact_name(kind: ArtifactKind, day: date, row: dict[str, str]) -> str:
         return f"m2_findings_{day:%Y%m%d}.xlsx"
     if kind == "findings_jsonl":
         return f"m2_findings_{day:%Y%m%d}.jsonl"
+    if kind == "pv_export_csv":
+        return f"{day:%Y%m%d}.csv"
     return f"{day:%Y-%m-%d}.csv"
 
 
@@ -287,12 +303,14 @@ def _resolve_folder_id(
         folder = cfg.get("findings_folder_id") or cfg.get("folder_id")
     elif kind == "baseline_csv":
         folder = cfg.get("baseline_folder_id") or cfg.get("folder_id")
+    elif kind == "pv_export_csv":
+        folder = cfg.get("pv_export_folder_id") or cfg.get("folder_id")
     else:
         folder = cfg.get("folder_id")
     if not folder:
         raise KeyError(
             "GDrive secrets must define folder_id or per-kind "
-            "findings_folder_id / baseline_folder_id."
+            "findings_folder_id / baseline_folder_id / pv_export_folder_id."
         )
     return str(folder)
 
@@ -336,7 +354,7 @@ def list_artifacts(
     folder_id: str | None = None,
 ) -> Dict[date, DriveArtifact]:
     """List dashboard artifacts from Drive, keyed by parsed date."""
-    if kind not in {"findings", "findings_jsonl", "baseline_csv"}:
+    if kind not in {"findings", "findings_jsonl", "baseline_csv", "pv_export_csv"}:
         raise ValueError(f"Unsupported artifact kind: {kind!r}")
     if service is None and folder_id is None:
         public_cfg = _public_manifest_secrets()
@@ -357,6 +375,7 @@ def list_artifacts(
         "findings": parse_findings_date,
         "findings_jsonl": parse_findings_jsonl_date,
         "baseline_csv": parse_baseline_csv_date,
+        "pv_export_csv": parse_pv_export_csv_date,
     }[kind]
 
     artifacts: Dict[date, DriveArtifact] = {}

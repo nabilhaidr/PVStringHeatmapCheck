@@ -105,3 +105,16 @@ def test_cached_baseline_csv_day_returns_error_when_listing_fails(monkeypatch):
     assert result.dataframe.empty
     assert result.available_dates == []
     assert result.error == "'Public manifest mode is required'"
+
+
+def test_cached_pv_export_csv_day_returns_error_when_listing_fails(monkeypatch):
+    def _fail_listing(_kind):
+        raise KeyError("Public manifest mode is required")
+
+    monkeypatch.setattr(cache, "list_artifacts", _fail_listing)
+
+    result = cache.cached_pv_export_csv_day(date(2026, 5, 14))
+
+    assert result.dataframe.empty
+    assert result.available_dates == []
+    assert result.error == "'Public manifest mode is required'"

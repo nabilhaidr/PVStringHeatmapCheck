@@ -10,7 +10,7 @@
  * 1. Open the Google Sheet used as the dashboard manifest.
  * 2. Extensions > Apps Script.
  * 3. Paste this file.
- * 4. Fill FINDINGS_FOLDER_ID and BASELINE_FOLDER_ID.
+ * 4. Fill FINDINGS_FOLDER_ID, BASELINE_FOLDER_ID, and PV_EXPORT_FOLDER_ID.
  * 5. Run syncDashboardManifest once and approve the Drive permission prompt.
  */
 
@@ -18,6 +18,8 @@ const CONFIG = {
   MANIFEST_SHEET_NAME: "manifest",
   FINDINGS_FOLDER_ID: "replace-with-output-folder-id",
   BASELINE_FOLDER_ID: "replace-with-baseline-folder-id",
+  // Folder "CSV Export PV String" (df_plot YYYYMMDD.csv) untuk halaman Heatmap.
+  PV_EXPORT_FOLDER_ID: "replace-with-pv-export-folder-id",
 };
 
 const DASHBOARD_COLUMNS = [
@@ -31,6 +33,9 @@ const DASHBOARD_COLUMNS = [
   "findings_jsonl_name",
   "findings_jsonl_file_id",
   "findings_jsonl_url",
+  "pv_export_csv_name",
+  "pv_export_csv_file_id",
+  "pv_export_csv_url",
 ];
 
 function syncDashboardManifest() {
@@ -39,11 +44,13 @@ function syncDashboardManifest() {
   const baselineCsv = collectArtifacts_(CONFIG.BASELINE_FOLDER_ID, parseBaselineCsvDate_);
   const findingsXlsx = collectArtifacts_(CONFIG.FINDINGS_FOLDER_ID, parseFindingsXlsxDate_);
   const findingsJsonl = collectArtifacts_(CONFIG.FINDINGS_FOLDER_ID, parseFindingsJsonlDate_);
+  const pvExportCsv = collectArtifacts_(CONFIG.PV_EXPORT_FOLDER_ID, parsePvExportCsvDate_);
 
   const dates = new Set(Object.keys(existing.byDate));
   Object.keys(baselineCsv).forEach((day) => dates.add(day));
   Object.keys(findingsXlsx).forEach((day) => dates.add(day));
   Object.keys(findingsJsonl).forEach((day) => dates.add(day));
+  Object.keys(pvExportCsv).forEach((day) => dates.add(day));
 
   const headers = mergeHeaders_(existing.headers, DASHBOARD_COLUMNS);
   const rows = Array.from(dates).sort().map((day) => {
@@ -53,6 +60,7 @@ function syncDashboardManifest() {
     fillArtifact_(row, "baseline_csv", expectedBaselineCsvName_(day), baselineCsv[day]);
     fillArtifact_(row, "findings_xlsx", expectedFindingsXlsxName_(day), findingsXlsx[day]);
     fillArtifact_(row, "findings_jsonl", expectedFindingsJsonlName_(day), findingsJsonl[day]);
+    fillArtifact_(row, "pv_export_csv", expectedPvExportCsvName_(day), pvExportCsv[day]);
 
     return headers.map((header) => row[header] || "");
   });
@@ -146,6 +154,11 @@ function parseBaselineCsvDate_(name) {
   return match ? match[1] + "-" + match[2] + "-" + match[3] : "";
 }
 
+function parsePvExportCsvDate_(name) {
+  const match = String(name).match(/^(\d{8})\.csv$/);
+  return match ? compactToIsoDate_(match[1]) : "";
+}
+
 function parseFindingsXlsxDate_(name) {
   const match = String(name).match(/^m2_findings_(\d{8})\.xlsx$/);
   return match ? compactToIsoDate_(match[1]) : "";
@@ -183,6 +196,10 @@ function expectedBaselineCsvName_(day) {
 
 function expectedFindingsXlsxName_(day) {
   return "m2_findings_" + day.replace(/-/g, "") + ".xlsx";
+}
+
+function expectedPvExportCsvName_(day) {
+  return day.replace(/-/g, "") + ".csv";
 }
 
 function expectedFindingsJsonlName_(day) {

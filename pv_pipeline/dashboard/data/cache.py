@@ -135,6 +135,36 @@ def cached_baseline_csv_day(day: date) -> CsvLoadResult:
         )
 
 
+@_cache_data
+def cached_pv_export_csv_day(day: date) -> CsvLoadResult:
+    """Load a single df_plot export CSV day (YYYYMMDD.csv) for Heatmap.
+
+    The export shares the baseline CSV schema, so the same reader applies.
+    """
+    try:
+        artifacts = list_artifacts("pv_export_csv")
+    except Exception as exc:
+        return CsvLoadResult(dataframe=pd.DataFrame(), error=str(exc))
+    artifact = artifacts.get(day)
+    if artifact is None:
+        return CsvLoadResult(
+            dataframe=pd.DataFrame(),
+            available_dates=list(artifacts),
+            missing=True,
+        )
+    try:
+        return CsvLoadResult(
+            dataframe=load_baseline_csv_day(download_artifact(artifact.file_id)),
+            available_dates=list(artifacts),
+        )
+    except Exception as exc:  # pragma: no cover - UI path
+        return CsvLoadResult(
+            dataframe=pd.DataFrame(),
+            available_dates=list(artifacts),
+            error=f"{artifact.name}: {exc}",
+        )
+
+
 def clear_dashboard_cache() -> None:
     import streamlit as st  # noqa: WPS433
 

@@ -33,6 +33,7 @@ class _FakeFiles:
                 {"id": "xlsx-id", "name": "m2_findings_20260514.xlsx", "mimeType": "application/vnd.ms-excel"},
                 {"id": "jsonl-id", "name": "m2_findings_20260514.jsonl", "mimeType": "application/json"},
                 {"id": "csv-id", "name": "2026-05-14.csv", "mimeType": "text/csv"},
+                {"id": "pv-export-id", "name": "20260514.csv", "mimeType": "text/csv"},
                 {"id": "skip-id", "name": "manifest.csv", "mimeType": "text/csv"},
             ],
             "nextPageToken": None,
@@ -77,16 +78,25 @@ def test_list_artifacts_filters_findings_jsonl_by_filename():
     assert artifacts[date(2026, 5, 14)].file_id == "jsonl-id"
 
 
+def test_list_artifacts_filters_pv_export_csv_by_filename():
+    artifacts = list_artifacts("pv_export_csv", service=_FakeService(), folder_id="folder-1")
+
+    assert list(artifacts) == [date(2026, 5, 14)]
+    assert artifacts[date(2026, 5, 14)].file_id == "pv-export-id"
+
+
 def test_resolve_folder_id_supports_separate_findings_and_baseline_folders():
     secrets = {
         "folder_id": "shared",
         "findings_folder_id": "findings-folder",
         "baseline_folder_id": "baseline-folder",
+        "pv_export_folder_id": "pv-export-folder",
     }
 
     assert _resolve_folder_id("findings", secrets) == "findings-folder"
     assert _resolve_folder_id("findings_jsonl", secrets) == "findings-folder"
     assert _resolve_folder_id("baseline_csv", secrets) == "baseline-folder"
+    assert _resolve_folder_id("pv_export_csv", secrets) == "pv-export-folder"
 
 
 class _FakeNestedFiles:
@@ -209,6 +219,32 @@ def test_public_manifest_accepts_drive_link_alias_columns(
     assert list_artifacts("baseline_csv")[date(2026, 5, 14)].file_id.endswith("id=csv-id")
     assert list_artifacts("findings")[date(2026, 5, 14)].file_id.endswith("id=xlsx-id")
     assert list_artifacts("findings_jsonl")[date(2026, 5, 14)].file_id.endswith("id=jsonl-id")
+
+
+def test_public_manifest_supports_pv_export_csv_columns(monkeypatch, tmp_path):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "\n".join([
+            "date,pv_export_csv_name,pv_export_csv_file_id",
+            "2026-05-14,20260514.csv,pv-export-id",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "pv_pipeline.dashboard.data.gdrive._streamlit_secrets",
+        lambda: {"gdrive_public": {"manifest_csv_path": str(manifest)}},
+    )
+
+    artifacts = list_artifacts("pv_export_csv")
+
+    assert artifacts == {
+        date(2026, 5, 14): DriveArtifact(
+            date=date(2026, 5, 14),
+            file_id="https://drive.google.com/uc?export=download&id=pv-export-id",
+            name="20260514.csv",
+            kind="pv_export_csv",
+        )
+    }
 
 
 def test_public_manifest_can_keep_existing_file_csv_path_without_download_source(

@@ -54,6 +54,7 @@ Google Sheet bisa mengisi kolom link tanpa Google Cloud Console:
 ```javascript
 FINDINGS_FOLDER_ID: "folder-output-id",
 BASELINE_FOLDER_ID: "folder-baseline-id",
+PV_EXPORT_FOLDER_ID: "folder-pv-export-id",
 ```
 
 5. Run function `syncDashboardManifest`.
@@ -70,12 +71,17 @@ Script juga scan baseline folder beserta subfolder bulan untuk:
 
 - `YYYY-MM-DD.csv`
 
+Serta folder "CSV Export PV String" (df_plot export untuk halaman Heatmap):
+
+- `YYYYMMDD.csv`
+
 Kolom yang ditambahkan/diisi:
 
 ```csv
 baseline_csv_name,baseline_csv_file_id,baseline_csv_url
 findings_xlsx_name,findings_xlsx_file_id,findings_xlsx_url
 findings_jsonl_name,findings_jsonl_file_id,findings_jsonl_url
+pv_export_csv_name,pv_export_csv_file_id,pv_export_csv_url
 ```
 
 Kolom metric lama seperti `rows_kept`, `rows_skipped_findings`, dan `file_csv`
@@ -93,7 +99,8 @@ Mode ini tetap didukung untuk deployment lama.
 2. Enable Google Drive API.
 3. Buat service account.
 4. Download JSON key.
-5. Share Drive folder output dan folder baseline ke email service account.
+5. Share Drive folder output, folder baseline, dan folder "CSV Export PV
+   String" ke email service account.
 6. Paste JSON key ke Streamlit secrets sebagai multiline string:
 
 ```toml
@@ -101,6 +108,7 @@ Mode ini tetap didukung untuk deployment lama.
 use_service_account = true
 findings_folder_id = "folder-output-id"
 baseline_folder_id = "folder-baseline-id"
+pv_export_folder_id = "folder-pv-export-id"
 service_account_json = '''
 { ... }
 '''

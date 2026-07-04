@@ -13,6 +13,7 @@ import pandas as pd
 _FINDINGS_RE = re.compile(r"^m2_findings_(\d{8})\.xlsx$", re.IGNORECASE)
 _FINDINGS_JSONL_RE = re.compile(r"^m2_findings_(\d{8})\.jsonl$", re.IGNORECASE)
 _BASELINE_CSV_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.csv$", re.IGNORECASE)
+_PV_EXPORT_CSV_RE = re.compile(r"^(\d{8})\.csv$", re.IGNORECASE)
 _PV_POWER_RE = re.compile(r"^PV\d+\s+Power\(kW\)$", re.IGNORECASE)
 
 
@@ -45,6 +46,21 @@ def parse_baseline_csv_date(filename: str) -> date | None:
         return None
     try:
         return datetime.strptime(match.group(1), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def parse_pv_export_csv_date(filename: str) -> date | None:
+    """Return date from df_plot export ``YYYYMMDD.csv`` names or None.
+
+    Multi-date exports (``YYYYMMDD-YYYYMMDD.csv``) are rejected because the
+    Heatmap page renders one day at a time.
+    """
+    match = _PV_EXPORT_CSV_RE.match(str(filename).strip())
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d").date()
     except ValueError:
         return None
 
