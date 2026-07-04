@@ -1,11 +1,11 @@
 """Extend M2 PV Performance Workbook — Ringkasan: sheet M2_Index (peta detektor).
 
-Input : docs/M2_PV_Performance_Workbook.xlsx (41 detektor-sheet)
+Input : docs/M2_PV_Performance_Workbook.xlsx (45 detektor-sheet)
 Output: same file, sheet M2_Index (tab pertama) = peta detektor → sinyal → fault_type →
         severity → status reproduksibilitas Excel + inventaris sheet per iterasi.
 
 Regen-safe: kalau M2_Index sudah ada, HAPUS lalu rebuild (sehingga update mudah).
-README log + Config TIDAK diubah. 41 detektor-sheet harus tetap utuh.
+README log + Config TIDAK diubah. 45 detektor-sheet harus tetap utuh.
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ if "M2_Index" in wb.sheetnames:
     del wb["M2_Index"]
     print("removed existing M2_Index (rebuild).")
 existing = list(wb.sheetnames)
-assert len(existing) == 41, f"Expected 41 detektor-sheet, got {len(existing)}"
+assert len(existing) == 45, f"Expected 45 detektor-sheet, got {len(existing)}"
 print(f"Loaded {len(existing)} sheets.")
 
 ws = wb.create_sheet("M2_Index", 0)   # tab pertama (navigasi)
@@ -53,10 +53,10 @@ ws.sheet_properties.tabColor = "305496"
 
 ws.cell(row=1, column=1, value="M2 PV Performance — INDEKS Famili Detektor").font = TITLE_FONT
 ws.cell(row=2, column=1, value=("Peta tiap detektor → sinyal → fault_type → severity → status reproduksibilitas Excel. "
-                                "Workbook 41 detektor-sheet (di luar indeks ini). Detail: docs/M2_RE_0X_*.md + M2_Family_Summary.")).font = NOTE_FONT
+                                "Workbook 45 detektor-sheet (di luar indeks ini). Detail: docs/M2_RE_0X_*.md + M2_Family_Summary.")).font = NOTE_FONT
 
-# ---- Table 1: detector map (8 aktif + 1 ML skeleton) ----
-ws.cell(row=4, column=1, value="1. Peta Detektor (8 aktif + 1 ML skeleton)").font = SUB_FONT
+# ---- Table 1: detector map (9 aktif + 1 ML skeleton) ----
+ws.cell(row=4, column=1, value="1. Peta Detektor (9 aktif + 1 ML skeleton)").font = SUB_FONT
 set_header(ws, 5, ["#", "Detector", "Modul", "Sinyal utama", "fault_type",
                    "Severity (ringkas)", "Sheet keputusan", "Status Excel"])
 DETECTORS = [
@@ -68,15 +68,17 @@ DETECTORS = [
      "open_circuit", "CRITICAL (conf 95%)", "M2b_OpenCircuit", "PENUH"),
     (4, "M2bGroundFault", "ground_fault.py", "V_to_ground absolute/adaptive + voc_ratio & I_z",
      "ground_fault", "spec+(abs|adp)=90 · spec/abs+adp=80 · abs=70 · adp=60", "M2c_GroundFault", "PENUH*"),
-    (5, "M2IForest", "iforest.py", "IsolationForest 5-fitur (V,I,V_dev,I_dev,R)",
+    (5, "M2bMpptRatio", "mppt_ratio.py", "I/median(partner se-MPPT) < 0.85 + debounce 20",
+     "mppt_partner_underperform", "rem<0.20 CRIT · <0.50 HIGH · else MED (conf 50–90)", "M2b_MpptRatio", "PENUH"),
+    (6, "M2IForest", "iforest.py", "IsolationForest 5-fitur (V,I,V_dev,I_dev,R)",
      "iforest_anomaly", "kuartil rank flagged: CRIT/HIGH/MED/INFO", "IF_Anomaly", "APPROKSIMASI"),
-    (6, "M2aLowIrradiance", "m2a/low_irradiance.py", "OLS slope PR_proxy vs POA (band low/mid)",
+    (7, "M2aLowIrradiance", "m2a/low_irradiance.py", "OLS slope PR_proxy vs POA (band low/mid)",
      "low_irradiance / general_underperform", "|slope_low|·r² → CRIT/HIGH/MED", "M2a_LowIrradiance", "PENUH"),
-    (7, "M2aShading", "m2a/shading.py", "CV antar-string per jam + PR + asimetri AM/PM",
+    (8, "M2aShading", "m2a/shading.py", "CV antar-string per jam + PR + asimetri AM/PM",
      "shading_morning/afternoon/uniform", "0.7·frac + 0.3·asym → CRIT/HIGH/MED", "M2a_Shading", "PENUH"),
-    (8, "M2aSoiling", "m2a/soiling.py (skeleton)", "rdtools SRR (Monte-Carlo) → ekonomi payback",
+    (9, "M2aSoiling", "m2a/soiling.py (skeleton)", "rdtools SRR (Monte-Carlo) → ekonomi payback",
      "soiling_detected / cleaning_recommended / insufficient_data", "(p_loss,payback) → CRIT/HIGH/MED/INFO", "SO_Economics", "HILIR PENUH"),
-    (9, "M2bIntermittent (LSTM-AE)", "lstm_ae.py (skeleton, enabled=False)", "LSTM Autoencoder; reconstruction error window 24-jam (96×15-min)",
+    (10, "M2bIntermittent (LSTM-AE)", "lstm_ae.py (skeleton, enabled=False)", "LSTM Autoencoder; reconstruction error window 24-jam (96×15-min)",
      "intermittent", "MEDIUM (conf 70)", "(tak ada — input-only)", "INPUT-ONLY"),
 ]
 for i, row in enumerate(DETECTORS):
@@ -121,6 +123,7 @@ INVENTORY = [
     ("8", "M2aShading", "M2_RE_08", "Raw_Data_SH, Helpers_SH, SH_Hourly, M2a_Shading"),
     ("9", "M2aSoiling", "M2_RE_09", "Raw_Data_SO, Helpers_SO, SO_Economics, SO_Summary"),
     ("10", "M2bIntermittent (LSTM-AE)", "M2_RE_10", "(tak ada sheet — input-only; jaringan PyTorch terlatih)"),
+    ("11", "M2bMpptRatio", "M2_RE_11", "Raw_Data_MR, Helpers_MR, M2b_MpptRatio, M2b_MR_StringStatus"),
 ]
 for i, row in enumerate(INVENTORY):
     r = ir + 2 + i
@@ -141,5 +144,5 @@ assert after[0] == "M2_Index", "M2_Index harus jadi sheet pertama"
 assert set(after[1:]) == set(existing), "Sheet lama berubah!"
 ix = wb2["M2_Index"]
 print(f"Sheets now: {len(after)} (M2_Index first tab). Detector rows: {len(DETECTORS)}")
-print("Row 14 (LSTM-AE):", [ix.cell(14, c).value for c in (2, 5, 8)])
-print("OK — M2_Index updated (9 detektor: 8 aktif + LSTM-AE input-only).")
+print("Row 10 (M2bMpptRatio):", [ix.cell(10, c).value for c in (2, 5, 8)])
+print("OK — M2_Index updated (10 detektor: 9 aktif + LSTM-AE input-only).")
