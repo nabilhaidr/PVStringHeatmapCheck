@@ -19,7 +19,8 @@ Workflow:
     6. Threshold = mean(errors) + 3*std(errors)
     7. Save model + threshold + norm_stats
     8. M2bIntermittentDetector inference:
-       - Build sequences dari combined_df daily
+       - Build day-grid windows dari combined_df daily (build_day_windows,
+         preprocessing SAMA dengan training: grid 96 slot + night-fill 0)
        - Compute reconstruction error per-window
        - Emit fault_type=intermittent kalau error > threshold AND std_error tinggi
 
@@ -41,8 +42,8 @@ import pandas as pd
 from pv_pipeline.core import M2Finding, Severity, SubModule
 from pv_pipeline.training_data import (
     NormalizationStats,
-    SequenceBuilder,
     SequenceMetadata,
+    build_day_windows,
     fit_normalization,
 )
 
@@ -358,6 +359,51 @@ def load_model_artifacts(
 
 
 # ============================================================================
+# Inference windows
+# ============================================================================
+
+
+def build_inference_windows(
+    combined_df: pd.DataFrame,
+    feature_cols: List[str],
+    *,
+    resample_freq: str = "15min",
+    resample_method: str = "mean",
+) -> Tuple[np.ndarray, List[SequenceMetadata]]:
+    """Day-grid windows untuk inference -- preprocessing SAMA dengan training.
+
+    combined_df harian hanya berisi jam operasional (~12 jam = ~50 step
+    15-min), sedangkan model dilatih pada window 96 step (24h) dengan malam
+    diisi 0 A (training_data.build_day_windows via train_lstm_ae.py).
+    Sliding window SequenceBuilder butuh >=96 step ter-resample sehingga
+    menghasilkan 0 window pada data harian; grid harian penuh dipakai di
+    sini supaya window terbentuk dan distribusi input match training.
+    """
+    steps = int(pd.Timedelta("1D") / pd.Timedelta(resample_freq))
+    if combined_df.empty or "Start Time" not in combined_df.columns:
+        return np.empty((0, steps, len(feature_cols)), dtype=np.float32), []
+
+    day_keys = pd.to_datetime(combined_df["Start Time"], errors="coerce").dt.normalize()
+    windows: List[np.ndarray] = []
+    metas: List[SequenceMetadata] = []
+    for day in sorted(day_keys.dropna().unique()):
+        day_windows, day_metas = build_day_windows(
+            combined_df.loc[day_keys == day],
+            pd.Timestamp(day),
+            feature_cols,
+            resample_freq=resample_freq,
+            resample_method=resample_method,
+        )
+        if len(day_windows):
+            windows.append(day_windows)
+            metas.extend(day_metas)
+
+    if not metas:
+        return np.empty((0, steps, len(feature_cols)), dtype=np.float32), []
+    return np.concatenate(windows, axis=0), metas
+
+
+# ============================================================================
 # M2bIntermittentDetector (SubModule plugin)
 # ============================================================================
 
@@ -425,12 +471,12 @@ class M2bIntermittentDetector(SubModule):
         norm_stats = arts["norm_stats"]
         threshold = arts["threshold"]
 
-        builder = SequenceBuilder(
-            window_size=cfg.get("window_size", 96),
+        sequences, metas = build_inference_windows(
+            combined_df,
+            arts["feature_cols"],
             resample_freq=cfg.get("resample_freq", "15min"),
             resample_method=cfg.get("resample_method", "mean"),
         )
-        sequences, metas = builder.process(combined_df)
         if len(sequences) == 0:
             return []
 

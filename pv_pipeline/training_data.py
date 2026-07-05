@@ -294,6 +294,68 @@ class SequenceBuilder:
 
 
 # ============================================================================
+# Day-grid windows (dipakai training train_lstm_ae.py DAN inference
+# M2bIntermittentDetector -- harus satu sumber supaya preprocessing identik)
+# ============================================================================
+
+
+def build_day_windows(
+    df: pd.DataFrame,
+    day: pd.Timestamp,
+    feature_cols: List[str],
+    *,
+    resample_freq: str = "15min",
+    resample_method: str = "mean",
+    timestamp_col: str = "Start Time",
+    inverter_col: str = "Inverter_ID",
+) -> Tuple[np.ndarray, List[SequenceMetadata]]:
+    """Satu window (steps, n_features) per inverter untuk satu hari kalender.
+
+    Grid waktu di-reindex penuh 00:00..akhir hari lalu NaN diisi 0.0 A:
+    baseline/combined_df hanya berisi jam operasional (~12 jam), jadi tanpa
+    night-fill 0 window 24 jam (96 step @ 15-min) tidak pernah terbentuk.
+    Slot malam/gap memang tanpa arus, dan PV kolom yang di-NaN-kan oleh
+    baseline skip_scope juga aman dianggap 0. Kolom feature yang tidak ada
+    di df ditambahkan sebagai 0 supaya n_features konsisten.
+    """
+    if resample_method not in {"mean", "median", "last"}:
+        raise ValueError(
+            f"resample_method must be 'mean'|'median'|'last', got {resample_method!r}"
+        )
+    steps = int(pd.Timedelta("1D") / pd.Timedelta(resample_freq))
+    grid = pd.date_range(pd.Timestamp(day).normalize(), periods=steps, freq=resample_freq)
+
+    df = df.copy()
+    df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
+    df = df.dropna(subset=[timestamp_col])
+    for col in feature_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    windows: List[np.ndarray] = []
+    metas: List[SequenceMetadata] = []
+    for inv, grp in df.groupby(inverter_col):
+        feats = grp.set_index(timestamp_col)[feature_cols]
+        if feats.notna().to_numpy().sum() == 0:
+            continue
+        agg = feats.resample(resample_freq).agg(resample_method)
+        agg = agg.reindex(grid).fillna(0.0)
+        windows.append(agg.to_numpy(dtype=np.float32))
+        metas.append(SequenceMetadata(
+            inverter_id=str(inv),
+            window_start=grid[0],
+            window_end=grid[-1],
+            n_features=len(feature_cols),
+            feature_cols=list(feature_cols),
+        ))
+
+    if not windows:
+        return np.empty((0, steps, len(feature_cols)), dtype=np.float32), []
+    return np.stack(windows, axis=0), metas
+
+
+# ============================================================================
 # Normalization
 # ============================================================================
 
