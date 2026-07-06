@@ -71,6 +71,12 @@ DEFAULT_RAINFALL_XLSX: List[str] = [
     os.path.join("raw data input", "Daily Rainfall PLTS IKN 2025.xlsx"),
     os.path.join("raw data input", "Daily Rainfall PLTS IKN 2026.xlsx"),
 ]
+DEFAULT_CLEANING_REPORT_XLSX = os.path.join(
+    "raw data input", "Report & Schedule Cleaning PLTS IKN.xlsx",
+)
+DEFAULT_DC_CABLE_XLS = os.path.join(
+    "raw data input", "List of DC Cables 0411.xls",
+)
 RAINFALL_SHEET = "Daily Rainfall PLTS IKN"
 RAINFALL_TS_COL = "Date time"
 RAINFALL_WS_COL_RE = re.compile(r"^Daily Rainfall \(mm\) WS \d+$")
@@ -163,6 +169,16 @@ def _parse_args(argv=None) -> argparse.Namespace:
              "'raw data input/'; run tetap lanjut tanpa presipitasi bila "
              "default tidak ditemukan)",
     )
+    parser.add_argument(
+        "--cleaning-report-xlsx", default=None,
+        help="Rekap manual cleaning (checklist TRUE per string per tanggal). "
+             f"Default: {DEFAULT_CLEANING_REPORT_XLSX!r} bila ada.",
+    )
+    parser.add_argument(
+        "--dc-cable-xls", default=None,
+        help="List of DC Cables (mapping ST->PV WB03-WB10). "
+             f"Default: {DEFAULT_DC_CABLE_XLS!r} bila ada.",
+    )
     parser.add_argument("--config", default=os.path.join("config", "m2_config.yaml"))
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--min-days", type=int, default=90)
@@ -220,12 +236,35 @@ def main(argv=None) -> None:
         print("[soiling-run] TANPA presipitasi: cleaning events dari SRR "
               "kurang reliable (semua recovery dianggap manual).")
 
+    # --- Rekap manual cleaning + mapping ST->PV -------------------------------
+    def _optional_path(explicit: str | None, default: str, label: str) -> str:
+        if explicit is not None:
+            if not os.path.exists(explicit):
+                raise SystemExit(f"[soiling-run] {label} tidak ditemukan: {explicit!r}")
+            return explicit
+        if os.path.exists(default):
+            return default
+        print(f"[soiling-run] WARNING {label} default tidak ditemukan: {default!r}")
+        return ""
+
+    cleaning_report_path = _optional_path(
+        args.cleaning_report_xlsx, DEFAULT_CLEANING_REPORT_XLSX, "cleaning report",
+    )
+    dc_cable_path = _optional_path(
+        args.dc_cable_xls, DEFAULT_DC_CABLE_XLS, "DC cable list",
+    )
+    if cleaning_report_path:
+        print(f"[soiling-run] cleaning report: {cleaning_report_path}"
+              + (f" (mapping: {dc_cable_path})" if dc_cable_path else " (TANPA mapping ST->PV)"))
+
     # --- Config: enable m2a_soiling + overrides ------------------------------
     cfg = load_m2_config(args.config)
     soil_cfg = dict(cfg.get("m2a_soiling", {}) or {})
     soil_cfg["enabled"] = True
     soil_cfg["min_days"] = args.min_days
     soil_cfg["precipitation_path"] = precip_path
+    soil_cfg["cleaning_report_path"] = cleaning_report_path
+    soil_cfg["dc_cable_list_path"] = dc_cable_path
     if args.cleaning_cost_idr is not None:
         soil_cfg["cleaning_cost_idr"] = args.cleaning_cost_idr
     if args.rdtools_reps is not None:
@@ -271,11 +310,16 @@ def main(argv=None) -> None:
     out_xlsx = os.path.join(args.output_dir, f"soiling_srr_{start_s}_{end_s}.xlsx")
     with pd.ExcelWriter(out_xlsx) as writer:
         pd.DataFrame(rows).to_excel(writer, sheet_name="Findings", index=False)
-        for sheet in ["EconomicAnalysis", "SoilingRatio", "CleaningEvents"]:
+        for sheet in ["EconomicAnalysis", "SoilingRatio", "CleaningEvents", "ManualCleaning"]:
             artifact = detector.artifacts.get(sheet)
             if isinstance(artifact, pd.DataFrame) and not artifact.empty:
                 artifact.to_excel(writer, sheet_name=sheet, index=False)
     print(f"[soiling-run] hasil: {out_xlsx}")
+    manual = detector.artifacts.get("ManualCleaning")
+    if isinstance(manual, pd.DataFrame) and not manual.empty:
+        print(f"[soiling-run] manual cleaning: {len(manual)} string-event, "
+              f"{manual['date'].nunique()} hari "
+              f"({manual['date'].min().date()}..{manual['date'].max().date()})")
     econ = detector.artifacts.get("EconomicAnalysis")
     if isinstance(econ, pd.DataFrame) and not econ.empty:
         print("[soiling-run] EconomicAnalysis:")

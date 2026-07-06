@@ -231,6 +231,14 @@ m2a_soiling:
   electricity_tariff_idr_per_kwh: 1500.0  # IKN PLTS PPA estimate
   payback_threshold_days: 30.0       # payback < threshold -> recommend cleaning
   precipitation_path: ""             # Optional BMKG CSV/xlsx daily mm path
+  # Rekap manual cleaning (checklist TRUE per string per tanggal, sheet STSn).
+  # Contoh: "raw data input/Report & Schedule Cleaning PLTS IKN.xlsx"
+  cleaning_report_path: ""
+  # Mapping nomor String (checklist) -> nomor PV (Huawei) untuk WB03-WB10.
+  # Contoh: "raw data input/List of DC Cables 0411.xls"
+  dc_cable_list_path: ""
+  cleaning_match_window_days: 3      # jendela +/- hari match interval SRR
+  cleaning_precip_threshold_mm: 1.0  # >= mm dianggap hujan (klasifikasi cause)
   rdtools_reps: 1000                 # Monte Carlo iterations
   rdtools_confidence_level: 68.2     # 1-sigma confidence
   sample_freq_hours: 0.08333333      # 5/60 = 5-min Huawei sampling

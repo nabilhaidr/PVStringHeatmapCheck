@@ -107,6 +107,13 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule, load_empty_pv_map
+from pv_pipeline.m2a.cleaning_report import (
+    build_st_to_pv,
+    classify_cleaning_intervals,
+    daily_cleaning_counts,
+    load_cleaning_report,
+    load_dc_cable_map,
+)
 
 
 # --- Defaults (mirror DEFAULT_M2_CONFIG["m2a_soiling"]) --------------------
@@ -118,6 +125,10 @@ DEFAULT_CLEANING_COST_IDR: float = 0.0       # placeholder; user provides
 DEFAULT_ELECTRICITY_TARIFF_IDR: float = 1500.0  # IDR/kWh estimate (IKN PLTS PPA)
 DEFAULT_PAYBACK_THRESHOLD_DAYS: float = 30.0
 DEFAULT_PRECIPITATION_PATH: str = ""         # empty -> skip precipitation
+DEFAULT_CLEANING_REPORT_PATH: str = ""       # empty -> skip manual cleaning join
+DEFAULT_DC_CABLE_LIST_PATH: str = ""         # empty -> ST==PV identity semua WB
+DEFAULT_CLEANING_MATCH_WINDOW_DAYS: int = 3
+DEFAULT_CLEANING_PRECIP_THRESHOLD_MM: float = 1.0
 DEFAULT_PV_MAX: int = 28
 DEFAULT_HOUR_RANGE: Tuple[float, float] = (6.0, 18.0)
 DEFAULT_RDTOOLS_REPS: int = 1000             # Monte Carlo reps
@@ -351,6 +362,49 @@ def _load_precipitation(path: str) -> Optional[pd.Series]:
     return out
 
 
+def _load_manual_cleaning(
+    cleaning_report_path: str,
+    dc_cable_list_path: str,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
+    """Load rekap cleaning manual (optional, non-fatal seperti presipitasi).
+
+    Returns (events_df, daily_counts) atau (None, None) bila path kosong /
+    file tidak ada / gagal parse.
+    """
+    if not cleaning_report_path or not os.path.exists(cleaning_report_path):
+        return None, None
+    st_to_pv = None
+    if dc_cable_list_path:
+        if os.path.exists(dc_cable_list_path):
+            try:
+                st_to_pv = build_st_to_pv(load_dc_cable_map(dc_cable_list_path))
+            except Exception as exc:
+                warnings.warn(
+                    f"[M2aSoiling] DC cable list load failed "
+                    f"({dc_cable_list_path}): {exc}. ST->PV mapping WB03-10 "
+                    "tidak tersedia (pv=NaN).",
+                    stacklevel=2,
+                )
+        else:
+            warnings.warn(
+                f"[M2aSoiling] dc_cable_list_path tidak ditemukan: "
+                f"{dc_cable_list_path!r}.",
+                stacklevel=2,
+            )
+    try:
+        events = load_cleaning_report(cleaning_report_path, st_to_pv)
+    except Exception as exc:
+        warnings.warn(
+            f"[M2aSoiling] cleaning report load failed "
+            f"({cleaning_report_path}): {exc}",
+            stacklevel=2,
+        )
+        return None, None
+    if events.empty:
+        return None, None
+    return events, daily_cleaning_counts(events)
+
+
 class M2aSoiling(SubModule):
     """Soiling detector via rdtools SRR (Stochastic Rate and Recovery).
 
@@ -454,6 +508,18 @@ class M2aSoiling(SubModule):
             "payback_threshold_days", DEFAULT_PAYBACK_THRESHOLD_DAYS
         ))
         precip_path = str(cfg.get("precipitation_path", DEFAULT_PRECIPITATION_PATH))
+        cleaning_report_path = str(cfg.get(
+            "cleaning_report_path", DEFAULT_CLEANING_REPORT_PATH
+        ))
+        dc_cable_list_path = str(cfg.get(
+            "dc_cable_list_path", DEFAULT_DC_CABLE_LIST_PATH
+        ))
+        cleaning_window_days = int(cfg.get(
+            "cleaning_match_window_days", DEFAULT_CLEANING_MATCH_WINDOW_DAYS
+        ))
+        cleaning_precip_thr = float(cfg.get(
+            "cleaning_precip_threshold_mm", DEFAULT_CLEANING_PRECIP_THRESHOLD_MM
+        ))
         rdtools_reps = int(cfg.get("rdtools_reps", DEFAULT_RDTOOLS_REPS))
         rdtools_ci = float(cfg.get("rdtools_confidence_level", DEFAULT_RDTOOLS_CONFIDENCE))
 
@@ -556,6 +622,13 @@ class M2aSoiling(SubModule):
             if precip_daily is not None else None
         )
 
+        # Optional manual cleaning report (checklist per string per tanggal).
+        manual_events, manual_daily = _load_manual_cleaning(
+            cleaning_report_path, dc_cable_list_path,
+        )
+        if manual_events is not None:
+            self.artifacts["ManualCleaning"] = manual_events
+
         try:
             sr_result = soiling.soiling_srr(
                 energy_normalized_daily=pr_daily,
@@ -647,6 +720,10 @@ class M2aSoiling(SubModule):
                     if isinstance(calc_info, dict) else 0
                 ),
                 "precip_available": precip_aligned is not None,
+                "manual_cleaning_available": manual_daily is not None,
+                "n_manual_cleaning_days": (
+                    int(manual_daily.size) if manual_daily is not None else 0
+                ),
                 "avg_daily_kwh": avg_daily_kwh,
                 "daily_loss_idr": daily_loss_idr,
                 "payback_days": payback_days if np.isfinite(payback_days) else None,
@@ -664,12 +741,19 @@ class M2aSoiling(SubModule):
             except Exception:
                 pass
 
-        # Artifact: CleaningEvents from soiling_interval_summary.
+        # Artifact: CleaningEvents from soiling_interval_summary, dianotasi
+        # manual-vs-hujan dari rekap cleaning + presipitasi.
         if isinstance(calc_info, dict) and "soiling_interval_summary" in calc_info:
             try:
                 summary = calc_info["soiling_interval_summary"]
                 if isinstance(summary, pd.DataFrame) and not summary.empty:
-                    self.artifacts["CleaningEvents"] = summary.copy()
+                    self.artifacts["CleaningEvents"] = classify_cleaning_intervals(
+                        summary,
+                        manual_daily,
+                        precip_daily,
+                        window_days=cleaning_window_days,
+                        precip_threshold_mm=cleaning_precip_thr,
+                    )
             except Exception:
                 pass
 
