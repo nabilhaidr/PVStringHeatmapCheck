@@ -362,14 +362,40 @@ def _load_precipitation(path: str) -> Optional[pd.Series]:
     return out
 
 
+def _parse_wb_filter(value) -> Optional[set]:
+    """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
+
+    Kosong/None -> None (tanpa filter). Dipakai saat analysis run per
+    kelompok WB supaya cleaning events kelompok lain tidak ikut
+    mengklasifikasi interval SRR kelompok ini.
+    """
+    if not value:
+        return None
+    out = set()
+    for item in value:
+        s = str(item).strip().upper()
+        if s.startswith("WB"):
+            s = s[2:]
+        try:
+            out.add(int(s))
+        except ValueError:
+            warnings.warn(
+                f"[M2aSoiling] wb_filter entry tidak dikenal: {item!r}",
+                stacklevel=2,
+            )
+    return out or None
+
+
 def _load_manual_cleaning(
     cleaning_report_path: str,
     dc_cable_list_path: str,
+    wb_filter: Optional[set] = None,
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
     """Load rekap cleaning manual (optional, non-fatal seperti presipitasi).
 
     Returns (events_df, daily_counts) atau (None, None) bila path kosong /
-    file tidak ada / gagal parse.
+    file tidak ada / gagal parse. ``wb_filter`` membatasi events ke kelompok
+    WB tertentu (nomor int).
     """
     if not cleaning_report_path or not os.path.exists(cleaning_report_path):
         return None, None
@@ -400,6 +426,8 @@ def _load_manual_cleaning(
             stacklevel=2,
         )
         return None, None
+    if wb_filter is not None:
+        events = events[events["wb"].isin(wb_filter)].reset_index(drop=True)
     if events.empty:
         return None, None
     return events, daily_cleaning_counts(events)
@@ -624,7 +652,9 @@ class M2aSoiling(SubModule):
 
         # Optional manual cleaning report (checklist per string per tanggal).
         manual_events, manual_daily = _load_manual_cleaning(
-            cleaning_report_path, dc_cable_list_path,
+            cleaning_report_path,
+            dc_cable_list_path,
+            wb_filter=_parse_wb_filter(cfg.get("wb_filter")),
         )
         if manual_events is not None:
             self.artifacts["ManualCleaning"] = manual_events

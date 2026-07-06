@@ -129,6 +129,30 @@ def test_build_st_to_pv_and_daily_counts(tmp_path):
     assert counts[pd.Timestamp("2026-03-03")] == 1.0
 
 
+# --- wb_filter (analysis run per kelompok WB) -----------------------------------
+
+
+def test_parse_wb_filter_normalizes_labels():
+    from pv_pipeline.m2a.soiling import _parse_wb_filter
+
+    assert _parse_wb_filter(["WB01", "wb02", 3]) == {1, 2, 3}
+    assert _parse_wb_filter([]) is None
+    assert _parse_wb_filter(None) is None
+
+
+def test_load_manual_cleaning_wb_filter_limits_events(tmp_path):
+    from pv_pipeline.m2a.soiling import _load_manual_cleaning
+
+    path = _write_cleaning_xlsx(tmp_path / "cleaning.xlsx")
+
+    with pytest.warns(UserWarning):
+        events, daily = _load_manual_cleaning(path, "", wb_filter={1})
+
+    # Hanya WB01: events WB03 tidak boleh mengklasifikasi interval kelompok WB01.
+    assert set(events["wb"]) == {1}
+    assert daily[pd.Timestamp("2026-03-01")] == 1.0  # tanpa filter = 3 string
+
+
 # --- Klasifikasi interval SRR ---------------------------------------------------
 
 

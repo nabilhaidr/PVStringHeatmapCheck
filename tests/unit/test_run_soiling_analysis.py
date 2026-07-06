@@ -15,6 +15,7 @@ import pandas as pd
 from pv_pipeline.m2a.soiling import _load_precipitation
 from run_soiling_analysis import (
     RAINFALL_SHEET,
+    filter_combined_by_wb,
     load_baseline_for_soiling,
     load_daily_rainfall,
     write_precipitation_csv,
@@ -85,6 +86,18 @@ def test_precipitation_csv_roundtrip_compatible_with_detector_loader(tmp_path):
     assert loaded is not None
     assert loaded[pd.Timestamp("2026-01-01")] == 0.0
     assert loaded[pd.Timestamp("2026-01-02")] == 12.5
+
+
+def test_filter_combined_by_wb_matches_prefix():
+    df = pd.DataFrame({
+        "Inverter_ID": ["WB01-INV01", "WB03-INV02", "WB10-INV05"],
+        "Active power(kW)": [100.0, 110.0, 120.0],
+    })
+
+    # "WB01" tidak boleh ikut menangkap WB10 (prefix match harus per-WB penuh).
+    out = filter_combined_by_wb(df, ["WB01", "wb03"])
+
+    assert out["Inverter_ID"].tolist() == ["WB01-INV01", "WB03-INV02"]
 
 
 def test_load_baseline_for_soiling_prefers_active_power_and_drops_pv_cols(tmp_path):

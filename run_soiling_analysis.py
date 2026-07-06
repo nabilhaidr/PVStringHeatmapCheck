@@ -153,6 +153,13 @@ def load_baseline_for_soiling(
     return pd.concat(parts, ignore_index=True)
 
 
+def filter_combined_by_wb(combined_df: pd.DataFrame, wb_list: List[str]) -> pd.DataFrame:
+    """Filter baris combined_df ke kelompok WB (prefix Inverter_ID)."""
+    prefixes = tuple(str(w).strip().upper() for w in wb_list)
+    mask = combined_df[INVERTER_COL].astype(str).str.upper().str.startswith(prefixes)
+    return combined_df[mask]
+
+
 def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Soiling SRR analysis run dari gabungan baseline CSV.",
@@ -189,6 +196,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--rdtools-reps", type=int, default=None,
                         help="Override Monte-Carlo reps (default ikut config)")
+    parser.add_argument(
+        "--wb", nargs="+", default=None,
+        help="Analisis per kelompok WB (mis. --wb WB01 WB02). Wajib disertai "
+             "--capacity-kwp karena kapasitas default 71500 kWp = site penuh.",
+    )
+    parser.add_argument(
+        "--capacity-kwp", type=float, default=None,
+        help="Override kapasitas DC kWp. Referensi: WB01-02 ~13500 "
+             "(900 string x 24 modul x 625 Wp), WB03-10 ~58000 "
+             "(3571 string x 26 modul x 625 Wp), site penuh 71500.",
+    )
     return parser.parse_args(argv)
 
 
@@ -265,6 +283,15 @@ def main(argv=None) -> None:
     soil_cfg["precipitation_path"] = precip_path
     soil_cfg["cleaning_report_path"] = cleaning_report_path
     soil_cfg["dc_cable_list_path"] = dc_cable_path
+    if args.wb:
+        if args.capacity_kwp is None:
+            raise SystemExit(
+                "[soiling-run] --wb butuh --capacity-kwp (referensi: "
+                "WB01-02 ~13500, WB03-10 ~58000, site penuh 71500)."
+            )
+        soil_cfg["wb_filter"] = [str(w).strip().upper() for w in args.wb]
+    if args.capacity_kwp is not None:
+        soil_cfg["capacity_kwp"] = args.capacity_kwp
     if args.cleaning_cost_idr is not None:
         soil_cfg["cleaning_cost_idr"] = args.cleaning_cost_idr
     if args.rdtools_reps is not None:
@@ -277,6 +304,12 @@ def main(argv=None) -> None:
 
     # --- Gabung baseline + run detector --------------------------------------
     combined_df = load_baseline_for_soiling(files)
+    if args.wb:
+        n_before = len(combined_df)
+        combined_df = filter_combined_by_wb(combined_df, args.wb)
+        print(f"[soiling-run] filter {soil_cfg['wb_filter']}: "
+              f"{n_before} -> {len(combined_df)} rows, "
+              f"capacity_kwp={soil_cfg['capacity_kwp']}")
     if combined_df.empty:
         raise SystemExit("[soiling-run] combined_df kosong.")
     print(f"[soiling-run] combined_df: {combined_df.shape[0]} rows, "
@@ -306,8 +339,11 @@ def main(argv=None) -> None:
 
     start_s = files[0][0].strftime("%Y%m%d")
     end_s = files[-1][0].strftime("%Y%m%d")
+    group_tag = "_" + "-".join(soil_cfg["wb_filter"]) if args.wb else ""
     os.makedirs(args.output_dir, exist_ok=True)
-    out_xlsx = os.path.join(args.output_dir, f"soiling_srr_{start_s}_{end_s}.xlsx")
+    out_xlsx = os.path.join(
+        args.output_dir, f"soiling_srr_{start_s}_{end_s}{group_tag}.xlsx",
+    )
     with pd.ExcelWriter(out_xlsx) as writer:
         pd.DataFrame(rows).to_excel(writer, sheet_name="Findings", index=False)
         for sheet in ["EconomicAnalysis", "SoilingRatio", "CleaningEvents", "ManualCleaning"]:

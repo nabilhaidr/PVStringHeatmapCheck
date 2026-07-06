@@ -239,6 +239,11 @@ m2a_soiling:
   dc_cable_list_path: ""
   cleaning_match_window_days: 3      # jendela +/- hari match interval SRR
   cleaning_precip_threshold_mm: 1.0  # >= mm dianggap hujan (klasifikasi cause)
+  # Analysis run per kelompok WB (mis. ["WB01", "WB02"]): batasi manual
+  # cleaning events ke kelompok yang dianalisis. Kosong = seluruh site.
+  # (combined_df + capacity_kwp difilter/dioverride oleh run_soiling_analysis
+  # --wb --capacity-kwp; referensi kapasitas: WB01-02 ~13500, WB03-10 ~58000.)
+  wb_filter: []
   rdtools_reps: 1000                 # Monte Carlo iterations
   rdtools_confidence_level: 68.2     # 1-sigma confidence
   sample_freq_hours: 0.08333333      # 5/60 = 5-min Huawei sampling
