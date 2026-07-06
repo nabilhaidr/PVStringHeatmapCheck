@@ -403,6 +403,42 @@ def build_inference_windows(
     return np.concatenate(windows, axis=0), metas
 
 
+def build_window_errors_df(
+    errors: np.ndarray,
+    metas: List[SequenceMetadata],
+    sequences: np.ndarray,
+    threshold: float,
+) -> pd.DataFrame:
+    """Artifact WindowErrors: error rekonstruksi SEMUA window per inverter-hari.
+
+    Findings hanya memuat window > threshold; sheet ini memuat semuanya
+    supaya bisa ranking harian dan melihat tren inverter yang mendekati
+    threshold sebelum benar-benar terflag.
+    """
+    rows = []
+    for i, (err, meta) in enumerate(zip(errors, metas)):
+        err_f = float(err)
+        rows.append({
+            "date": pd.Timestamp(meta.window_start).normalize(),
+            "inverter_id": meta.inverter_id,
+            "reconstruction_error": err_f,
+            "threshold": float(threshold),
+            "error_ratio": (
+                err_f / float(threshold)
+                if threshold and np.isfinite(threshold) else float("nan")
+            ),
+            "flagged": bool(err_f > threshold),
+            "window_std": float(sequences[i].std()),
+        })
+    df = pd.DataFrame(rows, columns=[
+        "date", "inverter_id", "reconstruction_error", "threshold",
+        "error_ratio", "flagged", "window_std",
+    ])
+    return df.sort_values(
+        "reconstruction_error", ascending=False, ignore_index=True,
+    )
+
+
 # ============================================================================
 # M2bIntermittentDetector (SubModule plugin)
 # ============================================================================
@@ -482,6 +518,10 @@ class M2bIntermittentDetector(SubModule):
 
         normalized = norm_stats.transform(sequences)
         errors = compute_reconstruction_errors(model, normalized)
+
+        self.artifacts["WindowErrors"] = build_window_errors_df(
+            errors, metas, sequences, threshold,
+        )
 
         findings = []
         for i, (err, meta) in enumerate(zip(errors, metas)):

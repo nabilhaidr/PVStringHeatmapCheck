@@ -12,7 +12,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pv_pipeline.lstm_ae import M2bIntermittentDetector, build_inference_windows
+from pv_pipeline.lstm_ae import (
+    M2bIntermittentDetector,
+    build_inference_windows,
+    build_window_errors_df,
+)
+from pv_pipeline.training_data import SequenceMetadata
 
 FEATURE_COLS = [f"PV{n} input current(A)" for n in range(1, 29)]
 
@@ -57,6 +62,31 @@ def test_build_inference_windows_empty_df_returns_empty():
 
     assert sequences.shape == (0, 96, 28)
     assert metas == []
+
+
+def test_build_window_errors_df_ranks_all_windows_and_flags_threshold():
+    metas = [
+        SequenceMetadata(
+            inverter_id=inv,
+            window_start=pd.Timestamp("2026-05-01"),
+            window_end=pd.Timestamp("2026-05-01 23:45"),
+            n_features=2,
+            feature_cols=["PV1 input current(A)", "PV2 input current(A)"],
+        )
+        for inv in ["WB01-INV01", "WB01-INV02"]
+    ]
+    sequences = np.ones((2, 4, 2), dtype=np.float32)
+    errors = np.array([0.05, 0.20])
+
+    df = build_window_errors_df(errors, metas, sequences, threshold=0.10)
+
+    # SEMUA window masuk (bukan hanya > threshold), urut error terbesar dulu.
+    assert len(df) == 2
+    assert df["inverter_id"].tolist() == ["WB01-INV02", "WB01-INV01"]
+    assert df["flagged"].tolist() == [True, False]
+    assert df.iloc[0]["error_ratio"] == pytest.approx(2.0)
+    assert df.iloc[1]["reconstruction_error"] == pytest.approx(0.05)
+    assert df.iloc[0]["date"] == pd.Timestamp("2026-05-01")
 
 
 def test_detector_disabled_warns_and_returns_empty(synthetic_combined_df):
