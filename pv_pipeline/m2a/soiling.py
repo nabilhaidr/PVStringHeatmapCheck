@@ -362,6 +362,31 @@ def _load_precipitation(path: str) -> Optional[pd.Series]:
     return out
 
 
+def reindex_daily_frequency(
+    pr_daily: pd.Series,
+    insolation_daily: pd.Series,
+    precip_daily: Optional[pd.Series] = None,
+) -> Tuple[pd.Series, pd.Series, Optional[pd.Series]]:
+    """Reindex seri harian ke grid kontinu freq='D' untuk rdtools.
+
+    ``rdtools.soiling_srr`` menolak index tanpa frekuensi harian eksplisit
+    ("Daily performance metric series must have daily frequency"), sedangkan
+    baseline punya hari bolong (outage/curtailment/day-filter) sehingga
+    freq tidak bisa di-infer. Hari hilang menjadi NaN (ditoleransi SRR saat
+    segmentasi interval); presipitasi hari hilang diisi 0.
+    """
+    full_idx = pd.date_range(
+        pr_daily.index.min(), pr_daily.index.max(), freq="D",
+    )
+    pr_full = pr_daily.reindex(full_idx)
+    insolation_full = insolation_daily.reindex(full_idx)
+    precip_full = (
+        precip_daily.reindex(full_idx).fillna(0.0)
+        if precip_daily is not None else None
+    )
+    return pr_full, insolation_full, precip_full
+
+
 def _parse_wb_filter(value) -> Optional[set]:
     """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
 
@@ -643,11 +668,11 @@ class M2aSoiling(SubModule):
         import rdtools  # noqa: WPS433
         from rdtools import soiling  # noqa: WPS433
 
-        # Optional precipitation.
+        # Optional precipitation. Seri untuk rdtools direindex ke grid harian
+        # kontinu (freq='D') -- syarat keras soiling_srr.
         precip_daily = _load_precipitation(precip_path)
-        precip_aligned = (
-            precip_daily.reindex(pr_daily.index).fillna(0.0)
-            if precip_daily is not None else None
+        pr_srr, insolation_srr, precip_aligned = reindex_daily_frequency(
+            pr_daily, insolation_daily, precip_daily,
         )
 
         # Optional manual cleaning report (checklist per string per tanggal).
@@ -661,8 +686,8 @@ class M2aSoiling(SubModule):
 
         try:
             sr_result = soiling.soiling_srr(
-                energy_normalized_daily=pr_daily,
-                insolation_daily=insolation_daily.reindex(pr_daily.index),
+                energy_normalized_daily=pr_srr,
+                insolation_daily=insolation_srr,
                 precipitation_daily=precip_aligned,
                 reps=rdtools_reps,
                 confidence_level=rdtools_ci,

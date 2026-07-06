@@ -30,6 +30,7 @@ from pv_pipeline.m2a.soiling import (
     compute_cleaning_payback,
     compute_daily_pr_series,
     compute_inverter_power_per_timestamp,
+    reindex_daily_frequency,
 )
 
 
@@ -392,3 +393,43 @@ class TestM2aSoilingReproducibility:
         f2 = sm2.run(synthetic_combined_df, soiling_cfg)
         assert len(f1) == len(f2)
         assert f1[0].fault_type == f2[0].fault_type
+
+
+# ============================================================================
+# reindex_daily_frequency (syarat keras rdtools.soiling_srr)
+# ============================================================================
+
+
+def test_reindex_daily_frequency_fills_gaps_for_rdtools():
+    """rdtools menolak index tanpa freq harian ("Daily performance metric
+    series must have daily frequency"). Baseline punya hari bolong, jadi
+    seri harus direindex ke grid kontinu: hari hilang NaN, presipitasi 0."""
+    idx = pd.DatetimeIndex(["2025-01-01", "2025-01-02", "2025-01-05"])
+    pr = pd.Series([0.8, 0.81, 0.79], index=idx)
+    insol = pd.Series([5.0, 5.1, 4.9], index=idx)
+    precip = pd.Series([12.0], index=pd.DatetimeIndex(["2025-01-03"]))
+
+    pr_f, insol_f, precip_f = reindex_daily_frequency(pr, insol, precip)
+
+    # Grid kontinu 5 hari dengan freq eksplisit 'D' -- ini yang dicek rdtools.
+    assert len(pr_f) == 5
+    assert pr_f.index.freq is not None and pr_f.index.freqstr == "D"
+    assert insol_f.index.equals(pr_f.index)
+    # Hari bolong (03-04 Jan) = NaN di PR/insolation, 0.0 di presipitasi.
+    assert np.isnan(pr_f[pd.Timestamp("2025-01-03")])
+    assert np.isnan(insol_f[pd.Timestamp("2025-01-04")])
+    assert precip_f[pd.Timestamp("2025-01-03")] == 12.0
+    assert precip_f[pd.Timestamp("2025-01-04")] == 0.0
+    # Nilai hari yang ada tidak berubah.
+    assert pr_f[pd.Timestamp("2025-01-05")] == 0.79
+
+
+def test_reindex_daily_frequency_without_precipitation():
+    idx = pd.DatetimeIndex(["2025-01-01", "2025-01-03"])
+    pr = pd.Series([0.8, 0.79], index=idx)
+    insol = pd.Series([5.0, 4.9], index=idx)
+
+    pr_f, insol_f, precip_f = reindex_daily_frequency(pr, insol, None)
+
+    assert precip_f is None
+    assert len(pr_f) == 3 and pr_f.index.freqstr == "D"
