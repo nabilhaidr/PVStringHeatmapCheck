@@ -246,6 +246,13 @@ m2a_soiling:
   wb_filter: []
   rdtools_reps: 1000                 # Monte Carlo iterations
   rdtools_confidence_level: 68.2     # 1-sigma confidence
+  # Segmentasi interval SRR (default = default rdtools 3.2). Di iklim monsoon
+  # dengan PR berisik (POA clearsky), 'precip_and_shift' + threshold 1.0 mm
+  # + interval lebih pendek mengurangi NoValidIntervalError.
+  rdtools_clean_criterion: "shift"   # shift|precip_and_shift|precip_or_shift|precip
+  rdtools_precip_threshold: 0.01     # ambang hujan pembersih (mm/hari)
+  rdtools_min_interval_length: 7     # hari minimal interval valid (>=2)
+  rdtools_day_scale: 13              # window rolling-median deteksi cleaning
   sample_freq_hours: 0.08333333      # 5/60 = 5-min Huawei sampling
   pv_max: 28                         # PV string inventory upper bound
 

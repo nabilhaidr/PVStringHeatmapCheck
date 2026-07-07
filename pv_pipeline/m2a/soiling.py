@@ -575,6 +575,16 @@ class M2aSoiling(SubModule):
         ))
         rdtools_reps = int(cfg.get("rdtools_reps", DEFAULT_RDTOOLS_REPS))
         rdtools_ci = float(cfg.get("rdtools_confidence_level", DEFAULT_RDTOOLS_CONFIDENCE))
+        # Knob segmentasi interval SRR (default = default rdtools 3.2).
+        # Penting di iklim monsoon + POA clearsky: PR harian berisik membuat
+        # shift-detector melihat "cleaning" palsu -> interval pendek -> bisa
+        # NoValidIntervalError. clean_criterion 'precip'/'precip_and_shift'
+        # + precip_threshold (satuan mm, ikut data presipitasi kami) dan
+        # min_interval_length lebih pendek membantu.
+        rdtools_clean_criterion = str(cfg.get("rdtools_clean_criterion", "shift"))
+        rdtools_precip_threshold = float(cfg.get("rdtools_precip_threshold", 0.01))
+        rdtools_min_interval_length = int(cfg.get("rdtools_min_interval_length", 7))
+        rdtools_day_scale = int(cfg.get("rdtools_day_scale", 13))
 
         if "Inverter_ID" not in combined_df.columns or "Start Time" not in combined_df.columns:
             warnings.warn(
@@ -691,6 +701,10 @@ class M2aSoiling(SubModule):
                 precipitation_daily=precip_aligned,
                 reps=rdtools_reps,
                 confidence_level=rdtools_ci,
+                clean_criterion=rdtools_clean_criterion,
+                precip_threshold=rdtools_precip_threshold,
+                min_interval_length=rdtools_min_interval_length,
+                day_scale=rdtools_day_scale,
             )
             if isinstance(sr_result, tuple) and len(sr_result) >= 3:
                 sr, sr_ci, calc_info = sr_result[0], sr_result[1], sr_result[2]

@@ -197,6 +197,27 @@ def _parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--rdtools-reps", type=int, default=None,
                         help="Override Monte-Carlo reps (default ikut config)")
     parser.add_argument(
+        "--clean-criterion", default=None,
+        choices=["shift", "precip_and_shift", "precip_or_shift", "precip"],
+        help="Deteksi cleaning event SRR (default rdtools: shift). Di iklim "
+             "monsoon dengan PR berisik, 'precip_and_shift'/'precip' "
+             "mengurangi cleaning palsu.",
+    )
+    parser.add_argument(
+        "--precip-threshold-mm", type=float, default=None,
+        help="Ambang mm/hari dianggap hujan pembersih (default rdtools 0.01; "
+             "saran 1.0 untuk data mm kami).",
+    )
+    parser.add_argument(
+        "--min-interval-length", type=int, default=None,
+        help="Panjang minimal interval soiling valid, hari (default 7, min 2).",
+    )
+    parser.add_argument(
+        "--day-scale", type=int, default=None,
+        help="Window rolling-median deteksi cleaning, hari (default 13, "
+             "sebaiknya ganjil).",
+    )
+    parser.add_argument(
         "--wb", nargs="+", default=None,
         help="Analisis per kelompok WB (mis. --wb WB01 WB02). Wajib disertai "
              "--capacity-kwp karena kapasitas default 71500 kWp = site penuh.",
@@ -296,6 +317,14 @@ def main(argv=None) -> None:
         soil_cfg["cleaning_cost_idr"] = args.cleaning_cost_idr
     if args.rdtools_reps is not None:
         soil_cfg["rdtools_reps"] = args.rdtools_reps
+    if args.clean_criterion is not None:
+        soil_cfg["rdtools_clean_criterion"] = args.clean_criterion
+    if args.precip_threshold_mm is not None:
+        soil_cfg["rdtools_precip_threshold"] = args.precip_threshold_mm
+    if args.min_interval_length is not None:
+        soil_cfg["rdtools_min_interval_length"] = args.min_interval_length
+    if args.day_scale is not None:
+        soil_cfg["rdtools_day_scale"] = args.day_scale
     cfg["m2a_soiling"] = soil_cfg
     if float(soil_cfg.get("cleaning_cost_idr", 0.0) or 0.0) <= 0.0:
         print("[soiling-run] WARNING cleaning_cost_idr=0 -> payback=inf, "
