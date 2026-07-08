@@ -160,14 +160,14 @@ def filter_combined_by_wb(combined_df: pd.DataFrame, wb_list: List[str]) -> pd.D
     return combined_df[mask]
 
 
-# Kapasitas DC per WB (design), dihitung dari config/strings.yaml (WB01/02:
-# 50 inv x 18 string x 24 modul) + List of DC Cables (WB03-10 string count)
-# x 625 Wp. Soiling ratio di-recenter rdtools -> presisi kapasitas tidak
-# kritis untuk sr/p_loss; angka ini menjaga PR di rentang fisik.
+# Kapasitas DC aktual nameplate per WB (kWp), dari data owner (2026-07-08).
+# Total = 71513 kWp ~ site 71500. Soiling ratio di-recenter rdtools ->
+# presisi kapasitas tidak kritis untuk sr/p_loss; angka ini menjaga PR di
+# rentang fisik dan dipakai untuk pelaporan PR absolut.
 PER_WB_CAPACITY_KWP = {
-    "WB01": 13500.0, "WB02": 13500.0,
+    "WB01": 6750.0, "WB02": 6750.0,
     "WB03": 5996.0, "WB04": 7621.0, "WB05": 7865.0, "WB06": 7995.0,
-    "WB07": 6792.0, "WB08": 6792.0, "WB09": 7881.0, "WB10": 7069.0,
+    "WB07": 6793.0, "WB08": 6793.0, "WB09": 7881.0, "WB10": 7069.0,
 }
 # Estimasi biaya cleaning per WB (dari alokasi zona: WB01-02 1.165jt/2;
 # WB03-10 55jt/8). Sesuaikan bila ada angka aktual per WB.
@@ -319,8 +319,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--capacity-kwp", type=float, default=None,
-        help="Override kapasitas DC kWp. Referensi: WB01-02 ~13500 masing2 "
-             "(900 string x 24 modul x 625 Wp), WB03-10 ~6000-8000 masing2, "
+        help="Override kapasitas DC kWp (nameplate). Referensi per WB: "
+             "WB01/02 6750, WB03 5996, WB04 7621, WB05 7865, WB06 7995, "
+             "WB07/08 6793, WB09 7881, WB10 7069; zona WB01-02 13500; "
              "site penuh 71500.",
     )
     parser.add_argument(
