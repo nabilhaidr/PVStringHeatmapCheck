@@ -452,6 +452,95 @@ def build_cleaning_impact(
     return pd.DataFrame(rows, columns=CLEANING_IMPACT_COLUMNS)
 
 
+DEFAULT_DIRECT_WINDOW_DAYS: int = 7      # jendela PR pre/post di sekitar campaign
+DEFAULT_DIRECT_GAP_DAYS: int = 7         # gap antar tanggal -> campaign berbeda
+DEFAULT_DIRECT_MIN_WINDOW_DAYS: int = 2  # min hari PR valid per sisi
+DIRECT_CLEANING_IMPACT_COLUMNS: List[str] = [
+    "cleaning_start", "cleaning_end", "n_strings_cleaned",
+    "n_days_before", "n_days_after", "pr_before", "pr_after",
+    "soiling_loss_pct", "energy_recovered_kwh_per_day", "rupiah_per_day",
+]
+
+
+def build_direct_cleaning_impact(
+    pr_daily: pd.Series,
+    manual_events: pd.DataFrame,
+    avg_daily_kwh: float,
+    tariff_idr_per_kwh: float,
+    *,
+    window_days: int = DEFAULT_DIRECT_WINDOW_DAYS,
+    gap_days: int = DEFAULT_DIRECT_GAP_DAYS,
+    min_window_days: int = DEFAULT_DIRECT_MIN_WINDOW_DAYS,
+) -> pd.DataFrame:
+    """Pre/post PR langsung di sekitar campaign cleaning manual -- TIDAK
+    bergantung SRR (tetap terisi walau soiling_srr NoValidIntervalError).
+
+    Campaign = klaster tanggal cleaning (rekap manual) dengan jarak antar
+    tanggal <= gap_days. Untuk tiap campaign: pr_before = rata-rata PR harian
+    window_days sebelum campaign mulai (kotor), pr_after = rata-rata
+    window_days sesudah campaign selesai (bersih). PR sudah ternormalisasi
+    irradiance sehingga variasi cuaca sebagian besar hilang; koreksi
+    temperatur belum diterapkan (lihat catatan modul).
+
+    soiling_loss_pct = (pr_after - pr_before)/pr_after * 100 -- fraksi output
+    bersih yang hilang karena soiling tepat sebelum cleaning.
+    energy_recovered_kwh_per_day = avg_daily_kwh * soiling_loss_fraction.
+    """
+    empty = pd.DataFrame(columns=DIRECT_CLEANING_IMPACT_COLUMNS)
+    if pr_daily is None or pr_daily.empty:
+        return empty
+    if manual_events is None or manual_events.empty or "date" not in manual_events.columns:
+        return empty
+
+    pr = pr_daily.copy()
+    pr.index = pd.DatetimeIndex(pr.index).normalize()
+    pr = pr[~pr.index.duplicated()].sort_index()
+
+    dates = pd.to_datetime(manual_events["date"], errors="coerce").dropna().dt.normalize()
+    counts = dates.value_counts().sort_index()   # jumlah string per tanggal
+    uniq = list(counts.index)
+    if not uniq:
+        return empty
+
+    campaigns: List[List[pd.Timestamp]] = []
+    cur = [uniq[0]]
+    for d in uniq[1:]:
+        if (d - cur[-1]).days <= gap_days:
+            cur.append(d)
+        else:
+            campaigns.append(cur)
+            cur = [d]
+    campaigns.append(cur)
+
+    win = pd.Timedelta(days=window_days)
+    rows = []
+    for camp in campaigns:
+        start, end = camp[0], camp[-1]
+        before = pr[(pr.index >= start - win) & (pr.index < start)]
+        after = pr[(pr.index > end) & (pr.index <= end + win)]
+        if len(before) < min_window_days or len(after) < min_window_days:
+            continue
+        pr_before = float(before.mean())
+        pr_after = float(after.mean())
+        if not (np.isfinite(pr_before) and np.isfinite(pr_after)) or pr_after <= 0:
+            continue
+        loss_frac = (pr_after - pr_before) / pr_after
+        energy = float(avg_daily_kwh) * loss_frac
+        rows.append({
+            "cleaning_start": start,
+            "cleaning_end": end,
+            "n_strings_cleaned": int(counts.loc[camp].sum()),
+            "n_days_before": int(len(before)),
+            "n_days_after": int(len(after)),
+            "pr_before": pr_before,
+            "pr_after": pr_after,
+            "soiling_loss_pct": loss_frac * 100.0,
+            "energy_recovered_kwh_per_day": energy,
+            "rupiah_per_day": energy * float(tariff_idr_per_kwh),
+        })
+    return pd.DataFrame(rows, columns=DIRECT_CLEANING_IMPACT_COLUMNS)
+
+
 def _parse_wb_filter(value) -> Optional[set]:
     """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
 
@@ -759,6 +848,20 @@ class M2aSoiling(SubModule):
         if manual_events is not None:
             self.artifacts["ManualCleaning"] = manual_events
 
+        avg_daily_kwh = float(energy_daily.tail(30).mean()) if not energy_daily.empty else 0.0
+
+        # Artifact: DirectCleaningImpact -- pre/post PR di sekitar campaign
+        # cleaning manual, INDEPENDEN SRR (dibangun sebelum soiling_srr supaya
+        # tetap ada walau SRR NoValidIntervalError).
+        if manual_events is not None and not manual_events.empty:
+            direct = build_direct_cleaning_impact(
+                pr_daily, manual_events, avg_daily_kwh, tariff_idr,
+                window_days=int(cfg.get("direct_impact_window_days", DEFAULT_DIRECT_WINDOW_DAYS)),
+                gap_days=int(cfg.get("direct_impact_gap_days", DEFAULT_DIRECT_GAP_DAYS)),
+            )
+            if not direct.empty:
+                self.artifacts["DirectCleaningImpact"] = direct
+
         try:
             sr_result = soiling.soiling_srr(
                 energy_normalized_daily=pr_srr,
@@ -804,7 +907,6 @@ class M2aSoiling(SubModule):
         # tuple/list saja (bikin CI selalu NaN).
         ci_lower, ci_upper = _ci_bounds(sr_ci)
 
-        avg_daily_kwh = float(energy_daily.tail(30).mean()) if not energy_daily.empty else 0.0
         daily_loss_idr, payback_days = compute_cleaning_payback(
             p_loss if np.isfinite(p_loss) else 0.0,
             avg_daily_kwh,

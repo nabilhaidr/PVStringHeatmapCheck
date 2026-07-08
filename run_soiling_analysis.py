@@ -178,8 +178,8 @@ PER_WB_CLEANING_COST_IDR = {
 }
 
 OUTPUT_SHEETS = [
-    "EconomicAnalysis", "CleaningImpact", "SoilingRatio",
-    "CleaningEvents", "ManualCleaning",
+    "EconomicAnalysis", "DirectCleaningImpact", "CleaningImpact",
+    "SoilingRatio", "CleaningEvents", "ManualCleaning",
 ]
 
 
@@ -245,9 +245,14 @@ def _run_and_save(
             if isinstance(artifact, pd.DataFrame) and not artifact.empty:
                 artifact.to_excel(writer, sheet_name=sheet, index=False)
     print(f"[soiling-run] hasil: {out_xlsx}")
+    dci = detector.artifacts.get("DirectCleaningImpact")
+    if isinstance(dci, pd.DataFrame) and not dci.empty:
+        print(f"[soiling-run] DirectCleaningImpact (independen SRR): "
+              f"{len(dci)} campaign; median soiling_loss_pct = "
+              f"{dci['soiling_loss_pct'].median():.2f}%")
     ci = detector.artifacts.get("CleaningImpact")
     if isinstance(ci, pd.DataFrame) and not ci.empty:
-        print(f"[soiling-run] CleaningImpact: {len(ci)} event; "
+        print(f"[soiling-run] CleaningImpact (SRR): {len(ci)} event; "
               f"total rupiah_per_day dipulihkan = "
               f"{ci['rupiah_per_day'].clip(lower=0).sum():.0f} IDR")
     econ = detector.artifacts.get("EconomicAnalysis")

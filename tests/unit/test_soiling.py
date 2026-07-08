@@ -496,3 +496,61 @@ def test_build_cleaning_impact_empty_input_returns_typed_empty():
     out = build_cleaning_impact(pd.DataFrame(), 100.0, 1500.0)
     assert list(out.columns) == CLEANING_IMPACT_COLUMNS
     assert out.empty
+
+
+# ============================================================================
+# build_direct_cleaning_impact (pre/post PR manual, INDEPENDEN SRR)
+# ============================================================================
+
+
+def test_build_direct_cleaning_impact_pre_post_and_campaign_grouping():
+    """PR sawtooth: kotor ~0.75 sebelum cleaning, bersih ~0.90 sesudah.
+    Dua tanggal cleaning berjarak <= gap_days -> satu campaign. Loss =
+    (after-before)/after; energi = avg_daily_kwh * loss_fraction."""
+    from pv_pipeline.m2a.soiling import build_direct_cleaning_impact
+
+    idx = pd.date_range("2026-03-01", "2026-03-28", freq="D")
+    vals = [0.75] * 9 + [0.80, 0.82] + [0.90] * 17
+    pr = pd.Series(vals, index=idx)
+    manual = pd.DataFrame({
+        "date": pd.to_datetime(["2026-03-10", "2026-03-11"]),
+        "inverter_id": ["WB03-INV01", "WB03-INV01"],
+        "wb": [3, 3],
+    })
+
+    out = build_direct_cleaning_impact(
+        pr, manual, avg_daily_kwh=100_000.0, tariff_idr_per_kwh=1500.0,
+        window_days=7, gap_days=7, min_window_days=2,
+    )
+
+    assert len(out) == 1
+    ev = out.iloc[0]
+    assert ev["cleaning_start"] == pd.Timestamp("2026-03-10")
+    assert ev["cleaning_end"] == pd.Timestamp("2026-03-11")
+    assert ev["n_strings_cleaned"] == 2
+    assert ev["pr_before"] == pytest.approx(0.75)
+    assert ev["pr_after"] == pytest.approx(0.90)
+    loss = (0.90 - 0.75) / 0.90
+    assert ev["soiling_loss_pct"] == pytest.approx(loss * 100.0)
+    assert ev["energy_recovered_kwh_per_day"] == pytest.approx(100_000.0 * loss)
+    assert ev["rupiah_per_day"] == pytest.approx(100_000.0 * loss * 1500.0)
+
+
+def test_build_direct_cleaning_impact_skips_campaign_without_enough_pr_days():
+    from pv_pipeline.m2a.soiling import (
+        build_direct_cleaning_impact, DIRECT_CLEANING_IMPACT_COLUMNS,
+    )
+
+    pr = pd.Series([0.8, 0.9, 0.9],
+                   index=pd.to_datetime(["2026-03-09", "2026-03-12", "2026-03-13"]))
+    manual = pd.DataFrame({"date": pd.to_datetime(["2026-03-10"])})
+
+    out = build_direct_cleaning_impact(pr, manual, 100.0, 1500.0, min_window_days=2)
+    assert list(out.columns) == DIRECT_CLEANING_IMPACT_COLUMNS
+    assert out.empty
+
+
+def test_build_direct_cleaning_impact_empty_inputs():
+    from pv_pipeline.m2a.soiling import build_direct_cleaning_impact
+
+    assert build_direct_cleaning_impact(pd.Series(dtype=float), pd.DataFrame(), 1.0, 1.0).empty
