@@ -387,6 +387,21 @@ def reindex_daily_frequency(
     return pr_full, insolation_full, precip_full
 
 
+def _ci_bounds(sr_ci) -> Tuple[float, float]:
+    """Ekstrak (lower, upper) dari confidence interval rdtools soiling_srr.
+
+    rdtools mengembalikan ``np.ndarray`` ``[lower, upper]``; membatasi ke
+    tuple/list saja (bug lama) membuat CI selalu NaN. Terima sequence/array
+    apa pun berpanjang >=2.
+    """
+    try:
+        if sr_ci is None or len(sr_ci) < 2:
+            return float("nan"), float("nan")
+        return float(sr_ci[0]), float(sr_ci[1])
+    except (TypeError, ValueError):
+        return float("nan"), float("nan")
+
+
 def _parse_wb_filter(value) -> Optional[set]:
     """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
 
@@ -735,16 +750,9 @@ class M2aSoiling(SubModule):
 
         sr_val = float(sr) if np.isfinite(sr) else float("nan")
         p_loss = 1.0 - sr_val if np.isfinite(sr_val) else float("nan")
-        ci_lower = (
-            float(sr_ci[0])
-            if isinstance(sr_ci, (tuple, list)) and len(sr_ci) >= 2
-            else float("nan")
-        )
-        ci_upper = (
-            float(sr_ci[1])
-            if isinstance(sr_ci, (tuple, list)) and len(sr_ci) >= 2
-            else float("nan")
-        )
+        # sr_ci dari rdtools = np.ndarray [lower, upper]; jangan batasi ke
+        # tuple/list saja (bikin CI selalu NaN).
+        ci_lower, ci_upper = _ci_bounds(sr_ci)
 
         avg_daily_kwh = float(energy_daily.tail(30).mean()) if not energy_daily.empty else 0.0
         daily_loss_idr, payback_days = compute_cleaning_payback(

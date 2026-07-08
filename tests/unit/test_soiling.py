@@ -433,3 +433,26 @@ def test_reindex_daily_frequency_without_precipitation():
 
     assert precip_f is None
     assert len(pr_f) == 3 and pr_f.index.freqstr == "D"
+
+
+# ============================================================================
+# _ci_bounds (rdtools sr_ci = np.ndarray; regresi CI selalu NaN)
+# ============================================================================
+
+
+def test_ci_bounds_accepts_numpy_array():
+    """rdtools soiling_srr mengembalikan CI sebagai np.ndarray. Ekstraksi
+    lama membatasi ke tuple/list -> CI selalu NaN di laporan. Harus menerima
+    array (dan list/tuple), serta aman untuk None/kosong."""
+    from pv_pipeline.m2a.soiling import _ci_bounds
+
+    lo, hi = _ci_bounds(np.array([0.95, 0.99]))
+    assert (lo, hi) == (0.95, 0.99)
+
+    assert _ci_bounds([0.90, 0.94]) == (0.90, 0.94)
+    assert _ci_bounds((0.88, 0.92)) == (0.88, 0.92)
+
+    lo, hi = _ci_bounds(None)
+    assert np.isnan(lo) and np.isnan(hi)
+    lo, hi = _ci_bounds(np.array([0.9]))  # len < 2
+    assert np.isnan(lo) and np.isnan(hi)
