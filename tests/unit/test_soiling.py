@@ -456,3 +456,43 @@ def test_ci_bounds_accepts_numpy_array():
     assert np.isnan(lo) and np.isnan(hi)
     lo, hi = _ci_bounds(np.array([0.9]))  # len < 2
     assert np.isnan(lo) and np.isnan(hi)
+
+
+# ============================================================================
+# build_cleaning_impact (sheet CleaningImpact: uplift eksplisit per event)
+# ============================================================================
+
+
+def test_build_cleaning_impact_computes_uplift_and_rupiah():
+    """Tiap event = batas antar interval: sr_before = end interval sebelumnya
+    (kotor), sr_after = start interval berikutnya (bersih). Energi & rupiah
+    dipulihkan/hari = uplift * avg_daily_kwh * tarif."""
+    from pv_pipeline.m2a.soiling import build_cleaning_impact, CLEANING_IMPACT_COLUMNS
+
+    ce = pd.DataFrame({
+        "start": pd.to_datetime(["2026-01-01", "2026-01-15", "2026-02-01"]),
+        "inferred_start_loss": [1.00, 0.98, 0.99],
+        "inferred_end_loss": [0.90, 0.92, 0.97],
+        "likely_cause": ["unknown", "manual", "rain"],
+    })
+
+    impact = build_cleaning_impact(ce, avg_daily_kwh=100_000.0, tariff_idr_per_kwh=1500.0)
+
+    assert list(impact.columns) == CLEANING_IMPACT_COLUMNS
+    assert len(impact) == 2  # 3 interval -> 2 batas cleaning
+    ev = impact.iloc[0]
+    assert ev["date"] == pd.Timestamp("2026-01-15")
+    assert ev["sr_before"] == pytest.approx(0.90)   # end interval 0
+    assert ev["sr_after"] == pytest.approx(0.98)    # start interval 1
+    assert ev["uplift_pct"] == pytest.approx(8.0)
+    assert ev["energy_recovered_kwh_per_day"] == pytest.approx(0.08 * 100_000.0)
+    assert ev["rupiah_per_day"] == pytest.approx(8000.0 * 1500.0)
+    assert ev["likely_cause"] == "manual"
+
+
+def test_build_cleaning_impact_empty_input_returns_typed_empty():
+    from pv_pipeline.m2a.soiling import build_cleaning_impact, CLEANING_IMPACT_COLUMNS
+
+    out = build_cleaning_impact(pd.DataFrame(), 100.0, 1500.0)
+    assert list(out.columns) == CLEANING_IMPACT_COLUMNS
+    assert out.empty

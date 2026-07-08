@@ -59,7 +59,7 @@ import argparse
 import os
 import re
 import warnings
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -160,6 +160,101 @@ def filter_combined_by_wb(combined_df: pd.DataFrame, wb_list: List[str]) -> pd.D
     return combined_df[mask]
 
 
+# Kapasitas DC per WB (design), dihitung dari config/strings.yaml (WB01/02:
+# 50 inv x 18 string x 24 modul) + List of DC Cables (WB03-10 string count)
+# x 625 Wp. Soiling ratio di-recenter rdtools -> presisi kapasitas tidak
+# kritis untuk sr/p_loss; angka ini menjaga PR di rentang fisik.
+PER_WB_CAPACITY_KWP = {
+    "WB01": 13500.0, "WB02": 13500.0,
+    "WB03": 5996.0, "WB04": 7621.0, "WB05": 7865.0, "WB06": 7995.0,
+    "WB07": 6792.0, "WB08": 6792.0, "WB09": 7881.0, "WB10": 7069.0,
+}
+# Estimasi biaya cleaning per WB (dari alokasi zona: WB01-02 1.165jt/2;
+# WB03-10 55jt/8). Sesuaikan bila ada angka aktual per WB.
+PER_WB_CLEANING_COST_IDR = {
+    "WB01": 582500.0, "WB02": 582500.0,
+    "WB03": 6875000.0, "WB04": 6875000.0, "WB05": 6875000.0, "WB06": 6875000.0,
+    "WB07": 6875000.0, "WB08": 6875000.0, "WB09": 6875000.0, "WB10": 6875000.0,
+}
+
+OUTPUT_SHEETS = [
+    "EconomicAnalysis", "CleaningImpact", "SoilingRatio",
+    "CleaningEvents", "ManualCleaning",
+]
+
+
+def _run_and_save(
+    combined_full: pd.DataFrame,
+    cfg: dict,
+    soil_base: dict,
+    files: List[Tuple[pd.Timestamp, str]],
+    output_dir: str,
+    *,
+    wb_filter: Optional[List[str]],
+    capacity_kwp: Optional[float],
+    cleaning_cost_idr: Optional[float],
+) -> None:
+    """Jalankan M2aSoiling untuk satu konfigurasi (site atau subset WB) lalu
+    tulis xlsx. combined_full dimuat sekali; difilter di sini bila wb_filter."""
+    soil = dict(soil_base)
+    if wb_filter:
+        soil["wb_filter"] = [str(w).strip().upper() for w in wb_filter]
+        soil["capacity_kwp"] = capacity_kwp
+    if cleaning_cost_idr is not None:
+        soil["cleaning_cost_idr"] = cleaning_cost_idr
+    cfg = dict(cfg)
+    cfg["m2a_soiling"] = soil
+
+    df = combined_full
+    if wb_filter:
+        df = filter_combined_by_wb(combined_full, wb_filter)
+        print(f"\n[soiling-run] === {'-'.join(soil['wb_filter'])} "
+              f"(capacity_kwp={capacity_kwp}, cleaning_cost_idr={cleaning_cost_idr}) ===")
+        print(f"[soiling-run] filter: {len(combined_full)} -> {len(df)} rows")
+    if df.empty:
+        print(f"[soiling-run] SKIP {wb_filter}: 0 rows (tidak ada data WB itu).")
+        return
+    print(f"[soiling-run] combined_df: {df.shape[0]} rows, "
+          f"{df['Inverter_ID'].nunique()} inverter")
+
+    detector = M2aSoiling()
+    findings = detector.run(df, cfg)
+
+    print(f"[soiling-run] findings: {len(findings)}")
+    rows = []
+    for f in findings:
+        sev = getattr(f.severity, "value", str(f.severity))
+        print(f"  [{sev}] {f.fault_type}: {f.message}")
+        rows.append({
+            "timestamp": f.timestamp, "inverter_id": f.inverter_id,
+            "sub_module": f.sub_module, "severity": sev,
+            "fault_type": f.fault_type, "value": f.value,
+            "threshold": f.threshold, "confidence": f.confidence,
+            "message": f.message, "evidence": str(f.evidence),
+        })
+
+    start_s = files[0][0].strftime("%Y%m%d")
+    end_s = files[-1][0].strftime("%Y%m%d")
+    group_tag = "_" + "-".join(soil["wb_filter"]) if wb_filter else ""
+    os.makedirs(output_dir, exist_ok=True)
+    out_xlsx = os.path.join(output_dir, f"soiling_srr_{start_s}_{end_s}{group_tag}.xlsx")
+    with pd.ExcelWriter(out_xlsx) as writer:
+        pd.DataFrame(rows).to_excel(writer, sheet_name="Findings", index=False)
+        for sheet in OUTPUT_SHEETS:
+            artifact = detector.artifacts.get(sheet)
+            if isinstance(artifact, pd.DataFrame) and not artifact.empty:
+                artifact.to_excel(writer, sheet_name=sheet, index=False)
+    print(f"[soiling-run] hasil: {out_xlsx}")
+    ci = detector.artifacts.get("CleaningImpact")
+    if isinstance(ci, pd.DataFrame) and not ci.empty:
+        print(f"[soiling-run] CleaningImpact: {len(ci)} event; "
+              f"total rupiah_per_day dipulihkan = "
+              f"{ci['rupiah_per_day'].clip(lower=0).sum():.0f} IDR")
+    econ = detector.artifacts.get("EconomicAnalysis")
+    if isinstance(econ, pd.DataFrame) and not econ.empty:
+        print(econ.to_string(index=False))
+
+
 def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Soiling SRR analysis run dari gabungan baseline CSV.",
@@ -224,9 +319,15 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--capacity-kwp", type=float, default=None,
-        help="Override kapasitas DC kWp. Referensi: WB01-02 ~13500 "
-             "(900 string x 24 modul x 625 Wp), WB03-10 ~58000 "
-             "(3571 string x 26 modul x 625 Wp), site penuh 71500.",
+        help="Override kapasitas DC kWp. Referensi: WB01-02 ~13500 masing2 "
+             "(900 string x 24 modul x 625 Wp), WB03-10 ~6000-8000 masing2, "
+             "site penuh 71500.",
+    )
+    parser.add_argument(
+        "--per-wb", action="store_true",
+        help="Analisis TIAP WB01..WB10 sendiri-sendiri (baseline dimuat "
+             "sekali). Kapasitas & cleaning cost per WB pakai tabel bawaan "
+             "(PER_WB_CAPACITY_KWP / PER_WB_CLEANING_COST_IDR).",
     )
     return parser.parse_args(argv)
 
@@ -296,99 +397,58 @@ def main(argv=None) -> None:
         print(f"[soiling-run] cleaning report: {cleaning_report_path}"
               + (f" (mapping: {dc_cable_path})" if dc_cable_path else " (TANPA mapping ST->PV)"))
 
-    # --- Config: enable m2a_soiling + overrides ------------------------------
+    # --- Config: override umum m2a_soiling (tanpa wb/capacity/cost) ----------
     cfg = load_m2_config(args.config)
-    soil_cfg = dict(cfg.get("m2a_soiling", {}) or {})
-    soil_cfg["enabled"] = True
-    soil_cfg["min_days"] = args.min_days
-    soil_cfg["precipitation_path"] = precip_path
-    soil_cfg["cleaning_report_path"] = cleaning_report_path
-    soil_cfg["dc_cable_list_path"] = dc_cable_path
-    if args.wb:
-        if args.capacity_kwp is None:
-            raise SystemExit(
-                "[soiling-run] --wb butuh --capacity-kwp (referensi: "
-                "WB01-02 ~13500, WB03-10 ~58000, site penuh 71500)."
-            )
-        soil_cfg["wb_filter"] = [str(w).strip().upper() for w in args.wb]
-    if args.capacity_kwp is not None:
-        soil_cfg["capacity_kwp"] = args.capacity_kwp
-    if args.cleaning_cost_idr is not None:
-        soil_cfg["cleaning_cost_idr"] = args.cleaning_cost_idr
+    soil_base = dict(cfg.get("m2a_soiling", {}) or {})
+    soil_base["enabled"] = True
+    soil_base["min_days"] = args.min_days
+    soil_base["precipitation_path"] = precip_path
+    soil_base["cleaning_report_path"] = cleaning_report_path
+    soil_base["dc_cable_list_path"] = dc_cable_path
     if args.rdtools_reps is not None:
-        soil_cfg["rdtools_reps"] = args.rdtools_reps
+        soil_base["rdtools_reps"] = args.rdtools_reps
     if args.clean_criterion is not None:
-        soil_cfg["rdtools_clean_criterion"] = args.clean_criterion
+        soil_base["rdtools_clean_criterion"] = args.clean_criterion
     if args.precip_threshold_mm is not None:
-        soil_cfg["rdtools_precip_threshold"] = args.precip_threshold_mm
+        soil_base["rdtools_precip_threshold"] = args.precip_threshold_mm
     if args.min_interval_length is not None:
-        soil_cfg["rdtools_min_interval_length"] = args.min_interval_length
+        soil_base["rdtools_min_interval_length"] = args.min_interval_length
     if args.day_scale is not None:
-        soil_cfg["rdtools_day_scale"] = args.day_scale
-    cfg["m2a_soiling"] = soil_cfg
-    if float(soil_cfg.get("cleaning_cost_idr", 0.0) or 0.0) <= 0.0:
+        soil_base["rdtools_day_scale"] = args.day_scale
+
+    # --- Gabung baseline (SEKALI) --------------------------------------------
+    combined_df = load_baseline_for_soiling(files)
+    if combined_df.empty:
+        raise SystemExit("[soiling-run] combined_df kosong.")
+    print(f"[soiling-run] combined_df total: {combined_df.shape[0]} rows, "
+          f"{combined_df['Inverter_ID'].nunique()} inverter")
+
+    if args.per_wb:
+        for wb in sorted(PER_WB_CAPACITY_KWP):
+            _run_and_save(
+                combined_df, cfg, soil_base, files, args.output_dir,
+                wb_filter=[wb],
+                capacity_kwp=PER_WB_CAPACITY_KWP[wb],
+                cleaning_cost_idr=PER_WB_CLEANING_COST_IDR[wb],
+            )
+        return
+
+    if args.wb and args.capacity_kwp is None:
+        raise SystemExit(
+            "[soiling-run] --wb butuh --capacity-kwp (referensi: "
+            "WB01-02 ~13500 masing2, WB03-10 ~6000-8000, site penuh 71500)."
+        )
+    cost = args.cleaning_cost_idr
+    if float(cost or 0.0) <= 0.0:
         print("[soiling-run] WARNING cleaning_cost_idr=0 -> payback=inf, "
               "rekomendasi cleaning tidak akan pernah muncul. "
               "Isi --cleaning-cost-idr atau config m2a_soiling.cleaning_cost_idr.")
-
-    # --- Gabung baseline + run detector --------------------------------------
-    combined_df = load_baseline_for_soiling(files)
-    if args.wb:
-        n_before = len(combined_df)
-        combined_df = filter_combined_by_wb(combined_df, args.wb)
-        print(f"[soiling-run] filter {soil_cfg['wb_filter']}: "
-              f"{n_before} -> {len(combined_df)} rows, "
-              f"capacity_kwp={soil_cfg['capacity_kwp']}")
-    if combined_df.empty:
-        raise SystemExit("[soiling-run] combined_df kosong.")
-    print(f"[soiling-run] combined_df: {combined_df.shape[0]} rows, "
-          f"{combined_df['Inverter_ID'].nunique()} inverter")
-
-    detector = M2aSoiling()  # POA self-init dari cfg['poa'].site_geometry_path
-    findings = detector.run(combined_df, cfg)
-
-    # --- Report + save artifacts ---------------------------------------------
-    print(f"\n[soiling-run] findings: {len(findings)}")
-    rows = []
-    for f in findings:
-        sev = getattr(f.severity, "value", str(f.severity))
-        print(f"  [{sev}] {f.fault_type}: {f.message}")
-        rows.append({
-            "timestamp": f.timestamp,
-            "inverter_id": f.inverter_id,
-            "sub_module": f.sub_module,
-            "severity": sev,
-            "fault_type": f.fault_type,
-            "value": f.value,
-            "threshold": f.threshold,
-            "confidence": f.confidence,
-            "message": f.message,
-            "evidence": str(f.evidence),
-        })
-
-    start_s = files[0][0].strftime("%Y%m%d")
-    end_s = files[-1][0].strftime("%Y%m%d")
-    group_tag = "_" + "-".join(soil_cfg["wb_filter"]) if args.wb else ""
-    os.makedirs(args.output_dir, exist_ok=True)
-    out_xlsx = os.path.join(
-        args.output_dir, f"soiling_srr_{start_s}_{end_s}{group_tag}.xlsx",
+    _run_and_save(
+        combined_df, cfg, soil_base, files, args.output_dir,
+        wb_filter=args.wb,
+        capacity_kwp=args.capacity_kwp,
+        cleaning_cost_idr=cost,
     )
-    with pd.ExcelWriter(out_xlsx) as writer:
-        pd.DataFrame(rows).to_excel(writer, sheet_name="Findings", index=False)
-        for sheet in ["EconomicAnalysis", "SoilingRatio", "CleaningEvents", "ManualCleaning"]:
-            artifact = detector.artifacts.get(sheet)
-            if isinstance(artifact, pd.DataFrame) and not artifact.empty:
-                artifact.to_excel(writer, sheet_name=sheet, index=False)
-    print(f"[soiling-run] hasil: {out_xlsx}")
-    manual = detector.artifacts.get("ManualCleaning")
-    if isinstance(manual, pd.DataFrame) and not manual.empty:
-        print(f"[soiling-run] manual cleaning: {len(manual)} string-event, "
-              f"{manual['date'].nunique()} hari "
-              f"({manual['date'].min().date()}..{manual['date'].max().date()})")
-    econ = detector.artifacts.get("EconomicAnalysis")
-    if isinstance(econ, pd.DataFrame) and not econ.empty:
-        print("[soiling-run] EconomicAnalysis:")
-        print(econ.to_string(index=False))
 
 
 if __name__ == "__main__":

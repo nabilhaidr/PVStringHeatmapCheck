@@ -402,6 +402,56 @@ def _ci_bounds(sr_ci) -> Tuple[float, float]:
         return float("nan"), float("nan")
 
 
+CLEANING_IMPACT_COLUMNS: List[str] = [
+    "date", "sr_before", "sr_after", "uplift_pct",
+    "energy_recovered_kwh_per_day", "rupiah_per_day", "likely_cause",
+]
+
+
+def build_cleaning_impact(
+    cleaning_events: pd.DataFrame,
+    avg_daily_kwh: float,
+    tariff_idr_per_kwh: float,
+) -> pd.DataFrame:
+    """Dampak tiap event cleaning (batas antar interval SRR): PR sebelum vs
+    sesudah, uplift, energi & rupiah yang dipulihkan per hari.
+
+    Satu event = transisi interval i-1 -> i (rdtools memotong deret di
+    tiap cleaning). sr_before = ``inferred_end_loss`` interval sebelumnya
+    (kotor, tepat sebelum dibersihkan); sr_after = ``inferred_start_loss``
+    interval berikutnya (bersih, tepat sesudah). Keduanya soiling ratio
+    (fraksi performa dipertahankan). Energi dipulihkan/hari =
+    uplift * avg_daily_kwh (aproksimasi; avg_daily_kwh = actual soiled
+    energy 30 hari terakhir).
+    """
+    empty = pd.DataFrame(columns=CLEANING_IMPACT_COLUMNS)
+    if cleaning_events is None or cleaning_events.empty:
+        return empty
+    if not {"start", "inferred_start_loss", "inferred_end_loss"} <= set(cleaning_events.columns):
+        return empty
+
+    df = cleaning_events.sort_values("start").reset_index(drop=True)
+    rows = []
+    for i in range(1, len(df)):
+        prev, cur = df.iloc[i - 1], df.iloc[i]
+        sr_before = float(prev["inferred_end_loss"])
+        sr_after = float(cur["inferred_start_loss"])
+        if not (np.isfinite(sr_before) and np.isfinite(sr_after)):
+            continue
+        uplift = sr_after - sr_before
+        energy = uplift * float(avg_daily_kwh)
+        rows.append({
+            "date": pd.Timestamp(cur["start"]).normalize(),
+            "sr_before": sr_before,
+            "sr_after": sr_after,
+            "uplift_pct": uplift * 100.0,
+            "energy_recovered_kwh_per_day": energy,
+            "rupiah_per_day": energy * float(tariff_idr_per_kwh),
+            "likely_cause": cur.get("likely_cause", "unknown"),
+        })
+    return pd.DataFrame(rows, columns=CLEANING_IMPACT_COLUMNS)
+
+
 def _parse_wb_filter(value) -> Optional[set]:
     """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
 
@@ -833,6 +883,14 @@ class M2aSoiling(SubModule):
                     )
             except Exception:
                 pass
+
+        # Artifact: CleaningImpact -- uplift eksplisit per event cleaning
+        # (PR before/after, energi & rupiah dipulihkan/hari).
+        ce = self.artifacts.get("CleaningEvents")
+        if isinstance(ce, pd.DataFrame) and not ce.empty:
+            self.artifacts["CleaningImpact"] = build_cleaning_impact(
+                ce, avg_daily_kwh, tariff_idr,
+            )
 
         # Artifact: EconomicAnalysis (always emitted if SRR succeeded).
         self.artifacts["EconomicAnalysis"] = pd.DataFrame([{
