@@ -230,6 +230,12 @@ m2a_soiling:
   cleaning_cost_idr: 0.0             # USER MUST PROVIDE -- cost per cleaning event
   electricity_tariff_idr_per_kwh: 1500.0  # IKN PLTS PPA estimate
   payback_threshold_days: 30.0       # payback < threshold -> recommend cleaning
+  # Koreksi suhu PR sebelum SRR (pakai CellTempProvider). Menghilangkan
+  # depresi suhu musiman -> SRR lebih akurat + Temp_Loss eksplisit di
+  # EconomicAnalysis. Butuh site_geometry (Tcell) + panel_spec (gamma).
+  temperature_correction: true
+  temp_coef_pmax_pct_per_c: -0.29    # gamma Pmax Jinko JKM625N (kosong = dari panel_spec)
+  temp_ref_c: 25.0                   # referensi STC
   precipitation_path: ""             # Optional BMKG CSV/xlsx daily mm path
   # Rekap manual cleaning (checklist TRUE per string per tanggal, sheet STSn).
   # Contoh: "raw data input/Report & Schedule Cleaning PLTS IKN.xlsx"

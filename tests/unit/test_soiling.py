@@ -554,3 +554,36 @@ def test_build_direct_cleaning_impact_empty_inputs():
     from pv_pipeline.m2a.soiling import build_direct_cleaning_impact
 
     assert build_direct_cleaning_impact(pd.Series(dtype=float), pd.DataFrame(), 1.0, 1.0).empty
+
+
+# ============================================================================
+# Temperature correction (temp_correction_factor + PR temp-corrected)
+# ============================================================================
+
+
+def test_temp_correction_factor_reduces_below_one_when_hot():
+    from pv_pipeline.m2a.soiling import temp_correction_factor
+    import numpy as np
+
+    # gamma=-0.29 %/C, ref 25. Tcell=45 -> CF = 1 + (-0.29/100)*20 = 0.942.
+    assert temp_correction_factor(45.0, -0.29, 25.0) == pytest.approx(0.942)
+    assert temp_correction_factor(25.0, -0.29, 25.0) == pytest.approx(1.0)
+    cf = temp_correction_factor(np.array([25.0, 45.0]), -0.29, 25.0)
+    assert cf[1] == pytest.approx(0.942)
+
+
+def test_compute_daily_pr_series_temp_factor_raises_corrected_pr():
+    """PR temp-corrected = E/(H*cap*CF). CF<1 (panas) -> PR naik & flat."""
+    dates = pd.to_datetime(["2026-01-01", "2026-01-02"])
+    energy = pd.Series([930.0, 930.0], index=dates)   # energi sama
+    insol = pd.Series([5.0, 5.0], index=dates)
+    tf = pd.Series([1.0, 0.93], index=dates)          # hari-2 lebih panas
+
+    raw = compute_daily_pr_series(energy, insol, 1000.0)
+    corr = compute_daily_pr_series(energy, insol, 1000.0, temp_factor_daily=tf)
+
+    # Tanpa koreksi: PR hari-2 = hari-1 (energi & insol sama).
+    assert raw.iloc[0] == pytest.approx(raw.iloc[1])
+    # Dengan koreksi: hari-2 (panas) di-scale naik -> lebih tinggi dari hari-1.
+    assert corr.iloc[1] == pytest.approx(raw.iloc[1] / 0.93)
+    assert corr.iloc[1] > corr.iloc[0]

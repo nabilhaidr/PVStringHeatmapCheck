@@ -129,6 +129,11 @@ DEFAULT_CLEANING_REPORT_PATH: str = ""       # empty -> skip manual cleaning joi
 DEFAULT_DC_CABLE_LIST_PATH: str = ""         # empty -> ST==PV identity semua WB
 DEFAULT_CLEANING_MATCH_WINDOW_DAYS: int = 3
 DEFAULT_CLEANING_PRECIP_THRESHOLD_MM: float = 1.0
+# Koreksi suhu PR (default OFF di kode; config produksi m2_config.yaml set
+# true). gamma Pmax Jinko JKM625N = -0.29 %/C, referensi STC 25 C.
+DEFAULT_TEMPERATURE_CORRECTION: bool = False
+DEFAULT_TEMP_COEF_PMAX_PCT_PER_C: float = -0.29
+DEFAULT_TEMP_REF_C: float = 25.0
 DEFAULT_PV_MAX: int = 28
 DEFAULT_HOUR_RANGE: Tuple[float, float] = (6.0, 18.0)
 DEFAULT_RDTOOLS_REPS: int = 1000             # Monte Carlo reps
@@ -249,23 +254,46 @@ def aggregate_daily(
     return daily
 
 
+def temp_correction_factor(
+    tcell_c,
+    gamma_pmax_pct_per_c: float = DEFAULT_TEMP_COEF_PMAX_PCT_PER_C,
+    ref_c: float = DEFAULT_TEMP_REF_C,
+):
+    """Faktor koreksi suhu Pmax: CF = 1 + (gamma/100) * (Tcell - ref).
+
+    gamma negatif (Pmax turun saat panas): CF < 1 saat Tcell > ref. Dipakai
+    di penyebut PR agar depresi suhu dihilangkan -> PR flat lintas musim,
+    soiling terisolasi. Menerima skalar/Series/array.
+    """
+    return 1.0 + (gamma_pmax_pct_per_c / 100.0) * (tcell_c - ref_c)
+
+
 def compute_daily_pr_series(
     pr_energy_daily: pd.Series,
     insolation_daily_kwh_per_m2: pd.Series,
     capacity_kwp: float,
+    temp_factor_daily: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """PR_daily = E_daily / (H_daily * capacity_kwp), per IEC 61724-1.
+    """PR_daily = E_daily / (H_daily * capacity_kwp * TempFactor), IEC 61724-1.
 
-    Returns daily PR series aligned to common date index. NaN where
-    insolation is too low or PR out of physical range (0..1.5).
+    ``temp_factor_daily`` (opsional) = faktor koreksi suhu ternormalisasi
+    insolasi per hari; bila diberikan, PR jadi temperature-corrected. NaN
+    di mana insolasi/temp_factor invalid atau PR di luar rentang fisik
+    (0..1.5).
     """
-    aligned = pd.DataFrame({
+    cols = {
         "energy": pr_energy_daily,
         "insolation": insolation_daily_kwh_per_m2,
-    }).dropna()
+    }
+    if temp_factor_daily is not None:
+        cols["temp_factor"] = temp_factor_daily
+    aligned = pd.DataFrame(cols).dropna()
     if aligned.empty or capacity_kwp <= 0:
         return pd.Series(dtype=float)
-    pr = aligned["energy"] / (aligned["insolation"] * capacity_kwp)
+    denom = aligned["insolation"] * capacity_kwp
+    if temp_factor_daily is not None:
+        denom = denom * aligned["temp_factor"].replace(0.0, np.nan)
+    pr = aligned["energy"] / denom
     pr = pr[(pr >= 0.0) & (pr <= 1.5)]
     return pr
 
@@ -622,9 +650,11 @@ class M2aSoiling(SubModule):
 
     name: str = "M2a_soiling"
 
-    def __init__(self, poa=None):
+    def __init__(self, poa=None, cell_temp=None, panel=None):
         super().__init__()
         self.poa = poa
+        self.cell_temp = cell_temp
+        self.panel = panel
 
     def _ensure_providers(self, config: dict) -> None:
         if self.poa is None:
@@ -635,22 +665,73 @@ class M2aSoiling(SubModule):
             )
             self.poa = POAProvider.from_yaml(geom_path)
 
+        # Cell-temp + panel hanya untuk koreksi suhu (opsional, non-fatal):
+        # kalau gagal init, koreksi dilewati (temp_factor=1).
+        cfg = config.get("m2a_soiling", {}) or {}
+        if not bool(cfg.get("temperature_correction", DEFAULT_TEMPERATURE_CORRECTION)):
+            return
+        geom_path = (
+            config.get("poa", {})
+            .get("site_geometry_path", "config/site_geometry.yaml")
+        )
+        if self.cell_temp is None:
+            try:
+                from pv_pipeline.cell_temp import CellTempProvider
+                self.cell_temp = CellTempProvider.from_geometry_yaml(geom_path)
+            except Exception as exc:
+                warnings.warn(
+                    f"[M2aSoiling] CellTempProvider init gagal ({exc}); "
+                    "koreksi suhu dilewati (temp_factor=1).",
+                    stacklevel=2,
+                )
+        if self.panel is None:
+            try:
+                from pv_pipeline.panel_spec import PanelSpec
+                panel_path = config.get("panel", {}).get(
+                    "spec_path", "config/panel_spec.yaml"
+                )
+                self.panel = PanelSpec.from_yaml(panel_path)
+            except Exception as exc:
+                warnings.warn(
+                    f"[M2aSoiling] PanelSpec init gagal ({exc}); "
+                    "koreksi suhu pakai gamma default.",
+                    stacklevel=2,
+                )
+
+    def _panel_gamma(self, cfg: dict) -> float:
+        """gamma Pmax (%/C): cfg override > panel spec > default."""
+        if "temp_coef_pmax_pct_per_c" in cfg:
+            return float(cfg["temp_coef_pmax_pct_per_c"])
+        panel = getattr(self, "panel", None)
+        tc = getattr(panel, "temp_coef", None)
+        if tc is not None and getattr(tc, "pmax_pct_per_c", None) is not None:
+            return float(tc.pmax_pct_per_c)
+        return DEFAULT_TEMP_COEF_PMAX_PCT_PER_C
+
     def _build_daily_series(
         self,
         combined_df: pd.DataFrame,
         cfg: dict,
         empty_map: dict,
-    ) -> Tuple[pd.Series, pd.Series]:
-        """Aggregate all inverters into site-level daily energy + insolation.
+    ) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """Aggregate all inverters into site-level daily energy + insolation
+        + faktor koreksi suhu.
 
-        Returns (energy_daily_kwh, insolation_daily_kwh_per_m2).
-        Both pd.Series indexed by normalized date.
+        Returns (energy_daily_kwh, insolation_daily_kwh_per_m2,
+        temp_factor_daily). temp_factor_daily = insolation-weighted CF per
+        hari (=1.0 bila koreksi off/cell-temp tak tersedia).
         """
         pv_max = int(cfg.get("pv_max", DEFAULT_PV_MAX))
         freq_hours = float(cfg.get("sample_freq_hours", DEFAULT_SAMPLE_FREQ_HOURS))
+        temp_enabled = bool(cfg.get(
+            "temperature_correction", DEFAULT_TEMPERATURE_CORRECTION
+        )) and self.cell_temp is not None
+        gamma = self._panel_gamma(cfg)
+        ref_c = float(cfg.get("temp_ref_c", DEFAULT_TEMP_REF_C))
 
         all_energy_per_ts: List[pd.Series] = []
         all_poa_per_ts: List[pd.Series] = []
+        all_poa_cf_per_ts: List[pd.Series] = []   # poa * CF (untuk temp_factor)
 
         for inverter_id, group in combined_df.groupby("Inverter_ID"):
             inv_empties = set(int(n) for n in empty_map.get(str(inverter_id).upper(), []))
@@ -671,10 +752,8 @@ class M2aSoiling(SubModule):
             wb_id = wb_parts[0].upper() if wb_parts else str(inverter_id).upper()
             try:
                 poa = self.poa.get_poa(ts_clean, wb_id, source="auto")
-                all_poa_per_ts.append(pd.Series(
-                    poa.reindex(ts_clean).fillna(0.0).values,
-                    index=ts_clean,
-                ))
+                poa_vals = poa.reindex(ts_clean).fillna(0.0).values
+                all_poa_per_ts.append(pd.Series(poa_vals, index=ts_clean))
             except Exception as exc:
                 warnings.warn(
                     f"[M2aSoiling] POA query failed (wb={wb_id}): {exc}",
@@ -682,8 +761,25 @@ class M2aSoiling(SubModule):
                 )
                 continue
 
+            cf_vals = np.ones(len(ts_clean), dtype=float)
+            if temp_enabled:
+                try:
+                    tcell = self.cell_temp.get_tcell(ts_clean, wb_id, source="auto")
+                    tcell = pd.to_numeric(
+                        tcell.reindex(ts_clean), errors="coerce"
+                    ).to_numpy()
+                    cf = temp_correction_factor(tcell, gamma, ref_c)
+                    cf_vals = np.where(np.isfinite(cf), cf, 1.0)
+                except Exception as exc:
+                    warnings.warn(
+                        f"[M2aSoiling] Tcell query failed (wb={wb_id}): {exc}; "
+                        "CF=1 untuk inverter ini.",
+                        stacklevel=2,
+                    )
+            all_poa_cf_per_ts.append(pd.Series(poa_vals * cf_vals, index=ts_clean))
+
         if not all_energy_per_ts:
-            return pd.Series(dtype=float), pd.Series(dtype=float)
+            return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
 
         # Site-aggregate per timestamp: sum energy, mean POA (POA shared site).
         energy_concat = pd.concat(all_energy_per_ts).groupby(level=0).sum()
@@ -696,7 +792,18 @@ class M2aSoiling(SubModule):
             poa_concat.index, poa_concat.values / 1000.0,
             freq_hours=freq_hours,
         )
-        return energy_daily, poa_daily_kwh
+
+        # temp_factor_daily = insolation-weighted CF: sum(poa*CF)/sum(poa) per
+        # hari (skala POA batal sebagai rasio). =1.0 kalau koreksi off.
+        if temp_enabled and all_poa_cf_per_ts:
+            poacf_sum = pd.concat(all_poa_cf_per_ts).groupby(level=0).sum()
+            poa_sum = pd.concat(all_poa_per_ts).groupby(level=0).sum()
+            poacf_daily = aggregate_daily(poacf_sum.index, poacf_sum.values, freq_hours=freq_hours)
+            poaw_daily = aggregate_daily(poa_sum.index, poa_sum.values, freq_hours=freq_hours)
+            temp_factor_daily = (poacf_daily / poaw_daily.replace(0.0, np.nan)).fillna(1.0)
+        else:
+            temp_factor_daily = pd.Series(1.0, index=poa_daily_kwh.index)
+        return energy_daily, poa_daily_kwh, temp_factor_daily
 
     def run(self, combined_df: pd.DataFrame, config: dict) -> List[M2Finding]:
         cfg = config.get("m2a_soiling", {}) or {}
@@ -760,13 +867,30 @@ class M2aSoiling(SubModule):
             )
             return []
 
-        # Build daily PR series.
-        energy_daily, insolation_daily = self._build_daily_series(
+        # Build daily PR series (temperature-corrected bila diaktifkan).
+        temp_correction = bool(cfg.get(
+            "temperature_correction", DEFAULT_TEMPERATURE_CORRECTION
+        ))
+        energy_daily, insolation_daily, temp_factor_daily = self._build_daily_series(
             combined_df, cfg, empty_map,
         )
         pr_daily = compute_daily_pr_series(
             energy_daily, insolation_daily, capacity_kwp,
+            temp_factor_daily=temp_factor_daily if temp_correction else None,
         )
+        # Temp_Loss = insolation-weighted (1 - CF) sepanjang periode, %.
+        temp_loss_pct = float("nan")
+        if temp_correction and not insolation_daily.empty:
+            aligned_tf = pd.DataFrame({
+                "insolation": insolation_daily,
+                "temp_factor": temp_factor_daily,
+            }).dropna()
+            w = aligned_tf["insolation"].sum()
+            if w > 0:
+                tf_overall = float(
+                    (aligned_tf["insolation"] * aligned_tf["temp_factor"]).sum() / w
+                )
+                temp_loss_pct = (1.0 - tf_overall) * 100.0
 
         n_days = int(pr_daily.size)
         findings: List[M2Finding] = []
@@ -958,6 +1082,8 @@ class M2aSoiling(SubModule):
                 "payback_days": payback_days if np.isfinite(payback_days) else None,
                 "cleaning_cost_idr": cleaning_cost_idr,
                 "electricity_tariff_idr_per_kwh": tariff_idr,
+                "temperature_correction": temp_correction,
+                "temp_loss_pct": temp_loss_pct if np.isfinite(temp_loss_pct) else None,
             },
         ))
 
@@ -1008,6 +1134,8 @@ class M2aSoiling(SubModule):
             "payback_days": payback_days if np.isfinite(payback_days) else float("nan"),
             "cleaning_cost_idr": cleaning_cost_idr,
             "tariff_idr_per_kwh": tariff_idr,
+            "temperature_correction": temp_correction,
+            "temp_loss_pct": temp_loss_pct,
             "recommend_cleaning": recommend,
             "severity": severity.value,
         }])
