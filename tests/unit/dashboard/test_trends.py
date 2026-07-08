@@ -7,7 +7,9 @@ import pandas as pd
 from pv_pipeline.dashboard.data.trends import (
     findings_counts_per_day,
     numeric_metric_per_day,
+    soiling_ratio_per_day,
     status_counts_per_day,
+    wide_counts_per_day,
 )
 
 
@@ -85,3 +87,49 @@ def test_window_errors_group_by_source_date_not_internal_date():
     out = numeric_metric_per_day(df, "error_ratio", aggs=("max",))
     assert list(out["source_date"]) == [date(2026, 5, 1)]
     assert out["error_ratio_max"].iloc[0] == 1.5
+
+
+def test_soiling_ratio_per_day_passthrough_and_coerce():
+    df = pd.DataFrame({
+        "source_date": [date(2026, 5, 1), date(2026, 5, 2)],
+        "soiling_ratio": ["0.98", 0.95],
+        "sr_ci_lower": [0.97, 0.94],
+        "sr_ci_upper": [0.99, 0.96],
+        "recommend_cleaning": [False, True],
+    })
+    out = soiling_ratio_per_day(df)
+    assert out["soiling_ratio"].iloc[0] == 0.98
+    assert bool(out["recommend_cleaning"].iloc[1]) is True
+
+
+def test_soiling_ratio_per_day_missing_optional_ci_columns_still_present():
+    df = pd.DataFrame({"source_date": [date(2026, 5, 1)], "soiling_ratio": [0.98]})
+    out = soiling_ratio_per_day(df)
+    assert out["soiling_ratio"].iloc[0] == 0.98
+    assert "sr_ci_lower" in out.columns
+    assert pd.isna(out["sr_ci_lower"].iloc[0])
+
+
+def test_soiling_ratio_per_day_missing_required_returns_empty():
+    out = soiling_ratio_per_day(pd.DataFrame({"source_date": [date(2026, 5, 1)]}))
+    assert out.empty
+
+
+def test_wide_counts_per_day_melts_count_columns_to_long():
+    df = pd.DataFrame({
+        "source_date": [date(2026, 5, 1), date(2026, 5, 2)],
+        "normal": [10, 12],
+        "low_irradiance_underperform": [2, 1],
+        "general_underperform": [1, 0],
+        "skipped": [0, 3],
+    })
+    cols = ["normal", "low_irradiance_underperform", "general_underperform", "skipped"]
+    out = wide_counts_per_day(df, cols)
+    assert len(out) == 8
+    cell = out[(out["source_date"] == date(2026, 5, 1)) & (out["classification"] == "normal")]
+    assert int(cell["count"].iloc[0]) == 10
+
+
+def test_wide_counts_per_day_missing_all_count_cols_returns_empty():
+    out = wide_counts_per_day(pd.DataFrame({"source_date": [date(2026, 5, 1)]}), ["normal"])
+    assert out.empty

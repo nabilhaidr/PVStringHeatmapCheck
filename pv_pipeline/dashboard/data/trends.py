@@ -51,3 +51,45 @@ def numeric_metric_per_day(
     grouped = work.groupby("source_date")[value_col].agg(list(aggs))
     grouped.columns = [f"{value_col}_{agg}" for agg in aggs]
     return grouped.reset_index()
+
+
+def soiling_ratio_per_day(econ_df: pd.DataFrame) -> pd.DataFrame:
+    """Return soiling ratio and confidence interval columns per source_date."""
+    cols = ["source_date", "soiling_ratio", "sr_ci_lower", "sr_ci_upper", "recommend_cleaning"]
+    if (
+        econ_df is None
+        or econ_df.empty
+        or not {"source_date", "soiling_ratio"}.issubset(econ_df.columns)
+    ):
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame({"source_date": econ_df["source_date"].to_numpy()})
+    for col in ["soiling_ratio", "sr_ci_lower", "sr_ci_upper"]:
+        out[col] = (
+            pd.to_numeric(econ_df[col], errors="coerce").to_numpy()
+            if col in econ_df.columns
+            else pd.NA
+        )
+    out["recommend_cleaning"] = (
+        econ_df["recommend_cleaning"].to_numpy()
+        if "recommend_cleaning" in econ_df.columns
+        else pd.NA
+    )
+    return out.reset_index(drop=True)
+
+
+def wide_counts_per_day(df: pd.DataFrame, count_cols: list[str]) -> pd.DataFrame:
+    """Melt wide count columns into classification rows per source_date."""
+    cols = ["source_date", "classification", "count"]
+    if df is None or df.empty or "source_date" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    present = [col for col in count_cols if col in df.columns]
+    if not present:
+        return pd.DataFrame(columns=cols)
+    long = df.melt(
+        id_vars="source_date",
+        value_vars=present,
+        var_name="classification",
+        value_name="count",
+    )
+    long["count"] = pd.to_numeric(long["count"], errors="coerce").fillna(0)
+    return long.groupby(["source_date", "classification"], as_index=False)["count"].sum()
