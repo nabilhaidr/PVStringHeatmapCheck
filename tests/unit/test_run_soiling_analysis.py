@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from pv_pipeline.m2a.soiling import _load_precipitation
 from run_soiling_analysis import (
@@ -114,3 +115,31 @@ def test_load_baseline_for_soiling_prefers_active_power_and_drops_pv_cols(tmp_pa
 
     assert list(df.columns) == ["Inverter_ID", "Start Time", "Active power(kW)"]
     assert len(df) == 3
+
+
+def test_load_baseline_with_per_string_daily_energy(tmp_path):
+    """with_per_string=True: return (combined, string_daily). Energi string =
+    sum(P kW) x 5/60 jam per hari; kolom PV yang seluruhnya NaN (slot kosong)
+    tidak menghasilkan baris."""
+    csv_path = tmp_path / "2026-05-14.csv"
+    pd.DataFrame({
+        "Inverter_ID": ["WB05-INV01"] * 3,
+        "Start Time": pd.date_range("2026-05-14 06:00", periods=3, freq="5min"),
+        "Active power(kW)": [100.0, 110.0, 120.0],
+        "PV1 Power(kW)": [12.0, 12.0, 12.0],
+        "PV2 Power(kW)": [None, None, None],
+    }).to_csv(csv_path, index=False)
+
+    combined, string_daily = load_baseline_for_soiling(
+        [(pd.Timestamp("2026-05-14"), str(csv_path))], with_per_string=True,
+    )
+
+    # combined tetap ramping (active power saja).
+    assert list(combined.columns) == ["Inverter_ID", "Start Time", "Active power(kW)"]
+    # string_daily: hanya PV1 (PV2 all-NaN), energi = 36 kW x 5/60 = 3.0 kWh.
+    assert len(string_daily) == 1
+    row = string_daily.iloc[0]
+    assert row["Inverter_ID"] == "WB05-INV01"
+    assert row["pv"] == 1
+    assert row["date"] == pd.Timestamp("2026-05-14")
+    assert row["energy_kwh"] == pytest.approx(3.0)

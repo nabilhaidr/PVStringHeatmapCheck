@@ -587,3 +587,83 @@ def test_compute_daily_pr_series_temp_factor_raises_corrected_pr():
     # Dengan koreksi: hari-2 (panas) di-scale naik -> lebih tinggi dari hari-1.
     assert corr.iloc[1] == pytest.approx(raw.iloc[1] / 0.93)
     assert corr.iloc[1] > corr.iloc[0]
+
+
+# ============================================================================
+# Per-string DirectCleaningImpact + kapasitas per inverter
+# ============================================================================
+
+
+def test_inverter_capacity_kwp_from_empty_map():
+    """WB01 18 string aktif x 24 modul x 625 Wp = 270 kWp (x50 inv = 13500 ~
+    nameplate WB01). WB05 tanpa slot kosong = 28 x 26 x 625 Wp = 455 kWp."""
+    from pv_pipeline.m2a.soiling import _inverter_capacity_kwp, _string_capacity_kwp
+
+    empty_map = {"WB01-INV01": list(range(19, 29))}  # 10 slot kosong
+    assert _inverter_capacity_kwp("WB01-INV01", empty_map) == pytest.approx(270.0)
+    assert _inverter_capacity_kwp("WB05-INV01", {}) == pytest.approx(455.0)
+    assert _string_capacity_kwp("WB01-INV01") == pytest.approx(15.0)
+    assert _string_capacity_kwp("WB03-INV02") == pytest.approx(16.25)
+
+
+def test_build_direct_cleaning_impact_per_string_ranks_dirtiest_first():
+    """Dua string dibersihkan pada campaign yang sama; PV10 lebih kotor
+    (uplift besar) harus rank 1. pr = (E/H)/cap_string; event pv=NaN skip."""
+    from pv_pipeline.m2a.soiling import build_direct_cleaning_impact_per_string
+
+    idx = pd.date_range("2026-03-01", "2026-03-25", freq="D")
+    insol = pd.Series(5.0, index=idx)
+    cap = 16.25  # WB03: 26 modul x 625 Wp
+
+    def energy(pr):
+        return pr * 5.0 * cap
+
+    rows = []
+    for d in idx:
+        dirty = d < pd.Timestamp("2026-03-10")
+        clean = d > pd.Timestamp("2026-03-11")
+        if not (dirty or clean):
+            continue
+        rows.append({"date": d, "Inverter_ID": "WB03-INV01", "pv": 10,
+                     "energy_kwh": energy(0.72 if dirty else 0.90)})
+        rows.append({"date": d, "Inverter_ID": "WB03-INV01", "pv": 11,
+                     "energy_kwh": energy(0.87 if dirty else 0.90)})
+    string_daily = pd.DataFrame(rows)
+
+    manual = pd.DataFrame({
+        "date": pd.to_datetime(["2026-03-10", "2026-03-11",
+                                "2026-03-10", "2026-03-10"]),
+        "inverter_id": ["WB03-INV01"] * 3 + ["WB03-INV13"],
+        "pv": [10, 10, 11, np.nan],   # baris NaN = string tanpa mapping -> skip
+        "st": [5, 5, 6, 1],
+        "wb": [3, 3, 3, 3],
+    })
+
+    out = build_direct_cleaning_impact_per_string(
+        string_daily, insol, manual, window_days=7, gap_days=7, min_window_days=2,
+    )
+
+    assert len(out) == 2
+    top = out.iloc[0]
+    assert (top["inverter_id"], top["pv"], top["st"]) == ("WB03-INV01", 10, 5)
+    assert top["rank_uplift"] == 1
+    assert top["cleaning_start"] == pd.Timestamp("2026-03-10")
+    assert top["cleaning_end"] == pd.Timestamp("2026-03-11")
+    assert top["pr_before"] == pytest.approx(0.72)
+    assert top["pr_after"] == pytest.approx(0.90)
+    assert top["uplift_pct"] == pytest.approx((0.90 - 0.72) / 0.90 * 100.0)
+    second = out.iloc[1]
+    assert second["pv"] == 11 and second["rank_uplift"] == 2
+    assert second["uplift_pct"] == pytest.approx((0.90 - 0.87) / 0.90 * 100.0)
+
+
+def test_build_direct_cleaning_impact_per_string_empty_inputs():
+    from pv_pipeline.m2a.soiling import (
+        build_direct_cleaning_impact_per_string, DIRECT_PER_STRING_COLUMNS,
+    )
+
+    out = build_direct_cleaning_impact_per_string(
+        pd.DataFrame(), pd.Series(dtype=float), pd.DataFrame(),
+    )
+    assert list(out.columns) == DIRECT_PER_STRING_COLUMNS
+    assert out.empty

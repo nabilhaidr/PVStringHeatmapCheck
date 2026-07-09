@@ -99,6 +99,7 @@ References
 from __future__ import annotations
 
 import os
+import re
 import warnings
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -569,6 +570,142 @@ def build_direct_cleaning_impact(
     return pd.DataFrame(rows, columns=DIRECT_CLEANING_IMPACT_COLUMNS)
 
 
+DEFAULT_MODULE_WP: float = 625.0
+MODULES_PER_STRING_BY_WB = {1: 24, 2: 24}   # selain WB01/02 -> 26 modul/string
+
+
+def _wb_number(inverter_id: str) -> Optional[int]:
+    m = re.match(r"WB(\d+)", str(inverter_id).upper())
+    return int(m.group(1)) if m else None
+
+
+def _modules_per_string(wb: Optional[int]) -> int:
+    return MODULES_PER_STRING_BY_WB.get(wb, 26)
+
+
+def _string_capacity_kwp(inverter_id: str) -> float:
+    """Kapasitas DC satu string (kWp): modul/string x 625 Wp."""
+    return _modules_per_string(_wb_number(inverter_id)) * DEFAULT_MODULE_WP / 1000.0
+
+
+def _inverter_capacity_kwp(
+    inverter_id: str,
+    empty_map: dict,
+    pv_max: int = DEFAULT_PV_MAX,
+) -> float:
+    """Kapasitas DC satu inverter (kWp) = string aktif x kapasitas string.
+
+    String aktif = pv_max - slot kosong by design (empty_pv_map strings.yaml).
+    Sanity: WB01 18 string x 24 x 625 Wp = 270 kWp x 50 inverter = 13500 ~
+    nameplate WB01.
+    """
+    empties = empty_map.get(str(inverter_id).upper(), []) or []
+    n_strings = max(pv_max - len(empties), 0)
+    return n_strings * _string_capacity_kwp(inverter_id)
+
+
+DIRECT_PER_STRING_COLUMNS: List[str] = [
+    "inverter_id", "pv", "st", "cleaning_start", "cleaning_end",
+    "n_days_before", "n_days_after", "pr_before", "pr_after",
+    "uplift_pct", "rank_uplift",
+]
+
+
+def build_direct_cleaning_impact_per_string(
+    string_energy_daily: pd.DataFrame,
+    insolation_daily: pd.Series,
+    manual_events: pd.DataFrame,
+    *,
+    window_days: int = DEFAULT_DIRECT_WINDOW_DAYS,
+    gap_days: int = DEFAULT_DIRECT_GAP_DAYS,
+    min_window_days: int = DEFAULT_DIRECT_MIN_WINDOW_DAYS,
+) -> pd.DataFrame:
+    """Pre/post PR PER STRING di sekitar tanggal cleaning string itu sendiri
+    (independen SRR). Menangkap soiling NON-UNIFORM yang tak terlihat di
+    agregat: string ber-uplift tinggi = paling kotor; uplift ~0 = cleaning
+    tak berdampak (kandidat masalah non-soiling).
+
+    ``string_energy_daily``: long df kolom [date, Inverter_ID, pv,
+    energy_kwh] (hasil loader per-string). PR string = (E_str / H_POA) /
+    kapasitas_string; uplift = (pr_after - pr_before) / pr_after. Koreksi
+    suhu tidak diterapkan di level string (jendela pre/post berdekatan,
+    drift suhu musiman ~batal). ``rank_uplift`` = 1 untuk uplift terbesar.
+    """
+    empty = pd.DataFrame(columns=DIRECT_PER_STRING_COLUMNS)
+    if string_energy_daily is None or string_energy_daily.empty:
+        return empty
+    if manual_events is None or manual_events.empty:
+        return empty
+    if insolation_daily is None or insolation_daily.empty:
+        return empty
+
+    insol = insolation_daily.copy()
+    insol.index = pd.DatetimeIndex(insol.index).normalize()
+    insol = insol[~insol.index.duplicated()].replace(0.0, np.nan)
+
+    se = string_energy_daily.copy()
+    se["date"] = pd.to_datetime(se["date"], errors="coerce").dt.normalize()
+    se = se.dropna(subset=["date"])
+    se["y"] = se["energy_kwh"].to_numpy() / insol.reindex(se["date"]).to_numpy()
+    se = se.dropna(subset=["y"])
+
+    ev = manual_events.dropna(subset=["pv"]).copy()
+    if ev.empty:
+        return empty
+    ev["pv"] = ev["pv"].astype(int)
+    ev["date"] = pd.to_datetime(ev["date"], errors="coerce").dt.normalize()
+    ev = ev.dropna(subset=["date"])
+
+    win = pd.Timedelta(days=window_days)
+    rows = []
+    y_groups = {k: g.set_index("date")["y"].sort_index()
+                for k, g in se.groupby(["Inverter_ID", "pv"])}
+    for (inv_id, pv), g in ev.groupby(["inverter_id", "pv"]):
+        y = y_groups.get((inv_id, int(pv)))
+        if y is None or y.empty:
+            continue
+        cap = _string_capacity_kwp(inv_id)
+        st = g["st"].iloc[0] if "st" in g.columns else None
+        dates = sorted(g["date"].unique())
+        campaigns: List[List[pd.Timestamp]] = []
+        cur = [dates[0]]
+        for d in dates[1:]:
+            if (d - cur[-1]).days <= gap_days:
+                cur.append(d)
+            else:
+                campaigns.append(cur)
+                cur = [d]
+        campaigns.append(cur)
+        for camp in campaigns:
+            start, end = camp[0], camp[-1]
+            before = y[(y.index >= start - win) & (y.index < start)]
+            after = y[(y.index > end) & (y.index <= end + win)]
+            if len(before) < min_window_days or len(after) < min_window_days:
+                continue
+            y_b, y_a = float(before.mean()), float(after.mean())
+            if not (np.isfinite(y_b) and np.isfinite(y_a)) or y_a <= 0:
+                continue
+            rows.append({
+                "inverter_id": inv_id,
+                "pv": int(pv),
+                "st": st,
+                "cleaning_start": start,
+                "cleaning_end": end,
+                "n_days_before": int(len(before)),
+                "n_days_after": int(len(after)),
+                "pr_before": y_b / cap,
+                "pr_after": y_a / cap,
+                "uplift_pct": (y_a - y_b) / y_a * 100.0,
+            })
+    if not rows:
+        return empty
+    out = pd.DataFrame(rows)
+    out["rank_uplift"] = out["uplift_pct"].rank(ascending=False, method="min").astype(int)
+    return out.sort_values("uplift_pct", ascending=False, ignore_index=True)[
+        DIRECT_PER_STRING_COLUMNS
+    ]
+
+
 def _parse_wb_filter(value) -> Optional[set]:
     """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
 
@@ -728,6 +865,8 @@ class M2aSoiling(SubModule):
         )) and self.cell_temp is not None
         gamma = self._panel_gamma(cfg)
         ref_c = float(cfg.get("temp_ref_c", DEFAULT_TEMP_REF_C))
+        collect_per_inverter = bool(cfg.get("per_inverter_srr", False))
+        self._per_inverter_daily = {}
 
         all_energy_per_ts: List[pd.Series] = []
         all_poa_per_ts: List[pd.Series] = []
@@ -777,6 +916,14 @@ class M2aSoiling(SubModule):
                         stacklevel=2,
                     )
             all_poa_cf_per_ts.append(pd.Series(poa_vals * cf_vals, index=ts_clean))
+
+            if collect_per_inverter:
+                self._per_inverter_daily[str(inverter_id)] = (
+                    aggregate_daily(ts_clean, p_inv, freq_hours=freq_hours),
+                    aggregate_daily(
+                        ts_clean, poa_vals / 1000.0, freq_hours=freq_hours,
+                    ),
+                )
 
         if not all_energy_per_ts:
             return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
@@ -874,6 +1021,9 @@ class M2aSoiling(SubModule):
         energy_daily, insolation_daily, temp_factor_daily = self._build_daily_series(
             combined_df, cfg, empty_map,
         )
+        # Diekspos untuk konsumen eksternal (runner: PR per-string memakai
+        # insolation scope yang sama).
+        self.last_insolation_daily = insolation_daily
         pr_daily = compute_daily_pr_series(
             energy_daily, insolation_daily, capacity_kwp,
             temp_factor_daily=temp_factor_daily if temp_correction else None,
@@ -985,6 +1135,83 @@ class M2aSoiling(SubModule):
             )
             if not direct.empty:
                 self.artifacts["DirectCleaningImpact"] = direct
+
+        # Artifact: PerInverterSRR (opt-in cfg per_inverter_srr; mahal:
+        # ~194x soiling_srr). Ringkasan sr/p_loss per inverter -- interval
+        # CleaningImpact per inverter TIDAK diemit (ledakan baris); uplift
+        # granular pakai DirectCleaningImpactPerString. Ditempatkan sebelum
+        # SRR agregat supaya tetap terisi walau agregat NoValidIntervalError.
+        if getattr(self, "_per_inverter_daily", None):
+            per_reps = int(cfg.get("per_inverter_reps", 200))
+            inv_rows = []
+            for inv_id, (e_d, i_d) in sorted(self._per_inverter_daily.items()):
+                cap_inv = _inverter_capacity_kwp(
+                    inv_id, empty_map, pv_max=int(cfg.get("pv_max", DEFAULT_PV_MAX)),
+                )
+                pr_inv = compute_daily_pr_series(
+                    e_d, i_d, cap_inv,
+                    temp_factor_daily=temp_factor_daily if temp_correction else None,
+                )
+                row = {
+                    "inverter_id": inv_id,
+                    "capacity_kwp": cap_inv,
+                    "n_days": int(pr_inv.size),
+                    "sr": float("nan"),
+                    "sr_ci_lower": float("nan"),
+                    "sr_ci_upper": float("nan"),
+                    "p_loss_pct": float("nan"),
+                    "status": "",
+                }
+                if pr_inv.size < min_days:
+                    row["status"] = "insufficient_data"
+                else:
+                    pr_f, insol_f, precip_f = reindex_daily_frequency(
+                        pr_inv, i_d, precip_daily,
+                    )
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            res = soiling.soiling_srr(
+                                energy_normalized_daily=pr_f,
+                                insolation_daily=insol_f,
+                                precipitation_daily=precip_f,
+                                reps=per_reps,
+                                confidence_level=rdtools_ci,
+                                clean_criterion=rdtools_clean_criterion,
+                                precip_threshold=rdtools_precip_threshold,
+                                min_interval_length=rdtools_min_interval_length,
+                                day_scale=rdtools_day_scale,
+                            )
+                        inv_sr = (
+                            float(res[0])
+                            if isinstance(res, tuple) and np.isfinite(res[0])
+                            else float("nan")
+                        )
+                        lo, hi = _ci_bounds(
+                            res[1] if isinstance(res, tuple) and len(res) > 1 else None
+                        )
+                        row.update({
+                            "sr": inv_sr,
+                            "sr_ci_lower": lo,
+                            "sr_ci_upper": hi,
+                            "p_loss_pct": (
+                                (1.0 - inv_sr) * 100.0
+                                if np.isfinite(inv_sr) else float("nan")
+                            ),
+                            "status": "ok",
+                        })
+                    except Exception as exc:
+                        row["status"] = exc.__class__.__name__
+                inv_rows.append(row)
+            if inv_rows:
+                per_inv = pd.DataFrame(inv_rows)
+                per_inv["rank_p_loss"] = per_inv["p_loss_pct"].rank(
+                    ascending=False, method="min",
+                )
+                self.artifacts["PerInverterSRR"] = per_inv.sort_values(
+                    "p_loss_pct", ascending=False, na_position="last",
+                    ignore_index=True,
+                )
 
         try:
             sr_result = soiling.soiling_srr(

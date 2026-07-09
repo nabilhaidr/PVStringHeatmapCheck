@@ -64,7 +64,12 @@ from typing import List, Optional, Tuple
 import pandas as pd
 
 from pv_pipeline.m2_config import load_m2_config
-from pv_pipeline.m2a.soiling import ACTIVE_POWER_COL_CANDIDATES, M2aSoiling
+from pv_pipeline.m2a.soiling import (
+    ACTIVE_POWER_COL_CANDIDATES,
+    DEFAULT_SAMPLE_FREQ_HOURS,
+    M2aSoiling,
+    build_direct_cleaning_impact_per_string,
+)
 from train_lstm_ae import discover_baseline_csvs
 
 DEFAULT_RAINFALL_XLSX: List[str] = [
@@ -132,25 +137,49 @@ def write_precipitation_csv(precip_daily: pd.Series, out_path: str) -> str:
 
 def load_baseline_for_soiling(
     files: List[Tuple[pd.Timestamp, str]],
-) -> pd.DataFrame:
+    with_per_string: bool = False,
+):
     """Concat baseline CSV, kolom seperlunya saja (hemat memori multi-bulan).
 
     Detector memilih 'Active power(kW)' kalau ada; kolom PV{n} Power(kW)
     hanya dipertahankan bila file tidak punya kolom active power.
+
+    ``with_per_string=True``: return ``(combined_df, string_daily)`` --
+    string_daily = long df [date, Inverter_ID, pv, energy_kwh] hasil agregasi
+    harian per-string PER FILE (kolom PV lebar langsung diringkas sebelum
+    dibuang, jadi memorinya tetap kecil: ~4500 string x n hari).
     """
     wanted = set([TIMESTAMP_COL, INVERTER_COL]) | set(ACTIVE_POWER_COL_CANDIDATES)
     wanted |= set(PV_POWER_COLS)
     parts: List[pd.DataFrame] = []
+    string_parts: List[pd.DataFrame] = []
     for i, (day, path) in enumerate(files, start=1):
         df = pd.read_csv(path, usecols=lambda c: c in wanted)
+        if with_per_string:
+            pv_cols = [c for c in PV_POWER_COLS if c in df.columns]
+            if pv_cols:
+                wide = df.groupby(INVERTER_COL)[pv_cols].sum(min_count=1)
+                long = (wide * DEFAULT_SAMPLE_FREQ_HOURS).stack().rename("energy_kwh").reset_index()
+                long.columns = [INVERTER_COL, "pv_col", "energy_kwh"]
+                # pandas 3.x stack() tidak drop NaN -> slot PV kosong dibuang
+                # eksplisit di sini.
+                long = long.dropna(subset=["energy_kwh"])
+                long["pv"] = long["pv_col"].str.extract(r"PV(\d+)").astype(int)
+                long["date"] = pd.Timestamp(day).normalize()
+                string_parts.append(long[["date", INVERTER_COL, "pv", "energy_kwh"]])
         apc = next((c for c in ACTIVE_POWER_COL_CANDIDATES if c in df.columns), None)
         if apc is not None:
             df = df[[INVERTER_COL, TIMESTAMP_COL, apc]]
         parts.append(df)
         print(f"[{i}/{len(files)}] {day.date()}  rows={len(df)}")
-    if not parts:
-        return pd.DataFrame()
-    return pd.concat(parts, ignore_index=True)
+    combined = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if not with_per_string:
+        return combined
+    string_daily = (
+        pd.concat(string_parts, ignore_index=True) if string_parts
+        else pd.DataFrame(columns=["date", INVERTER_COL, "pv", "energy_kwh"])
+    )
+    return combined, string_daily
 
 
 def filter_combined_by_wb(combined_df: pd.DataFrame, wb_list: List[str]) -> pd.DataFrame:
@@ -178,8 +207,9 @@ PER_WB_CLEANING_COST_IDR = {
 }
 
 OUTPUT_SHEETS = [
-    "EconomicAnalysis", "DirectCleaningImpact", "CleaningImpact",
-    "SoilingRatio", "CleaningEvents", "ManualCleaning",
+    "EconomicAnalysis", "DirectCleaningImpact", "DirectCleaningImpactPerString",
+    "PerInverterSRR", "CleaningImpact", "SoilingRatio", "CleaningEvents",
+    "ManualCleaning",
 ]
 
 
@@ -193,6 +223,7 @@ def _run_and_save(
     wb_filter: Optional[List[str]],
     capacity_kwp: Optional[float],
     cleaning_cost_idr: Optional[float],
+    string_daily: Optional[pd.DataFrame] = None,
 ) -> None:
     """Jalankan M2aSoiling untuk satu konfigurasi (site atau subset WB) lalu
     tulis xlsx. combined_full dimuat sekali; difilter di sini bila wb_filter."""
@@ -219,6 +250,23 @@ def _run_and_save(
 
     detector = M2aSoiling()
     findings = detector.run(df, cfg)
+
+    # Sheet DirectCleaningImpactPerString: pre/post PR per string di sekitar
+    # tanggal cleaning string itu sendiri (independen SRR). Butuh string_daily
+    # dari loader + ManualCleaning & insolation dari detector.
+    if string_daily is not None and not string_daily.empty:
+        sd = filter_combined_by_wb(string_daily, wb_filter) if wb_filter else string_daily
+        manual = detector.artifacts.get("ManualCleaning")
+        insol = getattr(detector, "last_insolation_daily", None)
+        if (isinstance(manual, pd.DataFrame) and not manual.empty
+                and insol is not None and not insol.empty):
+            per_string = build_direct_cleaning_impact_per_string(
+                sd, insol, manual,
+                window_days=int(soil.get("direct_impact_window_days", 7)),
+                gap_days=int(soil.get("direct_impact_gap_days", 7)),
+            )
+            if not per_string.empty:
+                detector.artifacts["DirectCleaningImpactPerString"] = per_string
 
     print(f"[soiling-run] findings: {len(findings)}")
     rows = []
@@ -250,6 +298,21 @@ def _run_and_save(
         print(f"[soiling-run] DirectCleaningImpact (independen SRR): "
               f"{len(dci)} campaign; median soiling_loss_pct = "
               f"{dci['soiling_loss_pct'].median():.2f}%")
+    dps = detector.artifacts.get("DirectCleaningImpactPerString")
+    if isinstance(dps, pd.DataFrame) and not dps.empty:
+        top = dps.iloc[0]
+        print(f"[soiling-run] DirectCleaningImpactPerString: {len(dps)} "
+              f"string-campaign; median uplift = {dps['uplift_pct'].median():.2f}%; "
+              f"terkotor: {top['inverter_id']} PV{top['pv']} "
+              f"(uplift {top['uplift_pct']:.2f}%)")
+    pis = detector.artifacts.get("PerInverterSRR")
+    if isinstance(pis, pd.DataFrame) and not pis.empty:
+        ok = pis[pis["status"] == "ok"]
+        print(f"[soiling-run] PerInverterSRR: {len(pis)} inverter "
+              f"({len(ok)} ok); "
+              + (f"p_loss tertinggi: {ok.iloc[0]['inverter_id']} "
+                 f"({ok.iloc[0]['p_loss_pct']:.2f}%)" if not ok.empty
+                 else "tidak ada yang ok"))
     ci = detector.artifacts.get("CleaningImpact")
     if isinstance(ci, pd.DataFrame) and not ci.empty:
         print(f"[soiling-run] CleaningImpact (SRR): {len(ci)} event; "
@@ -328,6 +391,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
              "WB01/02 6750, WB03 5996, WB04 7621, WB05 7865, WB06 7995, "
              "WB07/08 6793, WB09 7881, WB10 7069; zona WB01-02 13500; "
              "site penuh 71500.",
+    )
+    parser.add_argument(
+        "--per-inverter-srr", action="store_true",
+        help="Sheet PerInverterSRR: soiling_srr per inverter (~194 unit, "
+             "MAHAL: +- beberapa menit ekstra; reps ikut config "
+             "per_inverter_reps, default 200).",
     )
     parser.add_argument(
         "--per-wb", action="store_true",
@@ -421,13 +490,17 @@ def main(argv=None) -> None:
         soil_base["rdtools_min_interval_length"] = args.min_interval_length
     if args.day_scale is not None:
         soil_base["rdtools_day_scale"] = args.day_scale
+    if args.per_inverter_srr:
+        soil_base["per_inverter_srr"] = True
 
-    # --- Gabung baseline (SEKALI) --------------------------------------------
-    combined_df = load_baseline_for_soiling(files)
+    # --- Gabung baseline (SEKALI), termasuk agregasi harian per-string -------
+    combined_df, string_daily = load_baseline_for_soiling(files, with_per_string=True)
     if combined_df.empty:
         raise SystemExit("[soiling-run] combined_df kosong.")
     print(f"[soiling-run] combined_df total: {combined_df.shape[0]} rows, "
-          f"{combined_df['Inverter_ID'].nunique()} inverter")
+          f"{combined_df['Inverter_ID'].nunique()} inverter; "
+          f"string_daily: {len(string_daily)} baris "
+          f"({string_daily.groupby([INVERTER_COL, 'pv']).ngroups if not string_daily.empty else 0} string)")
 
     if args.per_wb:
         for wb in sorted(PER_WB_CAPACITY_KWP):
@@ -436,6 +509,7 @@ def main(argv=None) -> None:
                 wb_filter=[wb],
                 capacity_kwp=PER_WB_CAPACITY_KWP[wb],
                 cleaning_cost_idr=PER_WB_CLEANING_COST_IDR[wb],
+                string_daily=string_daily,
             )
         return
 
@@ -454,6 +528,7 @@ def main(argv=None) -> None:
         wb_filter=args.wb,
         capacity_kwp=args.capacity_kwp,
         cleaning_cost_idr=cost,
+        string_daily=string_daily,
     )
 
 
