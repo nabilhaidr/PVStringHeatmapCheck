@@ -2,8 +2,8 @@
 
 ## PV Module Performance Analytics Notebook and Pipeline
 
-Status: Draft v0.1  
-Date: 2026-05-27  
+Status: Draft v0.2  
+Date: 2026-07-10 (v0.1: 2026-05-27)  
 Repository: `SolarYieldPro-main/kodingan pv string`  
 Primary runtime: Google Colab  
 Primary storage: Google Drive  
@@ -218,6 +218,10 @@ Acceptance criteria:
 - Empty PV channels are excluded.
 - String proxy events are debounced to reduce false positives.
 
+Related tooling:
+- `rekap_m2e_allstrings.py` merges the `M2e_hybrid_AllStrings` sheet across daily `m2_findings_{YYYYMMDD}.xlsx` outputs into one Excel: uptime pivot per date, per-string summary (worst days, days below threshold, total downtime), and the combined long table (CSV fallback beyond the Excel row limit).
+- Daily M2e results are also consumed by M2a Soiling as an inverter-outage mask (see 8.11).
+
 ### 8.5 M2b Peer Z-score / High-R
 
 Requirement:
@@ -341,24 +345,39 @@ Acceptance criteria:
 ### 8.11 M2a Soiling
 
 Requirement:
-- Estimate site-level soiling loss and cleaning economics when enough daily data exists.
+- Estimate soiling loss and cleaning economics from accumulated daily baseline data using rdtools SRR, at site, WB-group, per-WB, and (opt-in) per-inverter scope.
+- Correct daily PR for module temperature before SRR (insolation-weighted).
+- Mask inverter outage using M2e availability results (uptime below threshold removes that inverter-day's energy and its capacity from the PR denominator) so partial outage is not read as soiling.
+- Join manual cleaning reports and rainfall to classify SRR cleaning events (manual vs rain).
+- Quantify recovery from real cleaning campaigns via pre/post PR (plant-level and per-string), independent of SRR interval validity.
+- Break down soiling loss monthly and rank per-string cleaning priority.
 
 Core functions/modules:
-- `pv_pipeline.m2a.soiling`
+- `pv_pipeline.m2a.soiling`, `pv_pipeline.m2a.cleaning_report`
+- Runner: `run_soiling_analysis.py`; analyst notebook `notebook/M2aSoiling.ipynb` (Cell 7 replots the sawtooth trend from the output workbook alone).
 - Optional dependency: `rdtools`
 
 Key calculations:
 
 ```text
-PR_daily = E_daily / (H_POA_daily * Capacity_kWp)
-Soiling loss = 1 - soiling_ratio
+PR_daily = E_daily / (H_POA_daily * Capacity_kWp * TempFactor * CapacityFactor)
+TempFactor      = 1 + gamma_Pmax/100 * (Tcell - 25 C)   (insolation-weighted per day)
+CapacityFactor  = available capacity fraction from M2e uptime mask
+Soiling loss    = 1 - soiling_ratio (SRR Monte Carlo, with confidence interval)
+Monthly loss    = insolation-weighted (1 - SR_p50) per calendar month
+Direct impact   = (PR_after - PR_before) / PR_after around cleaning campaigns
+Recommendation  = string deficit vs sibling median PR + inverter p_loss (score, rank)
 Daily value loss = avg_daily_energy_kWh * tariff_IDR_per_kWh * soiling_loss
-Payback days = cleaning_cost_IDR / daily_value_loss
+Payback days    = cleaning_cost_IDR / daily_value_loss
 ```
 
+Output sheets (`soiling_srr_*.xlsx`):
+- `EconomicAnalysis`, `MonthlySoilingLoss`, `PRDaily`, `SoilingRatio` (SR p50 + CI), `CleaningEvents`, `CleaningImpact`, `DirectCleaningImpact`, `DirectCleaningImpactPerString`, `PerInverterSRR` (opt-in), `CleaningRecommendation`, `ManualCleaning`, `AvailabilityMask`.
+
 Acceptance criteria:
-- If days of data are below minimum, emit insufficient-data output.
-- If enough data exists, produce soiling ratio, loss estimate, and cleaning recommendation.
+- If days of data are below minimum, emit insufficient-data output (`PRDaily` is still exported).
+- If enough data exists, produce soiling ratio with confidence interval, monthly loss breakdown, classified cleaning events and recovery, cleaning economics, and per-string cleaning priority.
+- Sawtooth trend (daily PR points + SRR interval fits + SR confidence band) can be replotted from the workbook without re-running SRR or rdtools.
 
 ### 8.12 PR and Curtailment Cross-Check
 
@@ -445,6 +464,9 @@ Acceptance criteria:
 | `pv_pipeline/physics.py` | Expected power, Kt, DeltaP, PR, energy integration. |
 | `pv_pipeline/generation/` | Generation Excel loader. |
 | `pv_pipeline/baseline.py` | Healthy baseline accumulator. |
+| `run_soiling_analysis.py` | CLI runner for soiling SRR analysis from baseline CSVs (site / WB group / per-WB). |
+| `rekap_m2e_allstrings.py` | Cross-date recap of M2e `AllStrings` sheets into one Excel. |
+| `train_lstm_ae.py` | LSTM Autoencoder training script (healthy baseline input). |
 | `config/*.yaml` | Detector thresholds, strings, site geometry, panel spec, baseline config. |
 | `tests/` | Unit and integration tests. |
 
@@ -474,6 +496,8 @@ Acceptance criteria:
 - Findings JSONL/XLSX.
 - Detector artifact sheets.
 - Availability summary.
+- Soiling SRR workbook (`soiling_srr_*.xlsx`) and sawtooth trend PNG per analysis scope.
+- M2e cross-date recap Excel (`rekap_m2e_allstrings.xlsx`).
 - Baseline CSV/parquet.
 - Final `df_plot` CSV export.
 
@@ -536,6 +560,8 @@ The product is considered usable for engineering review when:
 | Duplicate config keys | Unexpected effective settings | Add config validation and duplicate-key check. |
 | Isolation Forest noise | Too many false findings | Keep excluded from main Findings until calibrated. |
 | Soiling needs long history | Cannot run SRR reliably on short data | Emit insufficient-data status until 90-180 days available. |
+| Monsoon rain resets shorten dry intervals | SRR yields few valid intervals (fragmentary sawtooth); site-level blend can fail with NoValidIntervalError | Analyze per cleaning zone (WB group), use `precip_and_shift` criterion with shorter min interval; interpret via sawtooth plot (Cell 7). |
+| Partial inverter outage depresses PR | SRR reads outage as soiling | M2e availability mask removes affected inverter-days from energy and capacity (enabled via `availability_dir`). |
 | LSTM needs clean baseline | Model may learn faults as normal | Use baseline accumulator and manual review before training. |
 | Curtailment not fully integrated into every detector | False positives during power limitation | Add curtailment-aware detector gating. |
 
@@ -553,7 +579,7 @@ The product is considered usable for engineering review when:
 ### Phase 2: Detector Productionization
 
 - Calibrate Isolation Forest.
-- Mature soiling SRR workflow.
+- Mature soiling SRR workflow. (Done 2026-07: temperature correction, M2e availability mask, monthly loss breakdown, per-string cleaning recommendation, sawtooth replotting from workbook.)
 - Add curtailment-aware gating to detector decisions.
 - Add complete loss waterfall.
 
