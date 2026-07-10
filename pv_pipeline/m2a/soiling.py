@@ -98,11 +98,12 @@ References
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import warnings
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -130,6 +131,11 @@ DEFAULT_CLEANING_REPORT_PATH: str = ""       # empty -> skip manual cleaning joi
 DEFAULT_DC_CABLE_LIST_PATH: str = ""         # empty -> ST==PV identity semua WB
 DEFAULT_CLEANING_MATCH_WINDOW_DAYS: int = 3
 DEFAULT_CLEANING_PRECIP_THRESHOLD_MM: float = 1.0
+# Mask availability M2e: inverter-day dengan uptime < ambang di-drop dari
+# energi harian DAN kapasitasnya dikeluarkan dari penyebut PR hari itu,
+# supaya SRR tidak membaca outage parsial sebagai soiling.
+DEFAULT_AVAILABILITY_DIR: str = ""           # empty -> skip mask
+DEFAULT_AVAILABILITY_MIN_UPTIME_PCT: float = 95.0
 # Koreksi suhu PR (default OFF di kode; config produksi m2_config.yaml set
 # true). gamma Pmax Jinko JKM625N = -0.29 %/C, referensi STC 25 C.
 DEFAULT_TEMPERATURE_CORRECTION: bool = False
@@ -274,13 +280,17 @@ def compute_daily_pr_series(
     insolation_daily_kwh_per_m2: pd.Series,
     capacity_kwp: float,
     temp_factor_daily: Optional[pd.Series] = None,
+    capacity_factor_daily: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """PR_daily = E_daily / (H_daily * capacity_kwp * TempFactor), IEC 61724-1.
+    """PR_daily = E_daily / (H_daily * capacity_kwp * TempFactor * CapFactor),
+    IEC 61724-1.
 
     ``temp_factor_daily`` (opsional) = faktor koreksi suhu ternormalisasi
-    insolasi per hari; bila diberikan, PR jadi temperature-corrected. NaN
-    di mana insolasi/temp_factor invalid atau PR di luar rentang fisik
-    (0..1.5).
+    insolasi per hari; bila diberikan, PR jadi temperature-corrected.
+    ``capacity_factor_daily`` (opsional) = fraksi kapasitas tersedia per hari
+    (mask availability M2e: energi inverter down di-drop, kapasitasnya ikut
+    keluar dari penyebut supaya PR tak bias). NaN di mana insolasi/faktor
+    invalid atau PR di luar rentang fisik (0..1.5).
     """
     cols = {
         "energy": pr_energy_daily,
@@ -288,12 +298,16 @@ def compute_daily_pr_series(
     }
     if temp_factor_daily is not None:
         cols["temp_factor"] = temp_factor_daily
+    if capacity_factor_daily is not None:
+        cols["capacity_factor"] = capacity_factor_daily
     aligned = pd.DataFrame(cols).dropna()
     if aligned.empty or capacity_kwp <= 0:
         return pd.Series(dtype=float)
     denom = aligned["insolation"] * capacity_kwp
     if temp_factor_daily is not None:
         denom = denom * aligned["temp_factor"].replace(0.0, np.nan)
+    if capacity_factor_daily is not None:
+        denom = denom * aligned["capacity_factor"].replace(0.0, np.nan)
     pr = aligned["energy"] / denom
     pr = pr[(pr >= 0.0) & (pr <= 1.5)]
     return pr
@@ -429,6 +443,113 @@ def _ci_bounds(sr_ci) -> Tuple[float, float]:
         return float(sr_ci[0]), float(sr_ci[1])
     except (TypeError, ValueError):
         return float("nan"), float("nan")
+
+
+def summarize_soiling_profiles(
+    profiles,
+    confidence_level: float = DEFAULT_RDTOOLS_CONFIDENCE,
+) -> Optional[pd.DataFrame]:
+    """Ringkas stochastic_soiling_profiles rdtools -> df [date, sr_p50,
+    sr_ci_lower, sr_ci_upper].
+
+    rdtools mengembalikan LIST of pd.Series (satu per realisasi Monte
+    Carlo) -- cek isinstance DataFrame lama membuat sheet SoilingRatio
+    tidak pernah ter-emit. Gabung via pd.concat(axis=1) lalu ambil median
+    + kuantil CI per hari (1000 kolom realisasi tidak praktis di Excel).
+    Returns None bila input kosong/tak dikenal.
+    """
+    if isinstance(profiles, pd.DataFrame):
+        prof_df = profiles
+    elif isinstance(profiles, (list, tuple)) and len(profiles) > 0:
+        try:
+            prof_df = pd.concat(list(profiles), axis=1)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    if prof_df.empty:
+        return None
+    alpha = (100.0 - float(confidence_level)) / 2.0 / 100.0
+    summary = pd.DataFrame({
+        "sr_p50": prof_df.median(axis=1),
+        "sr_ci_lower": prof_df.quantile(alpha, axis=1),
+        "sr_ci_upper": prof_df.quantile(1.0 - alpha, axis=1),
+    })
+    summary.index.name = "date"
+    return summary.reset_index()
+
+
+MONTHLY_SOILING_COLUMNS: List[str] = [
+    "month", "n_days", "sr_p50", "sr_ci_lower", "sr_ci_upper",
+    "p_loss_pct", "energy_lost_kwh_est", "loss_idr_est",
+]
+
+
+def build_monthly_soiling_loss(
+    profiles_df: Optional[pd.DataFrame],
+    insolation_daily: pd.Series,
+    energy_daily: Optional[pd.Series],
+    tariff_idr_per_kwh: float,
+    confidence_level: float = DEFAULT_RDTOOLS_CONFIDENCE,
+) -> pd.DataFrame:
+    """Breakdown soiling loss BULANAN dari profil SR harian Monte Carlo SRR.
+
+    ``profiles_df`` = hasil pd.concat(stochastic_soiling_profiles, axis=1)
+    (index tanggal harian, kolom = realisasi). SR bulanan = median harian
+    antar realisasi, dirata-rata berbobot insolasi POA bulan itu (konsisten
+    definisi insolation-weighted SR rdtools); CI dari kuantil antar
+    realisasi dengan bobot yang sama. energy_lost_kwh_est =
+    sum(E_d * (1/sr_d - 1)) -- estimasi energi hilang dihitung dari energi
+    aktual (soiled) bulan itu.
+    """
+    empty = pd.DataFrame(columns=MONTHLY_SOILING_COLUMNS)
+    if profiles_df is None or profiles_df.empty:
+        return empty
+    if insolation_daily is None or insolation_daily.empty:
+        return empty
+
+    alpha = (100.0 - float(confidence_level)) / 2.0 / 100.0
+    idx = pd.DatetimeIndex(profiles_df.index).normalize()
+
+    insol = insolation_daily.copy()
+    insol.index = pd.DatetimeIndex(insol.index).normalize()
+    insol = insol[~insol.index.duplicated()]
+    if energy_daily is not None and not energy_daily.empty:
+        energy = energy_daily.copy()
+        energy.index = pd.DatetimeIndex(energy.index).normalize()
+        energy = energy[~energy.index.duplicated()]
+    else:
+        energy = pd.Series(dtype=float)
+
+    df = pd.DataFrame({
+        "sr_p50": profiles_df.median(axis=1).values,
+        "sr_lo": profiles_df.quantile(alpha, axis=1).values,
+        "sr_hi": profiles_df.quantile(1.0 - alpha, axis=1).values,
+        "insol": insol.reindex(idx).values,
+        "energy": energy.reindex(idx).values,
+    }, index=idx).dropna(subset=["sr_p50", "insol"])
+    if df.empty:
+        return empty
+
+    rows = []
+    for month, g in df.groupby(df.index.to_period("M")):
+        w = float(g["insol"].sum())
+        if w <= 0:
+            continue
+        sr_m = float((g["sr_p50"] * g["insol"]).sum() / w)
+        lost = g["energy"] * (1.0 / g["sr_p50"].clip(lower=1e-6) - 1.0)
+        lost_sum = float(lost.dropna().sum())
+        rows.append({
+            "month": str(month),
+            "n_days": int(len(g)),
+            "sr_p50": sr_m,
+            "sr_ci_lower": float((g["sr_lo"] * g["insol"]).sum() / w),
+            "sr_ci_upper": float((g["sr_hi"] * g["insol"]).sum() / w),
+            "p_loss_pct": (1.0 - sr_m) * 100.0,
+            "energy_lost_kwh_est": lost_sum,
+            "loss_idr_est": lost_sum * float(tariff_idr_per_kwh),
+        })
+    return pd.DataFrame(rows, columns=MONTHLY_SOILING_COLUMNS)
 
 
 CLEANING_IMPACT_COLUMNS: List[str] = [
@@ -706,6 +827,113 @@ def build_direct_cleaning_impact_per_string(
     ]
 
 
+RECOMMENDATION_COLUMNS: List[str] = [
+    "inverter_id", "pv", "n_days", "pr_recent", "pr_inverter_median",
+    "deficit_vs_siblings_pct", "inverter_p_loss_pct", "hist_uplift_pct",
+    "score", "rank",
+]
+
+
+def build_cleaning_recommendation(
+    string_energy_daily: pd.DataFrame,
+    insolation_daily: pd.Series,
+    per_inverter_srr: Optional[pd.DataFrame] = None,
+    direct_per_string: Optional[pd.DataFrame] = None,
+    *,
+    window_days: int = 30,
+    min_days: int = 10,
+) -> pd.DataFrame:
+    """Rekomendasi area cleaning: satukan yield string terkini (basis
+    heatmap) dengan ranking soiling inverter + uplift historis.
+
+    Per string, jendela ``window_days`` terakhir data:
+      pr_recent = (sum E_str / sum H_POA pada hari-hari string itu) /
+                  kapasitas_string;
+      deficit_vs_siblings_pct = (median PR inverter - pr_recent)/median*100
+        -- menangkap soiling PARSIAL (string kotor tertinggal dari sibling
+        se-inverter);
+      inverter_p_loss_pct (join PerInverterSRR) -- soiling MERATA level
+        inverter yang tak terlihat dari deficit sibling;
+      hist_uplift_pct (join DirectCleaningImpactPerString, mean per string)
+        -- bukti historis string ini memang pulih saat dibersihkan.
+
+    score = deficit_vs_siblings_pct + inverter_p_loss_pct (0 bila tak ada)
+    ~ estimasi % energi string yang hilang; rank 1 = prioritas tertinggi.
+    """
+    empty = pd.DataFrame(columns=RECOMMENDATION_COLUMNS)
+    if string_energy_daily is None or string_energy_daily.empty:
+        return empty
+    if insolation_daily is None or insolation_daily.empty:
+        return empty
+
+    se = string_energy_daily.copy()
+    se["date"] = pd.to_datetime(se["date"], errors="coerce").dt.normalize()
+    se = se.dropna(subset=["date"])
+    if se.empty:
+        return empty
+    end = se["date"].max()
+    se = se[se["date"] >= end - pd.Timedelta(days=window_days - 1)]
+
+    insol = insolation_daily.copy()
+    insol.index = pd.DatetimeIndex(insol.index).normalize()
+    insol = insol[~insol.index.duplicated()].replace(0.0, np.nan)
+    se["insol"] = insol.reindex(se["date"]).to_numpy()
+    se = se.dropna(subset=["insol"])
+
+    rows = []
+    for (inv_id, pv), g in se.groupby(["Inverter_ID", "pv"]):
+        n = int(g["date"].nunique())
+        if n < min_days:
+            continue
+        h = float(g["insol"].sum())
+        if h <= 0:
+            continue
+        pr = float(g["energy_kwh"].sum()) / h / _string_capacity_kwp(inv_id)
+        rows.append({
+            "inverter_id": str(inv_id), "pv": int(pv),
+            "n_days": n, "pr_recent": pr,
+        })
+    if not rows:
+        return empty
+
+    out = pd.DataFrame(rows)
+    med = out.groupby("inverter_id")["pr_recent"].transform("median")
+    out["pr_inverter_median"] = med
+    out["deficit_vs_siblings_pct"] = np.where(
+        med > 0, (med - out["pr_recent"]) / med * 100.0, np.nan,
+    )
+
+    out["inverter_p_loss_pct"] = np.nan
+    if (per_inverter_srr is not None and not per_inverter_srr.empty
+            and {"inverter_id", "p_loss_pct"} <= set(per_inverter_srr.columns)):
+        pl = per_inverter_srr.drop_duplicates("inverter_id").set_index(
+            per_inverter_srr.drop_duplicates("inverter_id")["inverter_id"].astype(str)
+        )["p_loss_pct"]
+        out["inverter_p_loss_pct"] = out["inverter_id"].map(pl)
+
+    out["hist_uplift_pct"] = np.nan
+    if (direct_per_string is not None and not direct_per_string.empty
+            and {"inverter_id", "pv", "uplift_pct"} <= set(direct_per_string.columns)):
+        up = (
+            direct_per_string.groupby(["inverter_id", "pv"])["uplift_pct"]
+            .mean().rename("hist_uplift_pct").reset_index()
+        )
+        up["inverter_id"] = up["inverter_id"].astype(str)
+        up["pv"] = up["pv"].astype(int)
+        out = out.drop(columns=["hist_uplift_pct"]).merge(
+            up, on=["inverter_id", "pv"], how="left",
+        )
+
+    out["score"] = (
+        out["deficit_vs_siblings_pct"].fillna(0.0)
+        + out["inverter_p_loss_pct"].fillna(0.0)
+    )
+    out["rank"] = out["score"].rank(ascending=False, method="min").astype(int)
+    return out.sort_values(
+        "score", ascending=False, ignore_index=True,
+    )[RECOMMENDATION_COLUMNS]
+
+
 def _parse_wb_filter(value) -> Optional[set]:
     """Normalisasi cfg ``wb_filter`` (mis. ["WB01", "wb02", 3]) -> {1, 2, 3}.
 
@@ -777,6 +1005,96 @@ def _load_manual_cleaning(
     return events, daily_cleaning_counts(events)
 
 
+_M2E_FINDINGS_FILE_RE = re.compile(r"^m2_findings_(\d{8})\.(jsonl|xlsx)$", re.I)
+
+
+def _load_availability_uptime(dir_path: str) -> Optional[pd.DataFrame]:
+    """Load uptime inverter per hari dari output M2e daily notebook.
+
+    File yang dikenali di ``dir_path`` (folder outputs Drive):
+    ``m2_findings_{YYYYMMDD}.jsonl`` / ``.xlsx`` (hasil M2Engine.write_jsonl
+    / write_xlsx_multi). Baris yang dipakai: ``sub_module == "M2e_inverter"``
+    dengan ``value`` = uptime_pct. Catatan: M2e default hanya emit inverter
+    NON-NORMAL (uptime di bawah ambang severity), jadi inverter yang tidak
+    muncul dianggap available penuh. Tanggal ganda jsonl+xlsx -> jsonl
+    menang (parse jauh lebih cepat).
+
+    Returns df [date, inverter_id, uptime_pct] atau None bila folder tidak
+    ada / tidak ada file dikenali.
+    """
+    if not dir_path or not os.path.isdir(dir_path):
+        return None
+    by_date: Dict[str, str] = {}
+    for fn in sorted(os.listdir(dir_path)):
+        m = _M2E_FINDINGS_FILE_RE.match(fn)
+        if not m:
+            continue
+        date_str, ext = m.group(1), m.group(2).lower()
+        if date_str in by_date and by_date[date_str].endswith(".jsonl"):
+            continue
+        if ext == "jsonl" or date_str not in by_date:
+            by_date[date_str] = os.path.join(dir_path, fn)
+    if not by_date:
+        return None
+
+    rows: List[dict] = []
+    for date_str, path in sorted(by_date.items()):
+        day = pd.Timestamp(datetime.strptime(date_str, "%Y%m%d")).normalize()
+        try:
+            if path.lower().endswith(".jsonl"):
+                with open(path, encoding="utf-8") as fp:
+                    for line in fp:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except ValueError:
+                            continue
+                        if rec.get("sub_module") != "M2e_inverter":
+                            continue
+                        rows.append({
+                            "date": day,
+                            "inverter_id": str(rec.get("inverter_id")),
+                            "uptime_pct": float(rec.get("value")),
+                        })
+            else:
+                df = pd.read_excel(path, sheet_name="Findings")
+                if "sub_module" not in df.columns:
+                    continue
+                sub = df[df["sub_module"] == "M2e_inverter"]
+                for _, r in sub.iterrows():
+                    rows.append({
+                        "date": day,
+                        "inverter_id": str(r["inverter_id"]),
+                        "uptime_pct": float(r["value"]),
+                    })
+        except Exception as exc:
+            warnings.warn(
+                f"[M2aSoiling] availability file gagal dibaca ({path}): {exc}",
+                stacklevel=2,
+            )
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=["date", "inverter_id", "uptime_pct"])
+
+
+def build_availability_mask(
+    av_df: Optional[pd.DataFrame],
+    min_uptime_pct: float = DEFAULT_AVAILABILITY_MIN_UPTIME_PCT,
+) -> Dict[str, Set[pd.Timestamp]]:
+    """{INVERTER_ID: set tanggal} dengan uptime < ambang (inverter-day
+    yang harus di-mask dari deret PR)."""
+    if av_df is None or av_df.empty:
+        return {}
+    uptime = pd.to_numeric(av_df["uptime_pct"], errors="coerce")
+    low = av_df[uptime < float(min_uptime_pct)]
+    mask: Dict[str, Set[pd.Timestamp]] = {}
+    for inv, g in low.groupby(low["inverter_id"].astype(str).str.upper()):
+        mask[str(inv)] = set(pd.to_datetime(g["date"]).dt.normalize())
+    return mask
+
+
 class M2aSoiling(SubModule):
     """Soiling detector via rdtools SRR (Stochastic Rate and Recovery).
 
@@ -792,6 +1110,11 @@ class M2aSoiling(SubModule):
         self.poa = poa
         self.cell_temp = cell_temp
         self.panel = panel
+        # Diisi oleh run(); dipakai runner/notebook untuk plotting & join.
+        self.last_pr_daily = None
+        self.last_calc_info = None
+        self.last_insolation_daily = None
+        self.last_soiling_profiles = None
 
     def _ensure_providers(self, config: dict) -> None:
         if self.poa is None:
@@ -850,13 +1173,21 @@ class M2aSoiling(SubModule):
         combined_df: pd.DataFrame,
         cfg: dict,
         empty_map: dict,
-    ) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        avail_mask: Optional[Dict[str, Set[pd.Timestamp]]] = None,
+    ) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
         """Aggregate all inverters into site-level daily energy + insolation
-        + faktor koreksi suhu.
+        + faktor koreksi suhu + faktor kapasitas tersedia.
+
+        ``avail_mask`` ({INVERTER_ID: set tanggal}, dari build_availability_mask):
+        inverter-day yang di-mask dibuang dari energi harian DAN kapasitas
+        inverternya dikeluarkan dari penyebut hari itu (capacity_factor < 1)
+        supaya outage parsial tidak menekan PR (terbaca soiling oleh SRR).
 
         Returns (energy_daily_kwh, insolation_daily_kwh_per_m2,
-        temp_factor_daily). temp_factor_daily = insolation-weighted CF per
-        hari (=1.0 bila koreksi off/cell-temp tak tersedia).
+        temp_factor_daily, capacity_factor_daily). temp_factor_daily =
+        insolation-weighted CF per hari (=1.0 bila koreksi off/cell-temp tak
+        tersedia); capacity_factor_daily = fraksi kapasitas available (=1.0
+        tanpa mask).
         """
         pv_max = int(cfg.get("pv_max", DEFAULT_PV_MAX))
         freq_hours = float(cfg.get("sample_freq_hours", DEFAULT_SAMPLE_FREQ_HOURS))
@@ -867,10 +1198,14 @@ class M2aSoiling(SubModule):
         ref_c = float(cfg.get("temp_ref_c", DEFAULT_TEMP_REF_C))
         collect_per_inverter = bool(cfg.get("per_inverter_srr", False))
         self._per_inverter_daily = {}
+        self._n_avail_masked_days = 0
+        avail_mask = avail_mask or {}
 
-        all_energy_per_ts: List[pd.Series] = []
+        all_energy_daily: List[pd.Series] = []
         all_poa_per_ts: List[pd.Series] = []
         all_poa_cf_per_ts: List[pd.Series] = []   # poa * CF (untuk temp_factor)
+        total_cap_kwp = 0.0
+        masked_cap_by_day: Dict[pd.Timestamp, float] = {}
 
         for inverter_id, group in combined_df.groupby("Inverter_ID"):
             inv_empties = set(int(n) for n in empty_map.get(str(inverter_id).upper(), []))
@@ -885,7 +1220,21 @@ class M2aSoiling(SubModule):
             group_clean = group.loc[valid_idx].copy()
 
             p_inv = compute_inverter_power_per_timestamp(group_clean, pv_indices)
-            all_energy_per_ts.append(pd.Series(p_inv, index=ts_clean))
+            e_d = aggregate_daily(ts_clean, p_inv, freq_hours=freq_hours)
+            cap_i = _inverter_capacity_kwp(inverter_id, empty_map, pv_max)
+            total_cap_kwp += cap_i
+            inv_masked = avail_mask.get(str(inverter_id).upper())
+            if inv_masked:
+                drop_idx = e_d.index.intersection(
+                    pd.DatetimeIndex(sorted(inv_masked))
+                )
+                if len(drop_idx) > 0:
+                    e_d = e_d.drop(drop_idx)
+                    self._n_avail_masked_days += int(len(drop_idx))
+                for d in inv_masked:
+                    masked_cap_by_day[d] = masked_cap_by_day.get(d, 0.0) + cap_i
+            if not e_d.empty:
+                all_energy_daily.append(e_d)
 
             wb_parts = str(inverter_id).split("-")
             wb_id = wb_parts[0].upper() if wb_parts else str(inverter_id).upper()
@@ -918,27 +1267,38 @@ class M2aSoiling(SubModule):
             all_poa_cf_per_ts.append(pd.Series(poa_vals * cf_vals, index=ts_clean))
 
             if collect_per_inverter:
+                # e_d sudah ter-mask availability -> PerInverterSRR juga
+                # bebas outage parsial.
                 self._per_inverter_daily[str(inverter_id)] = (
-                    aggregate_daily(ts_clean, p_inv, freq_hours=freq_hours),
+                    e_d,
                     aggregate_daily(
                         ts_clean, poa_vals / 1000.0, freq_hours=freq_hours,
                     ),
                 )
 
-        if not all_energy_per_ts:
-            return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+        if not all_energy_daily:
+            empty = pd.Series(dtype=float)
+            return empty, empty.copy(), empty.copy(), empty.copy()
 
-        # Site-aggregate per timestamp: sum energy, mean POA (POA shared site).
-        energy_concat = pd.concat(all_energy_per_ts).groupby(level=0).sum()
+        # Site-aggregate: sum energi harian per inverter (ter-mask); POA
+        # mean per timestamp (POA shared site, tidak terpengaruh outage).
+        energy_daily = pd.concat(all_energy_daily).groupby(level=0).sum()
         poa_concat = pd.concat(all_poa_per_ts).groupby(level=0).mean()
 
-        energy_daily = aggregate_daily(
-            energy_concat.index, energy_concat.values, freq_hours=freq_hours,
-        )
         poa_daily_kwh = aggregate_daily(
             poa_concat.index, poa_concat.values / 1000.0,
             freq_hours=freq_hours,
         )
+
+        # capacity_factor_daily: fraksi kapasitas available per hari.
+        capacity_factor_daily = pd.Series(1.0, index=poa_daily_kwh.index)
+        if masked_cap_by_day and total_cap_kwp > 0:
+            for d, kwp in masked_cap_by_day.items():
+                dd = pd.Timestamp(d).normalize()
+                if dd in capacity_factor_daily.index:
+                    capacity_factor_daily.loc[dd] = max(
+                        0.0, 1.0 - kwp / total_cap_kwp,
+                    )
 
         # temp_factor_daily = insolation-weighted CF: sum(poa*CF)/sum(poa) per
         # hari (skala POA batal sebagai rasio). =1.0 kalau koreksi off.
@@ -950,7 +1310,7 @@ class M2aSoiling(SubModule):
             temp_factor_daily = (poacf_daily / poaw_daily.replace(0.0, np.nan)).fillna(1.0)
         else:
             temp_factor_daily = pd.Series(1.0, index=poa_daily_kwh.index)
-        return energy_daily, poa_daily_kwh, temp_factor_daily
+        return energy_daily, poa_daily_kwh, temp_factor_daily, capacity_factor_daily
 
     def run(self, combined_df: pd.DataFrame, config: dict) -> List[M2Finding]:
         cfg = config.get("m2a_soiling", {}) or {}
@@ -1014,12 +1374,40 @@ class M2aSoiling(SubModule):
             )
             return []
 
+        # Mask availability M2e (opsional): inverter-day uptime < ambang
+        # dibuang dari energi + kapasitas supaya outage parsial tidak
+        # terbaca sebagai soiling oleh SRR.
+        availability_dir = str(cfg.get("availability_dir", DEFAULT_AVAILABILITY_DIR))
+        avail_min_uptime = float(cfg.get(
+            "availability_min_uptime_pct", DEFAULT_AVAILABILITY_MIN_UPTIME_PCT
+        ))
+        avail_mask: Dict[str, Set[pd.Timestamp]] = {}
+        if availability_dir:
+            av_df = _load_availability_uptime(availability_dir)
+            if av_df is None:
+                warnings.warn(
+                    f"[M2aSoiling] availability_dir {availability_dir!r} tidak "
+                    "berisi m2_findings_*.jsonl/.xlsx; mask dilewati.",
+                    stacklevel=2,
+                )
+            else:
+                avail_mask = build_availability_mask(av_df, avail_min_uptime)
+                masked_rows = av_df[
+                    pd.to_numeric(av_df["uptime_pct"], errors="coerce")
+                    < avail_min_uptime
+                ]
+                if not masked_rows.empty:
+                    self.artifacts["AvailabilityMask"] = masked_rows.reset_index(
+                        drop=True,
+                    )
+
         # Build daily PR series (temperature-corrected bila diaktifkan).
         temp_correction = bool(cfg.get(
             "temperature_correction", DEFAULT_TEMPERATURE_CORRECTION
         ))
-        energy_daily, insolation_daily, temp_factor_daily = self._build_daily_series(
-            combined_df, cfg, empty_map,
+        (energy_daily, insolation_daily, temp_factor_daily,
+         capacity_factor_daily) = self._build_daily_series(
+            combined_df, cfg, empty_map, avail_mask=avail_mask,
         )
         # Diekspos untuk konsumen eksternal (runner: PR per-string memakai
         # insolation scope yang sama).
@@ -1027,7 +1415,22 @@ class M2aSoiling(SubModule):
         pr_daily = compute_daily_pr_series(
             energy_daily, insolation_daily, capacity_kwp,
             temp_factor_daily=temp_factor_daily if temp_correction else None,
+            capacity_factor_daily=capacity_factor_daily if avail_mask else None,
         )
+        self.last_pr_daily = pr_daily
+
+        # Artifact: PRDaily -- deret harian mentah untuk plotting sawtooth
+        # dari xlsx tanpa run ulang (emit juga saat insufficient_data).
+        if not energy_daily.empty:
+            pr_frame = pd.DataFrame({
+                "energy_kwh": energy_daily,
+                "insolation_kwh_per_m2": insolation_daily,
+                "temp_factor": temp_factor_daily,
+                "capacity_factor": capacity_factor_daily,
+                "pr": pr_daily,
+            })
+            pr_frame.index.name = "date"
+            self.artifacts["PRDaily"] = pr_frame.reset_index()
         # Temp_Loss = insolation-weighted (1 - CF) sepanjang periode, %.
         temp_loss_pct = float("nan")
         if temp_correction and not insolation_daily.empty:
@@ -1231,6 +1634,7 @@ class M2aSoiling(SubModule):
                 sr = getattr(sr_result, "soiling_ratio", float("nan"))
                 sr_ci = (float("nan"), float("nan"))
                 calc_info = {}
+            self.last_calc_info = calc_info if isinstance(calc_info, dict) else {}
         except Exception as exc:
             warnings.warn(
                 f"[M2aSoiling] rdtools.soiling_srr failed: "
@@ -1311,17 +1715,41 @@ class M2aSoiling(SubModule):
                 "electricity_tariff_idr_per_kwh": tariff_idr,
                 "temperature_correction": temp_correction,
                 "temp_loss_pct": temp_loss_pct if np.isfinite(temp_loss_pct) else None,
+                "availability_mask_applied": bool(avail_mask),
+                "availability_min_uptime_pct": avail_min_uptime if avail_mask else None,
+                "n_availability_masked_inverter_days": int(
+                    getattr(self, "_n_avail_masked_days", 0)
+                ),
             },
         ))
 
-        # Artifact: SoilingRatio daily series (rdtools output).
+        # Artifact: SoilingRatio daily series (rdtools output) -- lihat
+        # summarize_soiling_profiles untuk kenapa bukan cek DataFrame.
+        self.last_soiling_profiles = None
         if isinstance(calc_info, dict) and "stochastic_soiling_profiles" in calc_info:
             try:
                 profiles = calc_info["stochastic_soiling_profiles"]
                 if isinstance(profiles, pd.DataFrame) and not profiles.empty:
-                    self.artifacts["SoilingRatio"] = profiles.copy()
+                    self.last_soiling_profiles = profiles
+                elif isinstance(profiles, (list, tuple)) and len(profiles) > 0:
+                    self.last_soiling_profiles = pd.concat(list(profiles), axis=1)
+                summary = summarize_soiling_profiles(
+                    self.last_soiling_profiles, rdtools_ci,
+                )
+                if summary is not None:
+                    self.artifacts["SoilingRatio"] = summary
             except Exception:
                 pass
+
+        # Artifact: MonthlySoilingLoss -- breakdown bulanan dari profil SR
+        # harian (insolation-weighted).
+        if self.last_soiling_profiles is not None:
+            monthly = build_monthly_soiling_loss(
+                self.last_soiling_profiles, insolation_daily, energy_daily,
+                tariff_idr, confidence_level=rdtools_ci,
+            )
+            if not monthly.empty:
+                self.artifacts["MonthlySoilingLoss"] = monthly
 
         # Artifact: CleaningEvents from soiling_interval_summary, dianotasi
         # manual-vs-hujan dari rekap cleaning + presipitasi.

@@ -667,3 +667,323 @@ def test_build_direct_cleaning_impact_per_string_empty_inputs():
     )
     assert list(out.columns) == DIRECT_PER_STRING_COLUMNS
     assert out.empty
+
+
+# ============================================================================
+# summarize_soiling_profiles (fix export SoilingRatio)
+# ============================================================================
+
+
+def test_summarize_soiling_profiles_accepts_list_of_series():
+    """rdtools mengembalikan stochastic_soiling_profiles sebagai LIST of
+    Series; cek isinstance DataFrame lama membuat sheet SoilingRatio tidak
+    pernah ter-emit."""
+    from pv_pipeline.m2a.soiling import summarize_soiling_profiles
+
+    idx = pd.date_range("2026-01-01", periods=5, freq="D")
+    base = np.linspace(1.0, 0.9, 5)
+    profiles = [pd.Series(base + off, index=idx) for off in (-0.01, 0.0, 0.01)]
+    out = summarize_soiling_profiles(profiles, confidence_level=68.2)
+    assert out is not None
+    assert list(out.columns) == ["date", "sr_p50", "sr_ci_lower", "sr_ci_upper"]
+    assert len(out) == 5
+    assert out["sr_p50"].iloc[0] == pytest.approx(1.0)
+    assert (out["sr_ci_lower"] <= out["sr_p50"]).all()
+    assert (out["sr_p50"] <= out["sr_ci_upper"]).all()
+
+
+def test_summarize_soiling_profiles_invalid_inputs_return_none():
+    from pv_pipeline.m2a.soiling import summarize_soiling_profiles
+
+    assert summarize_soiling_profiles(None) is None
+    assert summarize_soiling_profiles([]) is None
+    assert summarize_soiling_profiles(pd.DataFrame()) is None
+
+
+# ============================================================================
+# capacity_factor_daily (mask availability M2e di penyebut PR)
+# ============================================================================
+
+
+def test_compute_daily_pr_series_capacity_factor_unbiases_outage():
+    """Separuh fleet down: tanpa capacity_factor PR anjlok 50% (terbaca
+    soiling oleh SRR); dengan factor 0.5 PR kembali ke nilai sebenarnya."""
+    idx = pd.date_range("2026-01-01", periods=3, freq="D")
+    energy = pd.Series([100.0, 50.0, 100.0], index=idx)
+    insol = pd.Series([5.0, 5.0, 5.0], index=idx)
+    cap = 25.0  # PR normal = 100/(5*25) = 0.8
+
+    pr_naive = compute_daily_pr_series(energy, insol, cap)
+    assert pr_naive.iloc[1] == pytest.approx(0.4)
+
+    cf = pd.Series([1.0, 0.5, 1.0], index=idx)
+    pr = compute_daily_pr_series(energy, insol, cap, capacity_factor_daily=cf)
+    assert pr.iloc[0] == pytest.approx(0.8)
+    assert pr.iloc[1] == pytest.approx(0.8)
+
+
+def test_compute_daily_pr_series_capacity_factor_zero_drops_day():
+    """Seluruh fleet ter-mask (factor 0) -> hari itu NaN/hilang, bukan inf."""
+    idx = pd.date_range("2026-01-01", periods=2, freq="D")
+    pr = compute_daily_pr_series(
+        pd.Series([100.0, 10.0], index=idx),
+        pd.Series([5.0, 5.0], index=idx),
+        25.0,
+        capacity_factor_daily=pd.Series([1.0, 0.0], index=idx),
+    )
+    assert pd.Timestamp("2026-01-02") not in pr.index
+
+
+# ============================================================================
+# _load_availability_uptime + build_availability_mask (M2e join)
+# ============================================================================
+
+
+def _write_m2e_findings_xlsx(path, rows):
+    with pd.ExcelWriter(path) as xw:
+        pd.DataFrame(rows).to_excel(xw, sheet_name="Findings", index=False)
+
+
+def test_load_availability_uptime_reads_xlsx_and_jsonl(tmp_path):
+    import json
+
+    from pv_pipeline.m2a.soiling import _load_availability_uptime
+
+    _write_m2e_findings_xlsx(tmp_path / "m2_findings_20260501.xlsx", [
+        {"sub_module": "M2e_inverter", "inverter_id": "WB01-INV01",
+         "value": 40.0},
+        {"sub_module": "M2e_string", "inverter_id": "WB01-INV01",
+         "value": 10.0},
+    ])
+    (tmp_path / "m2_findings_20260502.jsonl").write_text(
+        "\n".join([
+            json.dumps({"sub_module": "M2e_inverter",
+                        "inverter_id": "WB02-INV03", "value": 91.5}),
+            json.dumps({"sub_module": "M2b_intermittent",
+                        "inverter_id": "WB02-INV03", "value": 1.0}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    av = _load_availability_uptime(str(tmp_path))
+    assert av is not None
+    assert list(av.columns) == ["date", "inverter_id", "uptime_pct"]
+    assert len(av) == 2  # baris non-M2e_inverter diabaikan
+    assert set(av["inverter_id"]) == {"WB01-INV01", "WB02-INV03"}
+    assert set(av["date"]) == {
+        pd.Timestamp("2026-05-01"), pd.Timestamp("2026-05-02"),
+    }
+
+
+def test_load_availability_uptime_prefers_jsonl_over_xlsx(tmp_path):
+    import json
+
+    from pv_pipeline.m2a.soiling import _load_availability_uptime
+
+    _write_m2e_findings_xlsx(tmp_path / "m2_findings_20260501.xlsx", [
+        {"sub_module": "M2e_inverter", "inverter_id": "FROM-XLSX",
+         "value": 50.0},
+    ])
+    (tmp_path / "m2_findings_20260501.jsonl").write_text(
+        json.dumps({"sub_module": "M2e_inverter",
+                    "inverter_id": "FROM-JSONL", "value": 60.0}) + "\n",
+        encoding="utf-8",
+    )
+
+    av = _load_availability_uptime(str(tmp_path))
+    assert list(av["inverter_id"]) == ["FROM-JSONL"]
+
+
+def test_load_availability_uptime_missing_dir_returns_none(tmp_path):
+    from pv_pipeline.m2a.soiling import _load_availability_uptime
+
+    assert _load_availability_uptime("") is None
+    assert _load_availability_uptime(str(tmp_path / "nope")) is None
+    assert _load_availability_uptime(str(tmp_path)) is None  # dir kosong
+
+
+def test_build_availability_mask_threshold_and_uppercase():
+    from pv_pipeline.m2a.soiling import build_availability_mask
+
+    av = pd.DataFrame({
+        "date": [pd.Timestamp("2026-05-01")] * 2,
+        "inverter_id": ["wb01-inv01", "WB01-INV02"],
+        "uptime_pct": [80.0, 97.0],
+    })
+    mask = build_availability_mask(av, min_uptime_pct=95.0)
+    assert set(mask) == {"WB01-INV01"}  # 97% >= ambang tidak di-mask
+    assert mask["WB01-INV01"] == {pd.Timestamp("2026-05-01")}
+    assert build_availability_mask(None) == {}
+    assert build_availability_mask(pd.DataFrame()) == {}
+
+
+class TestM2aSoilingAvailabilityMask:
+    def test_full_mask_removes_all_days(
+        self, synthetic_combined_df, soiling_cfg, mock_poa, tmp_path,
+    ):
+        """Semua inverter di-mask pada satu-satunya hari data -> n_days=0."""
+        _write_m2e_findings_xlsx(tmp_path / "m2_findings_20260514.xlsx", [
+            {"sub_module": "M2e_inverter", "inverter_id": inv, "value": 10.0}
+            for inv in ["WB05-INV01", "WB05-INV02", "WB02-INV05"]
+        ])
+        cfg = dict(soiling_cfg)
+        cfg["m2a_soiling"] = dict(cfg["m2a_soiling"])
+        cfg["m2a_soiling"]["availability_dir"] = str(tmp_path)
+
+        sm = M2aSoiling(poa=mock_poa)
+        findings = sm.run(synthetic_combined_df, cfg)
+        assert findings[0].fault_type == "insufficient_data"
+        assert findings[0].evidence["n_days"] == 0
+        assert "AvailabilityMask" in sm.artifacts
+        assert len(sm.artifacts["AvailabilityMask"]) == 3
+
+    def test_partial_mask_scales_capacity_factor(
+        self, synthetic_combined_df, soiling_cfg, mock_poa, tmp_path,
+    ):
+        """Satu inverter di-mask -> energinya hilang dari agregat DAN
+        capacity_factor < 1 di hari itu (PR tidak bias)."""
+        sm_ref = M2aSoiling(poa=mock_poa)
+        sm_ref.run(synthetic_combined_df, soiling_cfg)
+        e_ref = sm_ref.artifacts["PRDaily"]["energy_kwh"].iloc[0]
+
+        _write_m2e_findings_xlsx(tmp_path / "m2_findings_20260514.xlsx", [
+            {"sub_module": "M2e_inverter", "inverter_id": "WB05-INV01",
+             "value": 10.0},
+        ])
+        cfg = dict(soiling_cfg)
+        cfg["m2a_soiling"] = dict(cfg["m2a_soiling"])
+        cfg["m2a_soiling"]["availability_dir"] = str(tmp_path)
+
+        sm = M2aSoiling(poa=mock_poa)
+        findings = sm.run(synthetic_combined_df, cfg)
+        prd = sm.artifacts["PRDaily"]
+        assert prd["energy_kwh"].iloc[0] < e_ref
+        assert 0.0 < prd["capacity_factor"].iloc[0] < 1.0
+        assert findings[0].fault_type == "insufficient_data"
+        assert sm._n_avail_masked_days == 1
+
+
+# ============================================================================
+# PRDaily artifact + last_pr_daily (bahan plotting sawtooth)
+# ============================================================================
+
+
+def test_run_emits_prdaily_artifact_and_last_pr_daily(
+    synthetic_combined_df, soiling_cfg, mock_poa,
+):
+    """PRDaily harus ter-emit walau insufficient_data supaya deret PR bisa
+    diplot dari xlsx tanpa run ulang."""
+    sm = M2aSoiling(poa=mock_poa)
+    sm.run(synthetic_combined_df, soiling_cfg)
+    assert "PRDaily" in sm.artifacts
+    prd = sm.artifacts["PRDaily"]
+    assert {"date", "energy_kwh", "insolation_kwh_per_m2", "temp_factor",
+            "capacity_factor", "pr"} <= set(prd.columns)
+    assert len(prd) == 1  # fixture = 1 hari
+    assert prd["energy_kwh"].iloc[0] > 0
+    # Fixture sintetis menghasilkan PR di luar rentang fisik (difilter) --
+    # last_pr_daily tetap terisi (Series, boleh kosong), bukan None.
+    assert sm.last_pr_daily is not None
+
+
+# ============================================================================
+# build_monthly_soiling_loss (breakdown bulanan dari profil SR harian)
+# ============================================================================
+
+
+def test_build_monthly_soiling_loss_insolation_weighted():
+    from pv_pipeline.m2a.soiling import (
+        MONTHLY_SOILING_COLUMNS, build_monthly_soiling_loss,
+    )
+
+    idx = pd.date_range("2026-01-30", periods=4, freq="D")  # 2 Jan + 2 Feb
+    profiles = pd.DataFrame(
+        {0: [1.0, 0.9, 0.8, 0.8], 1: [1.0, 0.9, 0.8, 0.8]}, index=idx,
+    )
+    insol = pd.Series([5.0, 5.0, 4.0, 4.0], index=idx)
+    energy = pd.Series([100.0, 90.0, 80.0, 80.0], index=idx)
+
+    out = build_monthly_soiling_loss(profiles, insol, energy, 1500.0)
+    assert list(out.columns) == MONTHLY_SOILING_COLUMNS
+    assert list(out["month"]) == ["2026-01", "2026-02"]
+
+    jan = out.iloc[0]
+    assert jan["n_days"] == 2
+    assert jan["sr_p50"] == pytest.approx((1.0 * 5 + 0.9 * 5) / 10)
+    assert jan["p_loss_pct"] == pytest.approx(5.0)
+
+    feb = out.iloc[1]
+    assert feb["sr_p50"] == pytest.approx(0.8)
+    # Energi hilang Feb: 2 hari x 80*(1/0.8 - 1) = 2 x 20 kWh.
+    assert feb["energy_lost_kwh_est"] == pytest.approx(40.0)
+    assert feb["loss_idr_est"] == pytest.approx(40.0 * 1500.0)
+
+
+def test_build_monthly_soiling_loss_empty_inputs():
+    from pv_pipeline.m2a.soiling import (
+        MONTHLY_SOILING_COLUMNS, build_monthly_soiling_loss,
+    )
+
+    out = build_monthly_soiling_loss(None, pd.Series(dtype=float), None, 1500.0)
+    assert list(out.columns) == MONTHLY_SOILING_COLUMNS
+    assert out.empty
+
+
+# ============================================================================
+# build_cleaning_recommendation (heatmap string + ranking p_loss/uplift)
+# ============================================================================
+
+
+def test_build_cleaning_recommendation_ranks_dirty_string_first():
+    from pv_pipeline.m2a.soiling import (
+        RECOMMENDATION_COLUMNS, build_cleaning_recommendation,
+    )
+
+    days = pd.date_range("2026-04-01", periods=20, freq="D")
+    insol = pd.Series(5.0, index=days)
+    rows = []
+    for d in days:
+        for pv, e in [(1, 50.0), (2, 50.0), (3, 30.0)]:  # PV3 kotor parsial
+            rows.append({"date": d, "Inverter_ID": "WB01-INV01",
+                         "pv": pv, "energy_kwh": e})
+    sd = pd.DataFrame(rows)
+    per_inv = pd.DataFrame([{"inverter_id": "WB01-INV01", "p_loss_pct": 3.0}])
+    dps = pd.DataFrame([
+        {"inverter_id": "WB01-INV01", "pv": 3, "uplift_pct": 6.0},
+    ])
+
+    out = build_cleaning_recommendation(
+        sd, insol, per_inv, dps, window_days=30, min_days=10,
+    )
+    assert list(out.columns) == RECOMMENDATION_COLUMNS
+    top = out.iloc[0]
+    assert top["pv"] == 3 and top["rank"] == 1
+    # deficit = (50-30)/50 = 40% terhadap median sibling.
+    assert top["deficit_vs_siblings_pct"] == pytest.approx(40.0)
+    assert top["inverter_p_loss_pct"] == pytest.approx(3.0)
+    assert top["hist_uplift_pct"] == pytest.approx(6.0)
+    assert top["score"] == pytest.approx(43.0)
+    # Sibling normal: deficit ~ negatif kecil, tidak diprioritaskan.
+    assert (out[out["pv"] != 3]["rank"] > 1).all()
+
+
+def test_build_cleaning_recommendation_min_days_and_empty():
+    from pv_pipeline.m2a.soiling import (
+        RECOMMENDATION_COLUMNS, build_cleaning_recommendation,
+    )
+
+    days = pd.date_range("2026-04-01", periods=3, freq="D")  # < min_days
+    sd = pd.DataFrame([
+        {"date": d, "Inverter_ID": "WB01-INV01", "pv": 1, "energy_kwh": 50.0}
+        for d in days
+    ])
+    out = build_cleaning_recommendation(
+        sd, pd.Series(5.0, index=days), window_days=30, min_days=10,
+    )
+    assert out.empty
+
+    out2 = build_cleaning_recommendation(
+        pd.DataFrame(), pd.Series(dtype=float),
+    )
+    assert list(out2.columns) == RECOMMENDATION_COLUMNS
+    assert out2.empty

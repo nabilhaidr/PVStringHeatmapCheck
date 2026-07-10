@@ -243,6 +243,13 @@ m2a_soiling:
   # Mapping nomor String (checklist) -> nomor PV (Huawei) untuk WB03-WB10.
   # Contoh: "raw data input/List of DC Cables 0411.xls"
   dc_cable_list_path: ""
+  # Mask availability M2e: folder berisi m2_findings_{YYYYMMDD}.jsonl/.xlsx
+  # (output daily notebook, mis. Drive "Cek PV String/outputs"). Inverter-day
+  # dengan uptime < ambang di-drop dari energi harian DAN kapasitasnya keluar
+  # dari penyebut PR hari itu -> outage parsial tidak terbaca sebagai soiling.
+  # Kosong = mask off. (Runner: --availability-dir.)
+  availability_dir: ""
+  availability_min_uptime_pct: 95.0
   cleaning_match_window_days: 3      # jendela +/- hari match interval SRR
   cleaning_precip_threshold_mm: 1.0  # >= mm dianggap hujan (klasifikasi cause)
   # DirectCleaningImpact: pre/post PR di sekitar campaign cleaning manual,

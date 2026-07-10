@@ -68,6 +68,7 @@ from pv_pipeline.m2a.soiling import (
     ACTIVE_POWER_COL_CANDIDATES,
     DEFAULT_SAMPLE_FREQ_HOURS,
     M2aSoiling,
+    build_cleaning_recommendation,
     build_direct_cleaning_impact_per_string,
 )
 from train_lstm_ae import discover_baseline_csvs
@@ -207,9 +208,10 @@ PER_WB_CLEANING_COST_IDR = {
 }
 
 OUTPUT_SHEETS = [
-    "EconomicAnalysis", "DirectCleaningImpact", "DirectCleaningImpactPerString",
-    "PerInverterSRR", "CleaningImpact", "SoilingRatio", "CleaningEvents",
-    "ManualCleaning",
+    "EconomicAnalysis", "MonthlySoilingLoss", "PRDaily",
+    "DirectCleaningImpact", "DirectCleaningImpactPerString",
+    "PerInverterSRR", "CleaningImpact", "CleaningRecommendation",
+    "SoilingRatio", "CleaningEvents", "ManualCleaning", "AvailabilityMask",
 ]
 
 
@@ -267,6 +269,24 @@ def _run_and_save(
             )
             if not per_string.empty:
                 detector.artifacts["DirectCleaningImpactPerString"] = per_string
+
+        # Sheet CleaningRecommendation: satukan yield string terkini (basis
+        # heatmap) dengan ranking p_loss inverter + uplift historis ->
+        # prioritas area cleaning.
+        if insol is not None and not insol.empty:
+            rec = build_cleaning_recommendation(
+                sd, insol,
+                per_inverter_srr=detector.artifacts.get("PerInverterSRR"),
+                direct_per_string=detector.artifacts.get(
+                    "DirectCleaningImpactPerString"
+                ),
+            )
+            if not rec.empty:
+                detector.artifacts["CleaningRecommendation"] = rec
+                top_rec = rec.iloc[0]
+                print(f"[soiling-run] CleaningRecommendation: {len(rec)} string; "
+                      f"prioritas #1 = {top_rec['inverter_id']} PV{top_rec['pv']} "
+                      f"(score {top_rec['score']:.1f})")
 
     print(f"[soiling-run] findings: {len(findings)}")
     rows = []
@@ -348,6 +368,14 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--dc-cable-xls", default=None,
         help="List of DC Cables (mapping ST->PV WB03-WB10). "
              f"Default: {DEFAULT_DC_CABLE_XLS!r} bila ada.",
+    )
+    parser.add_argument(
+        "--availability-dir", default=None,
+        help="Folder berisi m2_findings_{YYYYMMDD}.jsonl/.xlsx hasil M2e "
+             "(mis. Drive 'Cek PV String/outputs'). Inverter-day dengan "
+             "uptime < m2a_soiling.availability_min_uptime_pct (default 95) "
+             "di-mask dari deret PR supaya outage parsial tidak terbaca "
+             "sebagai soiling.",
     )
     parser.add_argument("--config", default=os.path.join("config", "m2_config.yaml"))
     parser.add_argument("--output-dir", default="outputs")
@@ -480,6 +508,14 @@ def main(argv=None) -> None:
     soil_base["precipitation_path"] = precip_path
     soil_base["cleaning_report_path"] = cleaning_report_path
     soil_base["dc_cable_list_path"] = dc_cable_path
+    if args.availability_dir is not None:
+        if not os.path.isdir(args.availability_dir):
+            raise SystemExit(
+                f"[soiling-run] availability dir tidak ditemukan: "
+                f"{args.availability_dir!r}"
+            )
+        soil_base["availability_dir"] = args.availability_dir
+        print(f"[soiling-run] availability mask: {args.availability_dir}")
     if args.rdtools_reps is not None:
         soil_base["rdtools_reps"] = args.rdtools_reps
     if args.clean_criterion is not None:
