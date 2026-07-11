@@ -101,6 +101,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import warnings
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
@@ -1006,9 +1007,54 @@ def _load_manual_cleaning(
 
 
 _M2E_FINDINGS_FILE_RE = re.compile(r"^m2_findings_(\d{8})\.(jsonl|xlsx)$", re.I)
+# jsonl gagal (setelah retry) sebanyak ini TANGGAL BERUNTUN sementara xlsx
+# jalan -> mount DriveFS sedang bermasalah dengan jsonl secara persisten;
+# skip jsonl untuk tanggal berikutnya supaya tidak buang waktu retry ~470x.
+_AVAILABILITY_JSONL_SKIP_AFTER = 5
 
 
-def _load_availability_uptime(dir_path: str) -> Optional[pd.DataFrame]:
+def _parse_availability_jsonl(path: str, day: pd.Timestamp) -> List[dict]:
+    """Parse satu m2_findings jsonl -> rows [date, inverter_id, uptime_pct]."""
+    rows: List[dict] = []
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("sub_module") != "M2e_inverter":
+                continue
+            rows.append({
+                "date": day,
+                "inverter_id": str(rec.get("inverter_id")),
+                "uptime_pct": float(rec.get("value")),
+            })
+    return rows
+
+
+def _parse_availability_xlsx(path: str, day: pd.Timestamp) -> List[dict]:
+    """Parse satu m2_findings xlsx (sheet Findings) -> rows."""
+    df = pd.read_excel(path, sheet_name="Findings")
+    if "sub_module" not in df.columns:
+        return []
+    sub = df[df["sub_module"] == "M2e_inverter"]
+    return [{
+        "date": day,
+        "inverter_id": str(r["inverter_id"]),
+        "uptime_pct": float(r["value"]),
+    } for _, r in sub.iterrows()]
+
+
+def _load_availability_uptime(
+    dir_path: str,
+    *,
+    retries: int = 3,
+    retry_delay_s: float = 2.0,
+    min_coverage_warn: float = 0.9,
+) -> Optional[pd.DataFrame]:
     """Load uptime inverter per hari dari output M2e daily notebook.
 
     File yang dikenali di ``dir_path`` (folder outputs Drive):
@@ -1016,65 +1062,106 @@ def _load_availability_uptime(dir_path: str) -> Optional[pd.DataFrame]:
     / write_xlsx_multi). Baris yang dipakai: ``sub_module == "M2e_inverter"``
     dengan ``value`` = uptime_pct. Catatan: M2e default hanya emit inverter
     NON-NORMAL (uptime di bawah ambang severity), jadi inverter yang tidak
-    muncul dianggap available penuh. Tanggal ganda jsonl+xlsx -> jsonl
-    menang (parse jauh lebih cepat).
+    muncul dianggap available penuh.
 
-    Returns df [date, inverter_id, uptime_pct] atau None bila folder tidak
-    ada / tidak ada file dikenali.
+    Ketangguhan terhadap DriveFS Colab (errno 107 "Transport endpoint is
+    not connected" saat burst baca ratusan file kecil):
+      1. Tiap file dibaca dengan ``retries`` percobaan berjeda
+         ``retry_delay_s`` detik (errno 107 transien pulih dalam hitungan
+         detik).
+      2. Bila jsonl tetap gagal, fallback ke xlsx TANGGAL YANG SAMA
+         (jsonl hanya prioritas kecepatan parse, isinya identik).
+      3. Fail loud: satu baris ringkasan "X/N tanggal terbaca" selalu
+         diprint, plus UserWarning keras bila cakupan < min_coverage_warn
+         -- kejadian "mask diam-diam kosong" langsung terlihat, bukan
+         terkubur di ratusan warning per file.
+    jsonl yang gagal ``_AVAILABILITY_JSONL_SKIP_AFTER`` tanggal beruntun
+    di-skip untuk sisa tanggal (pola kegagalan persisten).
+
+    Returns df [date, inverter_id, uptime_pct]; df kosong bila semua
+    tanggal terbaca tapi tak ada finding M2e_inverter; None bila folder
+    tidak ada / tidak ada file dikenali / SEMUA tanggal gagal dibaca.
     """
     if not dir_path or not os.path.isdir(dir_path):
         return None
-    by_date: Dict[str, str] = {}
+    by_date: Dict[str, Dict[str, str]] = {}
     for fn in sorted(os.listdir(dir_path)):
         m = _M2E_FINDINGS_FILE_RE.match(fn)
         if not m:
             continue
         date_str, ext = m.group(1), m.group(2).lower()
-        if date_str in by_date and by_date[date_str].endswith(".jsonl"):
-            continue
-        if ext == "jsonl" or date_str not in by_date:
-            by_date[date_str] = os.path.join(dir_path, fn)
+        by_date.setdefault(date_str, {})[ext] = os.path.join(dir_path, fn)
     if not by_date:
         return None
 
     rows: List[dict] = []
-    for date_str, path in sorted(by_date.items()):
+    n_ok = 0
+    n_fallback = 0
+    failed_dates: List[str] = []
+    last_exc: Optional[Exception] = None
+    jsonl_fail_streak = 0
+
+    for date_str, paths in sorted(by_date.items()):
         day = pd.Timestamp(datetime.strptime(date_str, "%Y%m%d")).normalize()
-        try:
-            if path.lower().endswith(".jsonl"):
-                with open(path, encoding="utf-8") as fp:
-                    for line in fp:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            rec = json.loads(line)
-                        except ValueError:
-                            continue
-                        if rec.get("sub_module") != "M2e_inverter":
-                            continue
-                        rows.append({
-                            "date": day,
-                            "inverter_id": str(rec.get("inverter_id")),
-                            "uptime_pct": float(rec.get("value")),
-                        })
-            else:
-                df = pd.read_excel(path, sheet_name="Findings")
-                if "sub_module" not in df.columns:
-                    continue
-                sub = df[df["sub_module"] == "M2e_inverter"]
-                for _, r in sub.iterrows():
-                    rows.append({
-                        "date": day,
-                        "inverter_id": str(r["inverter_id"]),
-                        "uptime_pct": float(r["value"]),
-                    })
-        except Exception as exc:
-            warnings.warn(
-                f"[M2aSoiling] availability file gagal dibaca ({path}): {exc}",
-                stacklevel=2,
-            )
-    if not rows:
+        formats = []
+        if "jsonl" in paths and jsonl_fail_streak < _AVAILABILITY_JSONL_SKIP_AFTER:
+            formats.append(("jsonl", paths["jsonl"], _parse_availability_jsonl))
+        if "xlsx" in paths:
+            formats.append(("xlsx", paths["xlsx"], _parse_availability_xlsx))
+
+        day_rows: Optional[List[dict]] = None
+        jsonl_ok_here = False
+        jsonl_failed_here = False
+        for ext, path, parser in formats:
+            got: Optional[List[dict]] = None
+            for attempt in range(max(1, retries)):
+                try:
+                    got = parser(path, day)
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < retries - 1 and retry_delay_s > 0:
+                        time.sleep(retry_delay_s)
+            if got is not None:
+                day_rows = got
+                if ext == "jsonl":
+                    jsonl_ok_here = True
+                elif "jsonl" in paths:
+                    n_fallback += 1
+                break
+            if ext == "jsonl":
+                jsonl_failed_here = True
+
+        if jsonl_ok_here:
+            jsonl_fail_streak = 0
+        elif jsonl_failed_here:
+            jsonl_fail_streak += 1
+
+        if day_rows is None:
+            failed_dates.append(date_str)
+        else:
+            n_ok += 1
+            rows.extend(day_rows)
+
+    n_total = len(by_date)
+    summary = f"[M2aSoiling] availability: {n_ok}/{n_total} tanggal terbaca"
+    if n_fallback:
+        summary += f" ({n_fallback} via fallback xlsx)"
+    if failed_dates:
+        summary += f", {len(failed_dates)} gagal"
+    print(summary)
+
+    if n_ok < n_total * float(min_coverage_warn):
+        warnings.warn(
+            f"[M2aSoiling] MASK AVAILABILITY TIDAK LENGKAP: hanya "
+            f"{n_ok}/{n_total} tanggal terbaca (contoh gagal: "
+            f"{failed_dates[:5]}; error terakhir: {last_exc}). Outage "
+            "parsial pada tanggal yang gagal TIDAK ter-mask -- hasil SRR "
+            "bisa bias. Coba drive.mount(force_remount=True) atau salin "
+            "folder outputs ke disk lokal Colab dulu.",
+            stacklevel=2,
+        )
+    if n_ok == 0:
         return None
     return pd.DataFrame(rows, columns=["date", "inverter_id", "uptime_pct"])
 
@@ -1387,7 +1474,8 @@ class M2aSoiling(SubModule):
             if av_df is None:
                 warnings.warn(
                     f"[M2aSoiling] availability_dir {availability_dir!r} tidak "
-                    "berisi m2_findings_*.jsonl/.xlsx; mask dilewati.",
+                    "berisi m2_findings_*.jsonl/.xlsx yang bisa dibaca; "
+                    "mask dilewati.",
                     stacklevel=2,
                 )
             else:

@@ -817,6 +817,119 @@ def test_build_availability_mask_threshold_and_uppercase():
     assert build_availability_mask(pd.DataFrame()) == {}
 
 
+# ============================================================================
+# _load_availability_uptime -- ketangguhan DriveFS (retry/fallback/fail-loud)
+# ============================================================================
+
+
+def _write_avail_jsonl(path, inverter_id="WB01-INV01", value=50.0):
+    import json
+
+    path.write_text(
+        json.dumps({"sub_module": "M2e_inverter",
+                    "inverter_id": inverter_id, "value": value}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_load_availability_uptime_retry_recovers_transient_failure(
+    tmp_path, monkeypatch,
+):
+    """Errno 107 transien: percobaan pertama gagal, retry kedua berhasil."""
+    import pv_pipeline.m2a.soiling as soiling_mod
+
+    _write_avail_jsonl(tmp_path / "m2_findings_20260501.jsonl")
+    real = soiling_mod._parse_availability_jsonl
+    calls = {"n": 0}
+
+    def flaky(path, day):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(107, "Transport endpoint is not connected")
+        return real(path, day)
+
+    monkeypatch.setattr(soiling_mod, "_parse_availability_jsonl", flaky)
+    av = soiling_mod._load_availability_uptime(
+        str(tmp_path), retries=3, retry_delay_s=0.0,
+    )
+    assert av is not None and len(av) == 1
+    assert calls["n"] == 2
+
+
+def test_load_availability_uptime_falls_back_to_xlsx(
+    tmp_path, monkeypatch, capsys,
+):
+    """jsonl gagal permanen -> data tanggal itu diselamatkan via xlsx."""
+    import pv_pipeline.m2a.soiling as soiling_mod
+
+    (tmp_path / "m2_findings_20260501.jsonl").write_text("x", encoding="utf-8")
+    _write_m2e_findings_xlsx(tmp_path / "m2_findings_20260501.xlsx", [
+        {"sub_module": "M2e_inverter", "inverter_id": "FROM-XLSX",
+         "value": 60.0},
+    ])
+
+    def broken(path, day):
+        raise OSError(107, "Transport endpoint is not connected")
+
+    monkeypatch.setattr(soiling_mod, "_parse_availability_jsonl", broken)
+    av = soiling_mod._load_availability_uptime(
+        str(tmp_path), retries=2, retry_delay_s=0.0,
+    )
+    assert list(av["inverter_id"]) == ["FROM-XLSX"]
+    out = capsys.readouterr().out
+    assert "1/1 tanggal terbaca" in out
+    assert "fallback" in out
+
+
+def test_load_availability_uptime_warns_when_coverage_low(tmp_path):
+    """Tanggal yang gagal total (kedua format) -> warning keras TIDAK
+    LENGKAP, bukan diam-diam kosong."""
+    from pv_pipeline.m2a.soiling import _load_availability_uptime
+
+    _write_m2e_findings_xlsx(tmp_path / "m2_findings_20260501.xlsx", [
+        {"sub_module": "M2e_inverter", "inverter_id": "WB01-INV01",
+         "value": 50.0},
+    ])
+    (tmp_path / "m2_findings_20260502.xlsx").write_bytes(b"bukan xlsx")
+
+    with pytest.warns(UserWarning, match="TIDAK LENGKAP"):
+        av = _load_availability_uptime(
+            str(tmp_path), retries=2, retry_delay_s=0.0,
+        )
+    assert len(av) == 1  # hanya tanggal yang terbaca
+
+
+def test_load_availability_uptime_skips_jsonl_after_streak(
+    tmp_path, monkeypatch,
+):
+    """jsonl gagal beruntun (pola persisten) -> jsonl di-skip untuk sisa
+    tanggal, semua data tetap terselamatkan via xlsx."""
+    import pv_pipeline.m2a.soiling as soiling_mod
+
+    n_dates = 8
+    for i in range(n_dates):
+        d = f"202605{i + 1:02d}"
+        (tmp_path / f"m2_findings_{d}.jsonl").write_text("x", encoding="utf-8")
+        _write_m2e_findings_xlsx(tmp_path / f"m2_findings_{d}.xlsx", [
+            {"sub_module": "M2e_inverter", "inverter_id": f"WB01-INV{i:02d}",
+             "value": 50.0},
+        ])
+
+    calls = {"n": 0}
+
+    def broken(path, day):
+        calls["n"] += 1
+        raise OSError(107, "Transport endpoint is not connected")
+
+    monkeypatch.setattr(soiling_mod, "_parse_availability_jsonl", broken)
+    av = soiling_mod._load_availability_uptime(
+        str(tmp_path), retries=2, retry_delay_s=0.0,
+    )
+    assert len(av) == n_dates  # semua tanggal terselamatkan via xlsx
+    # jsonl hanya dicoba sampai streak SKIP_AFTER tanggal, lalu di-skip.
+    assert calls["n"] == 2 * soiling_mod._AVAILABILITY_JSONL_SKIP_AFTER
+
+
 class TestM2aSoilingAvailabilityMask:
     def test_full_mask_removes_all_days(
         self, synthetic_combined_df, soiling_cfg, mock_poa, tmp_path,
