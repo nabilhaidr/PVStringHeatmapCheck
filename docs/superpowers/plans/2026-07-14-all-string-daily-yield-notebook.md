@@ -4,7 +4,7 @@
 
 **Goal:** Build a separate Colab notebook that selectively downloads daily CSV files, calculates observed daily kWh for every detected PV string, and exports an auditable three-sheet Excel workbook.
 
-**Architecture:** Add a power-only sibling module rather than adding an all-string mode to the existing POA-aware single-string report. Read every selected CSV once into tidy timestamp/string/power rows, derive the union of strings with valid samples, aggregate one row per requested date and string, pivot the wide recap, and export it through a deterministic notebook artifact.
+**Architecture:** Add a power-only sibling module rather than adding an all-string mode to the existing POA-aware single-string report. Read every selected CSV once, immediately reduce its tidy 5-minute rows to daily per-string statistics, derive the union without concatenating days in memory, pivot the wide recap, and export it through a deterministic notebook artifact.
 
 **Tech Stack:** Python 3, pandas, NumPy, openpyxl, gdown 6+, pytest, nbformat-compatible JSON, Google Colab.
 
@@ -23,6 +23,7 @@
 - Do not load POA, produce graphs, or export five-minute data.
 - Workbook name is `output_string/all_string_yield_<yyyymmdd>_<yyyymmdd>.xlsx`.
 - Workbook sheet order is `Rekap_Yield_kWh`, `Detail_Harian`, `Metadata`.
+- Fail before materializing detail when the date-string product exceeds Excel's 1,048,576-row limit, and report the maximum supported days for the detected string count.
 - Do not alter the behavior or workbook contract of `String_Yield_Power_Irradiance.ipynb`.
 
 ---
@@ -704,3 +705,4 @@ After all four task commits:
 3. Confirm the existing single-string notebook artifact and its tests remain unchanged except for the backward-compatible selector signature.
 4. Run the focused tests, smoke runner, full pytest suite, and `git diff --check` again from the final branch head.
 5. Review `git status --short` and name every remaining unrelated local change; do not stage it.
+6. Run a one-day live public-Drive verification after installing the notebook's declared `gdown>=6.0.0` dependency; record inventory, selected/downloaded files, detected strings, statuses, and workbook reopen evidence.

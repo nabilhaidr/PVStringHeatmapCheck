@@ -14,6 +14,7 @@ rentang tanggal inklusif.
 - Sumber: folder Google Drive publik CSV Export PV String.
 - Yield: `sum(power_kw_valid * 5/60)` tanpa mengisi data yang hilang.
 - Output: workbook tiga-sheet di `output_string/`.
+- Jika detail melampaui batas baris Excel, pendekkan rentang tanggal sesuai pesan error.
 - Cell terakhir menyediakan download workbook saat dijalankan di Colab.
 
 Jalankan Cell 1 sampai Cell 6 berurutan. Edit hanya tiga nilai di Cell 2.
@@ -63,7 +64,7 @@ print(DATES[0].date(), "s.d.", DATES[-1].date())
 
 CODE_DOWNLOAD = '''# Cell 3 - Inventaris dan download CSV selektif
 from pv_pipeline.all_string_yield_report import download_csv_inputs
-if "DATES" not in globals():
+if any(name not in globals() for name in ("DATES", "URL_CSV", "INPUT_DIR")):
     raise RuntimeError("Jalankan Cell 2 terlebih dahulu.")
 MANIFEST, INPUTS = download_csv_inputs(URL_CSV, DATES, INPUT_DIR)
 print(
@@ -81,7 +82,7 @@ try:
 except ImportError:
     display = print
 from pv_pipeline.all_string_yield_report import build_all_string_daily_yield
-if "INPUTS" not in globals():
+if any(name not in globals() for name in ("INPUTS", "MANIFEST", "DATES")):
     raise RuntimeError("Jalankan Cell 3 terlebih dahulu.")
 REPORT = build_all_string_daily_yield(
     INPUTS.csv_by_date,
@@ -107,7 +108,8 @@ from pv_pipeline.all_string_yield_report import (
     verify_all_string_workbook,
     write_all_string_workbook,
 )
-if "REPORT" not in globals():
+OUTPUT_VERIFIED = False
+if any(name not in globals() for name in ("REPORT", "DATES", "OUTPUT_DIR")):
     raise RuntimeError("Jalankan Cell 4 terlebih dahulu.")
 OUTPUT_XLSX = build_all_string_output_path(
     OUTPUT_DIR,
@@ -125,10 +127,15 @@ print(
     "strings:", REPORT.metadata["detected_string_count"],
 )
 CHECK_WB.close()
+OUTPUT_VERIFIED = True
 '''
 
 CODE_DOWNLOAD_XLSX = '''# Cell 6 - Download dari Colab; lokal hanya menampilkan path
-if "OUTPUT_XLSX" not in globals() or not OUTPUT_XLSX.exists():
+if (
+    not globals().get("OUTPUT_VERIFIED", False)
+    or "OUTPUT_XLSX" not in globals()
+    or not OUTPUT_XLSX.exists()
+):
     raise RuntimeError("Jalankan Cell 5 terlebih dahulu.")
 try:
     from google.colab import files

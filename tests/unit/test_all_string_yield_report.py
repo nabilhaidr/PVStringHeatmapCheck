@@ -396,6 +396,172 @@ def test_no_valid_string_sample_fails_loudly(tmp_path):
         )
 
 
+def test_csv_reader_disables_chunked_type_inference(tmp_path, monkeypatch):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    path = _write_csv(
+        tmp_path / "20260501.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"],
+            "Inverter_ID": ["WB01-INV01"],
+            "PV1 Power(kW)": [1.0],
+        }),
+    )
+    original_read_csv = pd.read_csv
+    calls = []
+
+    def tracked_read_csv(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(report_module.pd, "read_csv", tracked_read_csv)
+
+    report_module.build_all_string_daily_yield(
+        {date(2026, 5, 1): path},
+        pd.date_range("2026-05-01", periods=1),
+    )
+
+    assert calls == [{"low_memory": False}]
+
+
+def test_build_does_not_concat_power_across_days(monkeypatch):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    original_concat = pd.concat
+
+    monkeypatch.setattr(
+        report_module.pd,
+        "read_csv",
+        lambda path, **kwargs: pd.DataFrame({"path": [str(path)]}),
+    )
+
+    def fake_extract(frame, requested_day):
+        return pd.DataFrame({
+            "timestamp": [pd.Timestamp(requested_day)],
+            "inverter_id": ["WB01-INV01"],
+            "pv_string": ["WB01-INV01-PV1"],
+            "pv_label": ["PV1"],
+            "power_kw": [1.0],
+        }), {
+            "wrong_date_rows": 0,
+            "duplicate_rows": 0,
+            "negative_samples": 0,
+            "non_finite_samples": 0,
+            "power_sources": ["PV1:direct"],
+        }
+
+    def reject_cross_day_concat(objects, *args, **kwargs):
+        frames = list(objects)
+        if len(frames) > 1 and all(
+            "pv_string" in frame.columns
+            for frame in frames
+        ):
+            raise AssertionError("cross-day power concat is not allowed")
+        return original_concat(frames, *args, **kwargs)
+
+    monkeypatch.setattr(
+        report_module,
+        "_extract_all_string_power",
+        fake_extract,
+    )
+    monkeypatch.setattr(
+        report_module.pd,
+        "concat",
+        reject_cross_day_concat,
+    )
+
+    result = report_module.build_all_string_daily_yield(
+        {
+            date(2026, 5, 1): Path("20260501.csv"),
+            date(2026, 5, 2): Path("20260502.csv"),
+        },
+        pd.date_range("2026-05-01", "2026-05-02", freq="D"),
+    )
+
+    assert result.summary["WB01-INV01-PV1"].tolist() == [
+        pytest.approx(5 / 60),
+        pytest.approx(5 / 60),
+    ]
+
+
+def test_detail_row_limit_fails_before_materializing_product(
+    tmp_path,
+    monkeypatch,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    path = _write_csv(
+        tmp_path / "20260501.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"] * 2,
+            "Inverter_ID": ["WB01-INV01", "WB01-INV02"],
+            "PV1 Power(kW)": [1.0, 1.0],
+        }),
+    )
+    monkeypatch.setattr(
+        report_module,
+        "EXCEL_MAX_ROWS",
+        2,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="Excel row limit"):
+        report_module.build_all_string_daily_yield(
+            {date(2026, 5, 1): path},
+            pd.date_range("2026-05-01", periods=1),
+        )
+
+
+def test_non_finite_direct_and_derived_power_are_dropped(tmp_path):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    first = _write_csv(
+        tmp_path / "20260501.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"],
+            "Inverter_ID": ["WB01-INV01"],
+            "PV1 Power(kW)": [1.0],
+            "PV2 Voltage(V)": [500.0],
+            "PV2 Current(A)": [10.0],
+        }),
+    )
+    second = _write_csv(
+        tmp_path / "20260502.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-02 00:00"],
+            "Inverter_ID": ["WB01-INV01"],
+            "PV1 Power(kW)": [np.inf],
+            "PV2 Voltage(V)": [1e308],
+            "PV2 Current(A)": [1e308],
+        }),
+    )
+
+    result = report_module.build_all_string_daily_yield(
+        {
+            date(2026, 5, 1): first,
+            date(2026, 5, 2): second,
+        },
+        pd.date_range("2026-05-01", "2026-05-02", freq="D"),
+    )
+
+    second_day = result.daily.loc[
+        result.daily["date"] == date(2026, 5, 2)
+    ]
+    assert second_day["status"].tolist() == [
+        "NO_STRING_DATA",
+        "NO_STRING_DATA",
+    ]
+    assert second_day["string_yield_kwh"].isna().all()
+    assert result.metadata["non_finite_power_samples"] == 2
+    assert "Non-finite power samples were dropped." in result.metadata[
+        "warnings"
+    ]
+
+
 @pytest.fixture
 def all_string_result(tmp_path):
     report_module = importlib.import_module(
@@ -477,6 +643,72 @@ def test_workbook_verifier_rejects_noncanonical_recap_header(
         report_module.verify_all_string_workbook(output)
 
 
+def test_workbook_verifier_rejects_duplicate_recap_date(
+    tmp_path,
+    all_string_result,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    output = tmp_path / "duplicate-recap-date.xlsx"
+    report_module.write_all_string_workbook(output, all_string_result)
+    workbook = load_workbook(output)
+    workbook["Rekap_Yield_kWh"]["A3"] = workbook[
+        "Rekap_Yield_kWh"
+    ]["A2"].value
+    workbook.save(output)
+    workbook.close()
+
+    with pytest.raises(RuntimeError, match="recap dates"):
+        report_module.verify_all_string_workbook(output)
+
+
+def test_workbook_verifier_rejects_duplicate_detail_combination(
+    tmp_path,
+    all_string_result,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    output = tmp_path / "duplicate-detail-row.xlsx"
+    report_module.write_all_string_workbook(output, all_string_result)
+    workbook = load_workbook(output)
+    detail = workbook["Detail_Harian"]
+    detail["A3"] = detail["A2"].value
+    detail["B3"] = detail["B2"].value
+    workbook.save(output)
+    workbook.close()
+
+    with pytest.raises(RuntimeError, match="detail combinations"):
+        report_module.verify_all_string_workbook(output)
+
+
+def test_writer_does_not_publish_unverified_workbook(
+    tmp_path,
+    all_string_result,
+    monkeypatch,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    output = tmp_path / "unverified.xlsx"
+
+    def reject_verification(path):
+        raise RuntimeError("forced verification failure")
+
+    monkeypatch.setattr(
+        report_module,
+        "verify_all_string_workbook",
+        reject_verification,
+    )
+
+    with pytest.raises(RuntimeError, match="forced verification failure"):
+        report_module.write_all_string_workbook(output, all_string_result)
+
+    assert not output.exists()
+    assert list(tmp_path.glob("*.tmp.xlsx")) == []
+
+
 @pytest.mark.parametrize(
     "sensitive_key",
     ["api_token", "session-cookie", "clientSecret", "credential_id", "db password"],
@@ -518,6 +750,70 @@ def test_workbook_canonicalizes_source_url(tmp_path, all_string_result):
         "https://drive.google.com/drive/folders/"
         "1f_KrPuqfZJTE5I9cVQiyp65QrHbkF3Iw"
     )
+
+
+def test_workbook_chunks_long_metadata_without_truncation(
+    tmp_path,
+    all_string_result,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    diagnostic = {"20260501.csv": "x" * 40_000}
+    all_string_result.metadata["csv_read_errors"] = diagnostic
+    output = tmp_path / "chunked-metadata.xlsx"
+
+    report_module.write_all_string_workbook(output, all_string_result)
+
+    workbook = load_workbook(output, data_only=False)
+    rows = [
+        (
+            workbook["Metadata"].cell(row=row, column=1).value,
+            workbook["Metadata"].cell(row=row, column=2).value,
+        )
+        for row in range(2, workbook["Metadata"].max_row + 1)
+    ]
+    workbook.close()
+    chunks = [
+        value
+        for key, value in rows
+        if str(key).startswith("csv_read_errors[")
+    ]
+    assert len(chunks) == 2
+    assert all(len(chunk) <= 30_000 for chunk in chunks)
+    assert "".join(chunks) == json.dumps(
+        diagnostic,
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def test_workbook_redacts_drive_query_from_diagnostics(
+    tmp_path,
+    all_string_result,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    all_string_result.metadata["download_errors"] = {
+        "20260502.csv": (
+            "failed https://drive.google.com/uc?"
+            "id=secret-file-id&resourcekey=secret-resource-key"
+        )
+    }
+    output = tmp_path / "redacted-diagnostic.xlsx"
+
+    report_module.write_all_string_workbook(output, all_string_result)
+
+    workbook = load_workbook(output, data_only=False)
+    persisted = "\n".join(
+        str(workbook["Metadata"].cell(row=row, column=2).value)
+        for row in range(2, workbook["Metadata"].max_row + 1)
+    )
+    workbook.close()
+    assert "secret-file-id" not in persisted
+    assert "secret-resource-key" not in persisted
+    assert "drive.google.com/uc?" not in persisted
 
 
 def test_builder_writes_nbformat_45_with_seven_expected_cells(tmp_path):
@@ -582,6 +878,11 @@ def test_builder_writes_nbformat_45_with_seven_expected_cells(tmp_path):
     assert "PV_STRING" not in all_source
     assert "URL_RAW_DATA_INPUT" not in all_source
     assert "POA" not in all_source
+    export_source = "".join(notebook["cells"][5]["source"])
+    download_source = "".join(notebook["cells"][6]["source"])
+    assert "OUTPUT_VERIFIED = False" in export_source
+    assert "OUTPUT_VERIFIED = True" in export_source
+    assert 'globals().get("OUTPUT_VERIFIED", False)' in download_source
 
 
 def test_notebook_setup_cell_auto_clones_public_repo_offline(

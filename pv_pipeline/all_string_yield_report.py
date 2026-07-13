@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import json
+import os
 from pathlib import Path
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 from openpyxl import Workbook, load_workbook
@@ -12,7 +14,6 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
-from pv_pipeline.physics import compute_active_power_integration_kwh
 from pv_pipeline.string_yield_report import (
     DownloadedInputs,
     SourceManifest,
@@ -44,10 +45,18 @@ DETAIL_COLUMNS = [
     "status",
 ]
 SHEET_ORDER = ["Rekap_Yield_kWh", "Detail_Harian", "Metadata"]
+EXCEL_MAX_ROWS = 1_048_576
+EXCEL_MAX_COLUMNS = 16_384
+EXCEL_MAX_CELL_CHARACTERS = 32_767
+METADATA_CHUNK_SIZE = 30_000
 INVERTER_RE = re.compile(r"^WB(\d{2})-INV(\d{2})$", re.I)
 POWER_RE = re.compile(r"^PV0*(\d{1,2}) Power\(kW\)$", re.I)
 VOLTAGE_RE = re.compile(r"^PV0*(\d{1,2}) Voltage\(V\)$", re.I)
 CURRENT_RE = re.compile(r"^PV0*(\d{1,2}) Current\(A\)$", re.I)
+DRIVE_URL_RE = re.compile(
+    r"https://drive\.google\.com/[^\s\"']+",
+    re.I,
+)
 
 
 @dataclass
@@ -165,13 +174,15 @@ def _extract_all_string_power(
     valid_inverter = inverter_ids.str.fullmatch(INVERTER_RE, na=False)
     parts = []
     source_labels = set()
+    diagnostics_non_finite = 0
     for pv_number, (source, first_column, second_column) in sources.items():
         first = pd.to_numeric(frame[first_column], errors="coerce")
         if source == "direct":
             power = first
         else:
             second = pd.to_numeric(frame[second_column], errors="coerce")
-            power = first * second / 1000
+            with np.errstate(over="ignore", invalid="ignore"):
+                power = first * second / 1000
         pv_label = f"PV{pv_number}"
         part = pd.DataFrame({
             "timestamp": timestamps,
@@ -179,16 +190,20 @@ def _extract_all_string_power(
             "pv_label": pv_label,
             "power_kw": power,
         })
-        part = part.loc[
+        candidate_mask = (
             ~wrong_date_mask
             & aligned_mask
             & valid_inverter
             & part["timestamp"].notna()
             & part["power_kw"].notna()
-        ].copy()
+        )
+        finite_mask = np.isfinite(part["power_kw"])
+        non_finite_samples = int((candidate_mask & ~finite_mask).sum())
+        part = part.loc[candidate_mask & finite_mask].copy()
         part["pv_string"] = part["inverter_id"] + f"-{pv_label}"
         parts.append(part)
         source_labels.add(f"{pv_label}:{source}")
+        diagnostics_non_finite += non_finite_samples
 
     tidy = pd.concat(parts, ignore_index=True)
     duplicate_rows = int(
@@ -207,6 +222,7 @@ def _extract_all_string_power(
         "wrong_date_rows": int(wrong_date_mask.sum()),
         "duplicate_rows": duplicate_rows,
         "negative_samples": int((tidy["power_kw"] < 0).sum()),
+        "non_finite_samples": diagnostics_non_finite,
         "power_sources": sorted(source_labels),
     }
 
@@ -227,8 +243,10 @@ def build_all_string_daily_yield(
     wrong_date_rows = {}
     duplicate_rows = 0
     negative_samples = 0
+    non_finite_samples = 0
     power_sources = set()
-    power_parts = []
+    stats_by_day = {}
+    string_info = {}
     readable_days = set()
 
     for requested_day in requested_days:
@@ -237,7 +255,7 @@ def build_all_string_daily_yield(
             continue
         path = Path(raw_path)
         try:
-            frame = pd.read_csv(path)
+            frame = pd.read_csv(path, low_memory=False)
             tidy, diagnostics = _extract_all_string_power(
                 frame,
                 requested_day,
@@ -250,43 +268,64 @@ def build_all_string_daily_yield(
         wrong_date_rows[path.name] = diagnostics["wrong_date_rows"]
         duplicate_rows += diagnostics["duplicate_rows"]
         negative_samples += diagnostics["negative_samples"]
+        non_finite_samples += diagnostics["non_finite_samples"]
         power_sources.update(diagnostics["power_sources"])
         if not tidy.empty:
-            power_parts.append(tidy)
+            stats = (
+                tidy.groupby(
+                    ["inverter_id", "pv_string", "pv_label"],
+                    as_index=False,
+                )["power_kw"]
+                .agg(["count", "sum"])
+                .reset_index()
+                .rename(columns={"count": "valid_power_samples"})
+            )
+            stats["string_yield_kwh"] = stats.pop("sum") * 5 / 60
+            stats = stats.set_index("pv_string")
+            stats_by_day[requested_day] = stats
+            string_info.update({
+                str(pv_string): (str(inverter_id), str(pv_label))
+                for pv_string, inverter_id, pv_label in stats.reset_index()[
+                    ["pv_string", "inverter_id", "pv_label"]
+                ].itertuples(index=False, name=None)
+            })
 
     if not readable_days:
         raise RuntimeError("No requested CSV could be read and validated.")
-    if not power_parts:
+    if not string_info:
         raise RuntimeError(
             "No valid PV string power sample found in requested range."
         )
 
-    power = pd.concat(power_parts, ignore_index=True)
-    duplicate_rows += int(
-        len(power)
-        - len(power.drop_duplicates(["timestamp", "pv_string"]))
-    )
-    power = (
-        power.groupby(
-            ["timestamp", "inverter_id", "pv_string", "pv_label"],
-            as_index=False,
-        )["power_kw"]
-        .mean()
-        .sort_values(["timestamp", "pv_string"])
-    )
-    strings = sorted(power["pv_string"].unique(), key=_natural_string_key)
+    strings = sorted(string_info, key=_natural_string_key)
+    detail_row_count = len(requested_days) * len(strings)
+    if detail_row_count + 1 > EXCEL_MAX_ROWS:
+        maximum_days = (EXCEL_MAX_ROWS - 1) // len(strings)
+        raise ValueError(
+            "Detail_Harian would exceed the Excel row limit "
+            f"({detail_row_count + 1:,} > {EXCEL_MAX_ROWS:,}); "
+            f"shorten the range to at most {maximum_days} days for "
+            f"{len(strings):,} detected strings."
+        )
+    if len(strings) + 1 > EXCEL_MAX_COLUMNS:
+        raise ValueError(
+            "Rekap_Yield_kWh would exceed the Excel column limit "
+            f"({len(strings) + 1:,} > {EXCEL_MAX_COLUMNS:,})."
+        )
 
     daily_rows = []
     for requested_day in requested_days:
         raw_path = csv_by_date.get(requested_day)
         path_name = Path(raw_path).name if raw_path is not None else None
-        day_power = power.loc[power["timestamp"].dt.date == requested_day]
+        day_stats = stats_by_day.get(requested_day)
         for pv_string in strings:
-            values = day_power.loc[
-                day_power["pv_string"] == pv_string,
-                ["timestamp", "inverter_id", "pv_label", "power_kw"],
-            ]
-            valid = int(values["power_kw"].notna().sum())
+            if day_stats is not None and pv_string in day_stats.index:
+                stats = day_stats.loc[pv_string]
+                valid = int(stats["valid_power_samples"])
+                yield_kwh = float(stats["string_yield_kwh"])
+            else:
+                valid = 0
+                yield_kwh = np.nan
             if raw_path is None:
                 status = "MISSING_CSV"
             elif path_name in read_errors:
@@ -297,15 +336,7 @@ def build_all_string_daily_yield(
                 status = "COMPLETE"
             else:
                 status = "PARTIAL"
-            yield_kwh = (
-                compute_active_power_integration_kwh(
-                    values.set_index("timestamp")["power_kw"],
-                    freq_hours=5 / 60,
-                )
-                if valid
-                else np.nan
-            )
-            inverter_id, pv_label = pv_string.rsplit("-", 1)
+            inverter_id, pv_label = string_info[pv_string]
             daily_rows.append({
                 "date": requested_day,
                 "pv_string": pv_string,
@@ -347,6 +378,8 @@ def build_all_string_daily_yield(
         )
     if negative_samples:
         warnings_list.append("Negative power samples were retained.")
+    if non_finite_samples:
+        warnings_list.append("Non-finite power samples were dropped.")
 
     metadata = {
         "start_date": requested_days[0].isoformat(),
@@ -370,6 +403,7 @@ def build_all_string_daily_yield(
         "wrong_date_rows": wrong_date_rows,
         "duplicate_rows": duplicate_rows,
         "negative_power_samples": negative_samples,
+        "non_finite_power_samples": non_finite_samples,
         "power_sources": sorted(power_sources),
         "yield_formula": "sum(power_kw_valid * 5/60)",
         "interval_minutes": 5,
@@ -386,6 +420,31 @@ def build_all_string_output_path(output_dir, start, end) -> Path:
     return Path(output_dir) / (
         f"all_string_yield_{start:%Y%m%d}_{end:%Y%m%d}.xlsx"
     )
+
+
+def _without_drive_query(match: re.Match) -> str:
+    parts = urlsplit(match.group(0))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def _metadata_rows(metadata):
+    for key, value in metadata.items():
+        if key == "source_url_csv" and value:
+            value = _canonicalize_drive_folder_url_for_persistence(value)
+        if isinstance(value, (dict, list, tuple)):
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        value = _excel_value(value)
+        if isinstance(value, str):
+            value = DRIVE_URL_RE.sub(_without_drive_query, value)
+            if len(value) > METADATA_CHUNK_SIZE:
+                chunks = [
+                    value[index:index + METADATA_CHUNK_SIZE]
+                    for index in range(0, len(value), METADATA_CHUNK_SIZE)
+                ]
+                for index, chunk in enumerate(chunks, start=1):
+                    yield f"{key}[{index}/{len(chunks)}]", chunk
+                continue
+        yield str(key), value
 
 
 def write_all_string_workbook(
@@ -450,18 +509,23 @@ def write_all_string_workbook(
     metadata_sheet.append(["key", "value"])
     for cell in metadata_sheet[1]:
         cell.font = Font(bold=True)
-    for key, value in report.metadata.items():
-        if key == "source_url_csv" and value:
-            value = _canonicalize_drive_folder_url_for_persistence(value)
-        if isinstance(value, (dict, list, tuple)):
-            value = json.dumps(value, ensure_ascii=False, default=str)
-        metadata_sheet.append([str(key), _excel_value(value)])
+    for key, value in _metadata_rows(report.metadata):
+        metadata_sheet.append([key, value])
     metadata_sheet.freeze_panes = "A2"
     metadata_sheet.auto_filter.ref = metadata_sheet.dimensions
     _set_column_widths(metadata_sheet, {"A": 32, "B": 80})
 
-    workbook.save(output_path)
-    verify_all_string_workbook(output_path)
+    temporary_path = output_path.with_name(
+        f"{output_path.stem}.tmp{output_path.suffix}"
+    )
+    temporary_path.unlink(missing_ok=True)
+    try:
+        workbook.save(temporary_path)
+        verify_all_string_workbook(temporary_path)
+        os.replace(temporary_path, output_path)
+    finally:
+        workbook.close()
+        temporary_path.unlink(missing_ok=True)
     return output_path
 
 
@@ -497,6 +561,10 @@ def verify_all_string_workbook(path: Path) -> None:
             raise RuntimeError(
                 "Unexpected recap PV string headers."
             )
+        if len(set(recap_strings)) != len(recap_strings):
+            raise RuntimeError(
+                "Unexpected recap PV string headers."
+            )
         detail_headers = [cell.value for cell in detail_sheet[1]]
         if detail_headers != DETAIL_COLUMNS:
             raise RuntimeError(
@@ -509,10 +577,28 @@ def verify_all_string_workbook(path: Path) -> None:
             metadata_sheet.cell(row=row, column=2).value
             for row in range(2, metadata_sheet.max_row + 1)
         }
+        if any(
+            isinstance(metadata_sheet.cell(row=row, column=2).value, str)
+            and len(metadata_sheet.cell(row=row, column=2).value)
+            > EXCEL_MAX_CELL_CHARACTERS
+            for row in range(2, metadata_sheet.max_row + 1)
+        ):
+            raise RuntimeError("Metadata contains an oversized Excel cell.")
         requested_days = int(metadata.get("requested_days", 0))
         detected_strings = int(metadata.get("detected_string_count", 0))
         if requested_days < 1 or detected_strings < 1:
             raise RuntimeError("Metadata has invalid report dimensions.")
+        try:
+            start_date = pd.Timestamp(metadata["start_date"]).date()
+            end_date = pd.Timestamp(metadata["end_date"]).date()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Metadata has invalid report dates.") from exc
+        expected_dates = [
+            value.date()
+            for value in pd.date_range(start_date, end_date, freq="D")
+        ]
+        if len(expected_dates) != requested_days:
+            raise RuntimeError("Metadata has invalid report dates.")
         if recap_sheet.max_row != requested_days + 1:
             raise RuntimeError("Recap row count does not match requested days.")
         if recap_sheet.max_column != detected_strings + 1:
@@ -523,5 +609,41 @@ def verify_all_string_workbook(path: Path) -> None:
             raise RuntimeError(
                 "Detail row count does not match date-string combinations."
             )
+        try:
+            recap_dates = [
+                pd.Timestamp(
+                    recap_sheet.cell(row=row, column=1).value
+                ).date()
+                for row in range(2, recap_sheet.max_row + 1)
+            ]
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Unexpected recap dates.") from exc
+        if recap_dates != expected_dates:
+            raise RuntimeError("Unexpected recap dates.")
+        for offset, (expected_date, expected_string) in enumerate(
+            (
+                (expected_date, expected_string)
+                for expected_date in expected_dates
+                for expected_string in recap_strings
+            ),
+            start=2,
+        ):
+            try:
+                actual_date = pd.Timestamp(
+                    detail_sheet.cell(row=offset, column=1).value
+                ).date()
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Unexpected detail combinations."
+                ) from exc
+            actual_string = detail_sheet.cell(
+                row=offset,
+                column=2,
+            ).value
+            if (actual_date, actual_string) != (
+                expected_date,
+                expected_string,
+            ):
+                raise RuntimeError("Unexpected detail combinations.")
     finally:
         workbook.close()

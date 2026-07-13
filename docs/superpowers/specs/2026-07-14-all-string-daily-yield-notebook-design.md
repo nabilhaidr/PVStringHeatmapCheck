@@ -122,7 +122,10 @@ rentang tanggal.
 
 ## Ekstraksi power
 
-Setiap CSV dibaca sekali. Ekstraksi mempertahankan semantik single-string:
+Setiap CSV dibaca sekali. Data 5-menit dari satu file langsung diringkas menjadi
+statistik harian per string sebelum file berikutnya dibaca; frame 5-menit lintas
+hari tidak digabung atau dipertahankan di memori. Ekstraksi mempertahankan
+semantik single-string:
 
 1. Kolom waktu dicari sebagai `Start Time` secara case-insensitive.
 2. Baris bertanggal selain tanggal yang dinyatakan oleh nama file dibuang dan
@@ -138,6 +141,8 @@ Setiap CSV dibaca sekali. Ekstraksi mempertahankan semantik single-string:
    peringatan.
 9. Timestamp tidak dibulatkan ke grid. Hanya sampel tepat pada slot 5-menit yang
    masuk ke coverage dan integrasi.
+10. Nilai power `inf`/`-inf`, termasuk overflow V x I, dibuang dan jumlahnya
+    dicatat sebagai sampel non-finite.
 
 ## Perhitungan yield harian
 
@@ -213,13 +218,25 @@ Urutan sheet:
    - Freeze pane, filter, serta format tanggal, yield, dan coverage numerik.
 3. **`Metadata`**
    - Konfigurasi canonical, tanggal pembuatan WITA, rumus, interval, jumlah
-     string, daftar file terbaca, tanggal/file hilang, download/read errors,
-     wrong-date rows, duplikat, power negatif, sumber power, dan peringatan.
+      string, daftar file terbaca, tanggal/file hilang, download/read errors,
+      wrong-date rows, duplikat, power negatif/non-finite, sumber power, dan
+      peringatan.
+   - Nilai panjang dipecah menjadi cell maksimum 30.000 karakter agar tidak
+     terpotong oleh batas Excel; query dan fragment URL Google Drive dihapus
+     dari diagnostik sebelum ditulis.
 
-Workbook dibuka ulang setelah disimpan. Verifikasi minimal memastikan file
-tidak kosong, urutan dan nama sheet tepat, header sesuai kontrak, rekap memiliki
-seluruh tanggal dan string, detail memiliki jumlah baris `tanggal x string`, dan
-metadata tersedia.
+Workbook mula-mula ditulis ke file sementara. Verifikasi memastikan file tidak
+kosong, urutan dan nama sheet tepat, header sesuai kontrak, tanggal rekap tepat
+sama dengan rentang inklusif, detail tepat sama dengan produk Cartesian
+`tanggal x string`, metadata tersedia, dan tidak ada cell metadata melampaui
+batas Excel. Hanya workbook yang lolos verifikasi yang dipindahkan secara atomik
+ke nama output final; cell download menolak file tanpa sentinel verifikasi.
+
+Excel membatasi satu sheet pada 1.048.576 baris dan 16.384 kolom. Setelah union
+string diketahui, pipeline menghitung ukuran `Detail_Harian` dan
+`Rekap_Yield_kWh` sebelum membentuk produk tanggal x string. Jika batas akan
+terlampaui, proses gagal dengan jumlah baris/kolom serta maksimum hari yang
+diizinkan untuk jumlah string terdeteksi; pengguna harus memperpendek rentang.
 
 ## Susunan notebook
 
@@ -249,6 +266,8 @@ Cell gagal dengan pesan eksplisit bila cell prasyarat belum dijalankan.
   masih dapat dibangun; status dan metadata mencatat kekurangan tersebut.
 - Tidak ada CSV yang dapat dibaca: gagal dengan `RuntimeError`.
 - Tidak ada string dengan sampel power valid: gagal dengan `RuntimeError`.
+- Produk tanggal x string atau jumlah kolom melampaui batas Excel: gagal sebelum
+  materialisasi detail dengan rekomendasi rentang maksimum.
 - Workbook gagal diverifikasi: cell ekspor gagal dan cell download tidak boleh
   mengunduh file tersebut.
 
@@ -283,6 +302,7 @@ Verifikasi akhir menjalankan test file baru, smoke notebook, lalu seluruh
 - Pengguna hanya perlu mengubah `URL_CSV`, `START_DATE`, dan `END_DATE`.
 - Notebook mengunduh hanya CSV dalam rentang yang diminta.
 - Setiap CSV terbaca diproses satu kali untuk seluruh string.
+- Data 5-menit diringkas per file dan tidak digabung lintas hari di memori.
 - Rekap memuat seluruh tanggal dan seluruh string terdeteksi dengan urutan alami.
 - Yield parsial tidak dinormalisasi menjadi satu hari penuh.
 - Kekurangan data dapat dilacak melalui `Detail_Harian` dan `Metadata`.
