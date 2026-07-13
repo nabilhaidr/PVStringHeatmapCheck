@@ -43,6 +43,7 @@ baseline/
 outputs_daily_runfast/
 models/
 .superpowers/
+.worktrees/
 
 # Raw plant data (jangan publish ke GitHub; taruh manual di runtime/Drive)
 raw data input/
