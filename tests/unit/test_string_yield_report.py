@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import xml.etree.ElementTree as ET
+from zipfile import ZipFile
 
 import matplotlib
 import numpy as np
@@ -79,6 +81,29 @@ def report_fixture():
     )
 
 
+def _serialized_combo_axes(path):
+    namespaces = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
+    }
+    with ZipFile(path) as archive:
+        for name in archive.namelist():
+            if not name.startswith("xl/charts/chart") or not name.endswith(".xml"):
+                continue
+            root = ET.fromstring(archive.read(name))
+            title_text = "".join(
+                node.text or "" for node in root.findall(".//a:t", namespaces)
+            )
+            if "Power String vs POA Irradiance" not in title_text:
+                continue
+            plot_area = root.find("c:chart/c:plotArea", namespaces)
+            axes = []
+            for tag in ("catAx", "dateAx", "valAx"):
+                axes.extend((tag, node) for node in plot_area.findall(f"c:{tag}", namespaces))
+            return axes, namespaces
+    raise AssertionError("Serialized power/POA combo chart was not found.")
+
+
 def test_parse_string_selection_normalizes_case_and_pv_number():
     got = parse_string_selection("wb05-inv01-pv03")
     assert (got.canonical, got.wb_id, got.inverter_id, got.pv_number, got.pv_label) == (
@@ -105,13 +130,28 @@ def test_parse_date_range_is_inclusive_and_rejects_reverse():
 
 def test_drive_url_and_inventory_json_contract():
     url = "https://drive.google.com/drive/folders/folder-id?usp=sharing"
-    assert validate_drive_folder_url(url) == url
+    assert validate_drive_folder_url(url) == (
+        "https://drive.google.com/drive/folders/folder-id"
+    )
     items = parse_inventory_json('[{"url":"u1","path":"root/20260501.csv"}]')
     assert items == [DriveItem(url="u1", path="root/20260501.csv")]
     with pytest.raises(ValueError):
         validate_drive_folder_url("https://example.com/folder-id")
     with pytest.raises(ValueError):
         parse_inventory_json('[{"url":"u1"}]')
+
+
+def test_drive_folder_url_removes_arbitrary_query_and_fragment():
+    url = (
+        "https://drive.google.com/drive/folders/folder-id"
+        "?access_token=abc&usp=sharing#frag"
+    )
+
+    canonical = validate_drive_folder_url(url)
+
+    assert canonical == "https://drive.google.com/drive/folders/folder-id"
+    assert "access_token" not in canonical
+    assert "abc" not in canonical
 
 
 def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
@@ -529,10 +569,52 @@ def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
         power_chart, poa_chart = combo_chart._charts
         assert "Data_5Menit" in power_chart.ser[0].val.numRef.f
         assert "Data_5Menit" in poa_chart.ser[0].val.numRef.f
-        assert power_chart.y_axis.axId != poa_chart.y_axis.axId
+        axis_ids = {
+            power_chart.x_axis.axId,
+            power_chart.y_axis.axId,
+            poa_chart.y_axis.axId,
+        }
+        assert power_chart.x_axis.tagname in {"catAx", "dateAx"}
+        assert len(axis_ids) == 3
+        assert power_chart.x_axis.crossAx == power_chart.y_axis.axId
+        assert power_chart.y_axis.crossAx == power_chart.x_axis.axId
+        assert poa_chart.y_axis.crossAx == power_chart.x_axis.axId
         assert poa_chart.y_axis.crosses == "max"
         assert power_chart.y_axis.title.tx.rich.p[0].r[0].t == "Power string (kW)"
         assert poa_chart.y_axis.title.tx.rich.p[0].r[0].t == "POA irradiance (W/m²)"
+
+        serialized_axes, namespaces = _serialized_combo_axes(written)
+        assert [tag for tag, _ in serialized_axes].count("catAx") + [
+            tag for tag, _ in serialized_axes
+        ].count("dateAx") == 1
+        assert [tag for tag, _ in serialized_axes].count("valAx") == 2
+        serialized_ids = [
+            int(node.find("c:axId", namespaces).get("val"))
+            for _, node in serialized_axes
+        ]
+        assert len(serialized_ids) == len(set(serialized_ids)) == 3
+        serialized_crossings = {
+            int(node.find("c:axId", namespaces).get("val")):
+            int(node.find("c:crossAx", namespaces).get("val"))
+            for _, node in serialized_axes
+        }
+        assert set(serialized_crossings.values()).issubset(serialized_crossings)
+        category_id = next(
+            int(node.find("c:axId", namespaces).get("val"))
+            for tag, node in serialized_axes if tag in {"catAx", "dateAx"}
+        )
+        value_axes = [node for tag, node in serialized_axes if tag == "valAx"]
+        secondary_axis = next(
+            node for node in value_axes
+            if node.find("c:crosses", namespaces) is not None
+            and node.find("c:crosses", namespaces).get("val") == "max"
+        )
+        primary_axis = next(node for node in value_axes if node is not secondary_axis)
+        primary_id = int(primary_axis.find("c:axId", namespaces).get("val"))
+        secondary_id = int(secondary_axis.find("c:axId", namespaces).get("val"))
+        assert serialized_crossings[category_id] == primary_id
+        assert serialized_crossings[primary_id] == category_id
+        assert serialized_crossings[secondary_id] == category_id
 
         metadata = dict(metadata_sheet.iter_rows(min_row=2, values_only=True))
         assert metadata["source_url_csv"] == report_fixture.metadata["source_url_csv"]
@@ -565,6 +647,61 @@ def test_workbook_rejects_sensitive_metadata_before_saving(
         write_report_workbook(path, report)
 
     assert not path.exists()
+
+
+def test_workbook_rejects_sensitive_keys_nested_inside_structures(
+    tmp_path, report_fixture
+):
+    report = ReportData(
+        daily=report_fixture.daily,
+        five_minute=report_fixture.five_minute,
+        metadata={
+            **report_fixture.metadata,
+            "diagnostics": [{"request": {"api_token": "must-not-leak"}}],
+        },
+    )
+    path = tmp_path / "nested-sensitive.xlsx"
+
+    with pytest.raises(ValueError, match="Sensitive metadata key.*api_token"):
+        write_report_workbook(path, report)
+
+    assert not path.exists()
+
+
+def test_workbook_canonicalizes_source_urls_before_metadata_serialization(
+    tmp_path, report_fixture
+):
+    report = ReportData(
+        daily=report_fixture.daily,
+        five_minute=report_fixture.five_minute,
+        metadata={
+            **report_fixture.metadata,
+            "source_url_csv": (
+                "https://drive.google.com/drive/folders/csv-test"
+                "?access_token=abc#frag"
+            ),
+            "source_url_poa": (
+                "https://drive.google.com/drive/folders/poa-test?usp=sharing"
+            ),
+        },
+    )
+
+    written = write_report_workbook(tmp_path / "canonical-urls.xlsx", report)
+    workbook = load_workbook(written, data_only=False)
+    try:
+        metadata = dict(
+            workbook["Metadata"].iter_rows(min_row=2, values_only=True)
+        )
+        assert metadata["source_url_csv"] == (
+            "https://drive.google.com/drive/folders/csv-test"
+        )
+        assert metadata["source_url_poa"] == (
+            "https://drive.google.com/drive/folders/poa-test"
+        )
+        assert "access_token" not in metadata["source_url_csv"]
+        assert "abc" not in metadata["source_url_csv"]
+    finally:
+        workbook.close()
 
 
 def test_plot_contract_uses_gaps_and_secondary_axis(report_fixture, selection):

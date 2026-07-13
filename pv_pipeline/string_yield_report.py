@@ -111,7 +111,7 @@ def validate_drive_folder_url(url: str) -> str:
     parsed = urlparse(str(url).strip())
     if parsed.scheme != "https" or parsed.netloc != "drive.google.com" or "/drive/folders/" not in parsed.path:
         raise ValueError(f"Expected a public Google Drive folder URL, got {url!r}.")
-    return str(url).strip()
+    return parsed._replace(query="", fragment="").geturl()
 
 
 def parse_inventory_json(payload: str) -> list[DriveItem]:
@@ -157,6 +157,8 @@ def select_source_manifest(
     url_csv="",
     url_poa="",
 ) -> SourceManifest:
+    url_csv = validate_drive_folder_url(url_csv) if url_csv else ""
+    url_poa = validate_drive_folder_url(url_poa) if url_poa else ""
     requested_dates = [ts.date() for ts in dates]
     csv_names = {d.strftime("%Y%m%d") + ".csv" for d in requested_dates}
     years = sorted({d.year for d in requested_dates})
@@ -596,6 +598,18 @@ def _set_column_widths(sheet, widths):
         sheet.column_dimensions[column].width = width
 
 
+def _reject_sensitive_metadata_keys(value):
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            normalized_key = re.sub(r"[^a-z]", "", str(key).casefold())
+            if any(term in normalized_key for term in SENSITIVE_METADATA_TERMS):
+                raise ValueError(f"Sensitive metadata key is not allowed: {key!r}")
+            _reject_sensitive_metadata_keys(nested_value)
+    elif isinstance(value, (list, tuple)):
+        for nested_value in value:
+            _reject_sensitive_metadata_keys(nested_value)
+
+
 def _daily_excel_chart(source_sheet):
     chart = LineChart()
     chart.title = "String Yield Harian"
@@ -636,6 +650,7 @@ def write_report_workbook(output_path, report):
             "Unexpected five-minute columns: "
             f"{list(report.five_minute.columns)!r}"
         )
+    _reject_sensitive_metadata_keys(report.metadata)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -677,7 +692,10 @@ def write_report_workbook(output_path, report):
     power_chart.title = "Power String vs POA Irradiance"
     power_chart.y_axis.title = "Power string (kW)"
     power_chart.x_axis.title = "Waktu"
-    power_chart.y_axis.axId = 10
+    power_chart.x_axis.axId = 10
+    power_chart.x_axis.crossAx = 100
+    power_chart.y_axis.axId = 100
+    power_chart.y_axis.crossAx = 10
     power_chart.height = 12
     power_chart.width = 24
     power_chart.display_blanks = "gap"
@@ -699,6 +717,7 @@ def write_report_workbook(output_path, report):
     poa_chart = LineChart()
     poa_chart.y_axis.title = "POA irradiance (W/m²)"
     poa_chart.y_axis.axId = 200
+    poa_chart.y_axis.crossAx = 10
     poa_chart.y_axis.crosses = "max"
     poa_chart.display_blanks = "gap"
     poa_values = Reference(
@@ -716,9 +735,8 @@ def write_report_workbook(output_path, report):
     for cell in metadata_sheet[1]:
         cell.font = Font(bold=True)
     for key, value in report.metadata.items():
-        normalized_key = re.sub(r"[^a-z]", "", str(key).casefold())
-        if any(term in normalized_key for term in SENSITIVE_METADATA_TERMS):
-            raise ValueError(f"Sensitive metadata key is not allowed: {key!r}")
+        if key in {"source_url_csv", "source_url_poa"} and value:
+            value = validate_drive_folder_url(value)
         if isinstance(value, (dict, list, tuple)):
             value = json.dumps(value, ensure_ascii=False, default=str)
         metadata_sheet.append([str(key), _excel_value(value)])
@@ -747,5 +765,25 @@ def verify_report_workbook(path):
             raise RuntimeError("Ringkasan_Harian must contain one chart.")
         if len(workbook["Grafik"]._charts) != 2:
             raise RuntimeError("Grafik must contain daily and combo charts.")
+        combo_chart = workbook["Grafik"]._charts[1]
+        if len(combo_chart._charts) != 2:
+            raise RuntimeError("Grafik combo chart must contain power and POA series.")
+        power_chart, poa_chart = combo_chart._charts
+        if power_chart.x_axis.tagname not in {"catAx", "dateAx"}:
+            raise RuntimeError("Grafik combo chart has no category/time axis.")
+        axis_ids = {
+            power_chart.x_axis.axId,
+            power_chart.y_axis.axId,
+            poa_chart.y_axis.axId,
+        }
+        if len(axis_ids) != 3:
+            raise RuntimeError("Grafik combo chart axis IDs must be unique.")
+        if (
+            power_chart.x_axis.crossAx != power_chart.y_axis.axId
+            or power_chart.y_axis.crossAx != power_chart.x_axis.axId
+            or poa_chart.y_axis.crossAx != power_chart.x_axis.axId
+            or poa_chart.y_axis.crosses != "max"
+        ):
+            raise RuntimeError("Grafik combo chart axis crossings are invalid.")
     finally:
         workbook.close()
