@@ -176,6 +176,7 @@ def select_source_manifest(
     *,
     url_csv="",
     url_poa="",
+    include_poa=True,
 ) -> SourceManifest:
     url_csv = (
         _canonicalize_drive_folder_url_for_persistence(url_csv) if url_csv else ""
@@ -185,7 +186,7 @@ def select_source_manifest(
     )
     requested_dates = [ts.date() for ts in dates]
     csv_names = {d.strftime("%Y%m%d") + ".csv" for d in requested_dates}
-    years = sorted({d.year for d in requested_dates})
+    years = sorted({d.year for d in requested_dates}) if include_poa else []
     poa_names = {f"POA PLTS IKN {year}.xlsx" for year in years}
     csv_index = _index_exact_basename(csv_items, csv_names)
     poa_index = _index_exact_basename(poa_items, poa_names)
