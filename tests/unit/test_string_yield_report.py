@@ -87,11 +87,12 @@ def report_fixture():
     )
 
 
-def _serialized_combo_axes(path):
+def _serialized_chart_axes(path):
     namespaces = {
         "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
         "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
     }
+    charts = []
     with ZipFile(path) as archive:
         for name in archive.namelist():
             if not name.startswith("xl/charts/chart") or not name.endswith(".xml"):
@@ -100,12 +101,18 @@ def _serialized_combo_axes(path):
             title_text = "".join(
                 node.text or "" for node in root.findall(".//a:t", namespaces)
             )
-            if "Power String vs POA Irradiance" not in title_text:
-                continue
             plot_area = root.find("c:chart/c:plotArea", namespaces)
             axes = []
             for tag in ("catAx", "dateAx", "valAx"):
                 axes.extend((tag, node) for node in plot_area.findall(f"c:{tag}", namespaces))
+            charts.append((title_text, axes))
+    return charts, namespaces
+
+
+def _serialized_combo_axes(path):
+    charts, namespaces = _serialized_chart_axes(path)
+    for title_text, axes in charts:
+        if "Power String vs POA Irradiance" in title_text:
             return axes, namespaces
     raise AssertionError("Serialized power/POA combo chart was not found.")
 
@@ -814,20 +821,39 @@ def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
         assert len(graph._charts) == 2
         summary_chart = daily._charts[0]
         graph_daily_chart, combo_chart = graph._charts
-        assert summary_chart.display_blanks == "gap"
-        assert "Ringkasan_Harian" in summary_chart.ser[0].val.numRef.f
-        assert "Ringkasan_Harian" in graph_daily_chart.ser[0].val.numRef.f
+        for daily_chart in (summary_chart, graph_daily_chart):
+            assert daily_chart.x_axis.tagname == "dateAx"
+            assert daily_chart.x_axis.numFmt.formatCode == "yyyy-mm-dd"
+            assert daily_chart.x_axis.baseTimeUnit == "days"
+            assert daily_chart.x_axis.majorUnit == 1
+            assert daily_chart.x_axis.majorTimeUnit == "days"
+            assert daily_chart.x_axis.title.tx.rich.p[0].r[0].t == "Tanggal"
+            assert daily_chart.legend is None
+            assert daily_chart.display_blanks == "gap"
+            assert "Ringkasan_Harian" in daily_chart.ser[0].val.numRef.f
+            assert "Ringkasan_Harian" in daily_chart.ser[0].cat.numRef.f
         assert len(combo_chart._charts) == 2
         power_chart, poa_chart = combo_chart._charts
-        assert "Data_5Menit" in power_chart.ser[0].val.numRef.f
-        assert "Data_5Menit" in poa_chart.ser[0].val.numRef.f
+        for subchart in (power_chart, poa_chart):
+            assert subchart.display_blanks == "gap"
+            assert "Data_5Menit" in subchart.ser[0].val.numRef.f
+            assert "Data_5Menit" in subchart.ser[0].cat.numRef.f
+        assert combo_chart.legend is not None
         axis_ids = {
             power_chart.x_axis.axId,
             power_chart.y_axis.axId,
             poa_chart.y_axis.axId,
         }
-        assert power_chart.x_axis.tagname in {"catAx", "dateAx"}
-        assert len(axis_ids) == 3
+        assert power_chart.x_axis.axId == 10
+        assert power_chart.y_axis.axId == 100
+        assert poa_chart.y_axis.axId == 200
+        assert power_chart.x_axis.tagname == "dateAx"
+        assert power_chart.x_axis.numFmt.formatCode == "dd-mmm hh:mm"
+        assert power_chart.x_axis.baseTimeUnit == "days"
+        assert power_chart.x_axis.majorUnit == 1
+        assert power_chart.x_axis.majorTimeUnit == "days"
+        assert power_chart.x_axis.title.tx.rich.p[0].r[0].t == "Waktu"
+        assert axis_ids == {10, 100, 200}
         assert power_chart.x_axis.crossAx == power_chart.y_axis.axId
         assert power_chart.y_axis.crossAx == power_chart.x_axis.axId
         assert poa_chart.y_axis.crossAx == power_chart.x_axis.axId
@@ -844,7 +870,7 @@ def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
             int(node.find("c:axId", namespaces).get("val"))
             for _, node in serialized_axes
         ]
-        assert len(serialized_ids) == len(set(serialized_ids)) == 3
+        assert set(serialized_ids) == {10, 100, 200}
         serialized_crossings = {
             int(node.find("c:axId", namespaces).get("val")):
             int(node.find("c:crossAx", namespaces).get("val"))
@@ -867,6 +893,25 @@ def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
         assert serialized_crossings[category_id] == primary_id
         assert serialized_crossings[primary_id] == category_id
         assert serialized_crossings[secondary_id] == category_id
+
+        serialized_charts, chart_namespaces = _serialized_chart_axes(written)
+        daily_axes = [
+            axes for title, axes in serialized_charts
+            if "String Yield Harian" in title
+        ]
+        assert len(daily_axes) == 2
+        for axes in daily_axes:
+            assert [tag for tag, _ in axes].count("dateAx") == 1
+            assert [tag for tag, _ in axes].count("catAx") == 0
+            date_axis = next(node for tag, node in axes if tag == "dateAx")
+            num_fmt = date_axis.find("c:numFmt", chart_namespaces)
+            assert num_fmt.get("formatCode") == "yyyy-mm-dd"
+
+        combo_date_axis = next(
+            node for tag, node in serialized_axes if tag == "dateAx"
+        )
+        combo_num_fmt = combo_date_axis.find("c:numFmt", namespaces)
+        assert combo_num_fmt.get("formatCode") == "dd-mmm hh:mm"
 
         metadata = dict(metadata_sheet.iter_rows(min_row=2, values_only=True))
         assert metadata["source_url_csv"] == report_fixture.metadata["source_url_csv"]
@@ -979,6 +1024,22 @@ def test_plot_contract_uses_gaps_and_secondary_axis(report_fixture, selection):
 def test_verify_report_workbook_rejects_missing_file(tmp_path):
     with pytest.raises(RuntimeError, match="Workbook was not created"):
         verify_report_workbook(tmp_path / "missing.xlsx")
+
+
+def test_verify_report_workbook_rejects_unformatted_time_axis(
+    tmp_path, report_fixture
+):
+    written = write_report_workbook(tmp_path / "unformatted-axis.xlsx", report_fixture)
+    workbook = load_workbook(written, data_only=False)
+    try:
+        combo_chart = workbook["Grafik"]._charts[1]
+        combo_chart._charts[0].x_axis.numFmt = None
+        workbook.save(written)
+    finally:
+        workbook.close()
+
+    with pytest.raises(RuntimeError, match="formatted date axis"):
+        verify_report_workbook(written)
 
 
 def test_builder_writes_nbformat_45_with_nine_expected_cells(tmp_path):

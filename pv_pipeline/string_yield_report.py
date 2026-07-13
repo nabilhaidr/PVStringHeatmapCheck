@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlparse
 import numpy as np
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.axis import DateAxis
 from openpyxl.styles import Font
 from openpyxl.utils.dataframe import dataframe_to_rows
 import pandas as pd
@@ -676,10 +677,16 @@ def _daily_excel_chart(source_sheet):
     chart = LineChart()
     chart.title = "String Yield Harian"
     chart.y_axis.title = "Yield (kWh)"
+    chart.x_axis = DateAxis(axId=10, crossAx=100)
     chart.x_axis.title = "Tanggal"
+    chart.x_axis.numFmt = "yyyy-mm-dd"
+    chart.x_axis.baseTimeUnit = "days"
+    chart.x_axis.majorUnit = 1
+    chart.x_axis.majorTimeUnit = "days"
     chart.height = 8
     chart.width = 16
     chart.display_blanks = "gap"
+    chart.legend = None
     values = Reference(
         source_sheet,
         min_col=2,
@@ -753,9 +760,12 @@ def write_report_workbook(output_path, report):
     power_chart = LineChart()
     power_chart.title = "Power String vs POA Irradiance"
     power_chart.y_axis.title = "Power string (kW)"
+    power_chart.x_axis = DateAxis(axId=10, crossAx=100)
     power_chart.x_axis.title = "Waktu"
-    power_chart.x_axis.axId = 10
-    power_chart.x_axis.crossAx = 100
+    power_chart.x_axis.numFmt = "dd-mmm hh:mm"
+    power_chart.x_axis.baseTimeUnit = "days"
+    power_chart.x_axis.majorUnit = 1
+    power_chart.x_axis.majorTimeUnit = "days"
     power_chart.y_axis.axId = 100
     power_chart.y_axis.crossAx = 10
     power_chart.height = 12
@@ -827,12 +837,24 @@ def verify_report_workbook(path):
             raise RuntimeError("Ringkasan_Harian must contain one chart.")
         if len(workbook["Grafik"]._charts) != 2:
             raise RuntimeError("Grafik must contain daily and combo charts.")
+        summary_chart = workbook["Ringkasan_Harian"]._charts[0]
+        graph_daily_chart = workbook["Grafik"]._charts[0]
         combo_chart = workbook["Grafik"]._charts[1]
         if len(combo_chart._charts) != 2:
             raise RuntimeError("Grafik combo chart must contain power and POA series.")
         power_chart, poa_chart = combo_chart._charts
-        if power_chart.x_axis.tagname not in {"catAx", "dateAx"}:
-            raise RuntimeError("Grafik combo chart has no category/time axis.")
+        axis_contracts = (
+            (summary_chart, "yyyy-mm-dd", "Ringkasan_Harian chart"),
+            (graph_daily_chart, "yyyy-mm-dd", "Grafik daily chart"),
+            (combo_chart, "dd-mmm hh:mm", "Grafik combo chart"),
+        )
+        for chart, number_format, label in axis_contracts:
+            axis_number_format = getattr(chart.x_axis.numFmt, "formatCode", None)
+            if (
+                chart.x_axis.tagname != "dateAx"
+                or axis_number_format != number_format
+            ):
+                raise RuntimeError(f"{label} must use a formatted date axis.")
         axis_ids = {
             power_chart.x_axis.axId,
             power_chart.y_axis.axId,
