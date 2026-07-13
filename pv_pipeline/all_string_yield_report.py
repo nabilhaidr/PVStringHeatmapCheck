@@ -2,16 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import json
 from pathlib import Path
 import re
 
 import numpy as np
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 import pandas as pd
 
 from pv_pipeline.physics import compute_active_power_integration_kwh
 from pv_pipeline.string_yield_report import (
     DownloadedInputs,
     SourceManifest,
+    _append_dataframe,
+    _canonicalize_drive_folder_url_for_persistence,
+    _excel_value,
+    _reject_sensitive_metadata_keys,
+    _set_column_widths,
     download_manifest,
     inventory_drive_folder,
     select_source_manifest,
@@ -33,6 +42,7 @@ DETAIL_COLUMNS = [
     "source_csv",
     "status",
 ]
+SHEET_ORDER = ["Rekap_Yield_kWh", "Detail_Harian", "Metadata"]
 INVERTER_RE = re.compile(r"^WB(\d{2})-INV(\d{2})$", re.I)
 POWER_RE = re.compile(r"^PV0*(\d{1,2}) Power\(kW\)$", re.I)
 VOLTAGE_RE = re.compile(r"^PV0*(\d{1,2}) Voltage\(V\)$", re.I)
@@ -366,3 +376,148 @@ def build_all_string_daily_yield(
         daily=daily,
         metadata=metadata,
     )
+
+
+def build_all_string_output_path(output_dir, start, end) -> Path:
+    return Path(output_dir) / (
+        f"all_string_yield_{start:%Y%m%d}_{end:%Y%m%d}.xlsx"
+    )
+
+
+def write_all_string_workbook(
+    output_path: Path,
+    report: AllStringYieldData,
+) -> Path:
+    if list(report.daily.columns) != DETAIL_COLUMNS:
+        raise ValueError(
+            f"Unexpected detail columns: {list(report.daily.columns)!r}"
+        )
+    summary_columns = list(report.summary.columns)
+    if not summary_columns or summary_columns[0] != "date":
+        raise ValueError(
+            f"Unexpected summary columns: {summary_columns!r}"
+        )
+    pv_strings = summary_columns[1:]
+    if pv_strings != sorted(pv_strings, key=_natural_string_key):
+        raise ValueError("Summary PV string columns are not naturally sorted.")
+    _reject_sensitive_metadata_keys(report.metadata)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    recap_sheet = workbook.create_sheet("Rekap_Yield_kWh")
+    detail_sheet = workbook.create_sheet("Detail_Harian")
+    metadata_sheet = workbook.create_sheet("Metadata")
+
+    _append_dataframe(recap_sheet, report.summary)
+    recap_sheet.freeze_panes = "B2"
+    recap_sheet.auto_filter.ref = recap_sheet.dimensions
+    for row in range(2, recap_sheet.max_row + 1):
+        recap_sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd"
+        for column in range(2, recap_sheet.max_column + 1):
+            recap_sheet.cell(row=row, column=column).number_format = "0.000"
+    recap_widths = {"A": 12}
+    for column in range(2, recap_sheet.max_column + 1):
+        recap_widths[get_column_letter(column)] = 20
+    _set_column_widths(recap_sheet, recap_widths)
+
+    _append_dataframe(detail_sheet, report.daily[DETAIL_COLUMNS])
+    detail_sheet.freeze_panes = "A2"
+    detail_sheet.auto_filter.ref = detail_sheet.dimensions
+    for row in range(2, detail_sheet.max_row + 1):
+        detail_sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd"
+        detail_sheet.cell(row=row, column=5).number_format = "0.000"
+        detail_sheet.cell(row=row, column=8).number_format = '0.0"%"'
+    _set_column_widths(detail_sheet, {
+        "A": 12,
+        "B": 20,
+        "C": 16,
+        "D": 12,
+        "E": 18,
+        "F": 20,
+        "G": 18,
+        "H": 14,
+        "I": 22,
+        "J": 18,
+        "K": 18,
+    })
+
+    metadata_sheet.append(["key", "value"])
+    for cell in metadata_sheet[1]:
+        cell.font = Font(bold=True)
+    for key, value in report.metadata.items():
+        if key == "source_url_csv" and value:
+            value = _canonicalize_drive_folder_url_for_persistence(value)
+        if isinstance(value, (dict, list, tuple)):
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        metadata_sheet.append([str(key), _excel_value(value)])
+    metadata_sheet.freeze_panes = "A2"
+    metadata_sheet.auto_filter.ref = metadata_sheet.dimensions
+    _set_column_widths(metadata_sheet, {"A": 32, "B": 80})
+
+    workbook.save(output_path)
+    verify_all_string_workbook(output_path)
+    return output_path
+
+
+def verify_all_string_workbook(path: Path) -> None:
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"Workbook was not created: {path}")
+    workbook = load_workbook(path, read_only=False, data_only=False)
+    try:
+        if workbook.sheetnames != SHEET_ORDER:
+            raise RuntimeError(
+                f"Unexpected sheet order: {workbook.sheetnames!r}"
+            )
+        recap_sheet = workbook["Rekap_Yield_kWh"]
+        detail_sheet = workbook["Detail_Harian"]
+        metadata_sheet = workbook["Metadata"]
+        recap_headers = [cell.value for cell in recap_sheet[1]]
+        if not recap_headers or recap_headers[0] != "date":
+            raise RuntimeError(
+                f"Unexpected recap headers: {recap_headers!r}"
+            )
+        recap_strings = recap_headers[1:]
+        try:
+            naturally_sorted = sorted(
+                recap_strings,
+                key=_natural_string_key,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Unexpected recap PV string headers."
+            ) from exc
+        if recap_strings != naturally_sorted:
+            raise RuntimeError(
+                "Unexpected recap PV string headers."
+            )
+        detail_headers = [cell.value for cell in detail_sheet[1]]
+        if detail_headers != DETAIL_COLUMNS:
+            raise RuntimeError(
+                f"Unexpected detail headers: {detail_headers!r}"
+            )
+        if [cell.value for cell in metadata_sheet[1]] != ["key", "value"]:
+            raise RuntimeError("Unexpected Metadata headers.")
+        metadata = {
+            metadata_sheet.cell(row=row, column=1).value:
+            metadata_sheet.cell(row=row, column=2).value
+            for row in range(2, metadata_sheet.max_row + 1)
+        }
+        requested_days = int(metadata.get("requested_days", 0))
+        detected_strings = int(metadata.get("detected_string_count", 0))
+        if requested_days < 1 or detected_strings < 1:
+            raise RuntimeError("Metadata has invalid report dimensions.")
+        if recap_sheet.max_row != requested_days + 1:
+            raise RuntimeError("Recap row count does not match requested days.")
+        if recap_sheet.max_column != detected_strings + 1:
+            raise RuntimeError(
+                "Recap column count does not match detected strings."
+            )
+        if detail_sheet.max_row != requested_days * detected_strings + 1:
+            raise RuntimeError(
+                "Detail row count does not match date-string combinations."
+            )
+    finally:
+        workbook.close()

@@ -5,6 +5,7 @@ import importlib
 from pathlib import Path
 
 import numpy as np
+from openpyxl import load_workbook
 import pandas as pd
 import pytest
 
@@ -366,3 +367,127 @@ def test_no_valid_string_sample_fails_loudly(tmp_path):
             {date(2026, 5, 1): path},
             pd.date_range("2026-05-01", periods=1),
         )
+
+
+@pytest.fixture
+def all_string_result(tmp_path):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    csv_path = _write_csv(
+        tmp_path / "20260501.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"],
+            "Inverter_ID": ["WB01-INV01"],
+            "PV1 Power(kW)": [0.0],
+        }),
+    )
+    return report_module.build_all_string_daily_yield(
+        {date(2026, 5, 1): csv_path},
+        pd.date_range("2026-05-01", "2026-05-03", freq="D"),
+    )
+
+
+def test_all_string_workbook_has_wide_detail_and_metadata_contract(
+    tmp_path,
+    all_string_result,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    output = report_module.build_all_string_output_path(
+        tmp_path,
+        date(2026, 5, 1),
+        date(2026, 5, 3),
+    )
+    assert output.name == "all_string_yield_20260501_20260503.xlsx"
+
+    report_module.write_all_string_workbook(output, all_string_result)
+    report_module.verify_all_string_workbook(output)
+
+    workbook = load_workbook(output, data_only=False)
+    assert workbook.sheetnames == [
+        "Rekap_Yield_kWh",
+        "Detail_Harian",
+        "Metadata",
+    ]
+    recap = workbook["Rekap_Yield_kWh"]
+    assert [cell.value for cell in recap[1]] == list(
+        all_string_result.summary.columns
+    )
+    assert recap.freeze_panes == "B2"
+    assert recap["B2"].number_format == "0.000"
+    assert recap["B2"].value == 0
+    assert recap["B3"].value is None
+    detail = workbook["Detail_Harian"]
+    assert [cell.value for cell in detail[1]] == (
+        report_module.DETAIL_COLUMNS
+    )
+    assert detail.freeze_panes == "A2"
+    assert detail.max_row == len(all_string_result.daily) + 1
+    metadata = workbook["Metadata"]
+    assert metadata["A1"].value == "key"
+    assert metadata["B1"].value == "value"
+    assert metadata.freeze_panes == "A2"
+    workbook.close()
+
+
+def test_workbook_verifier_rejects_noncanonical_recap_header(
+    tmp_path,
+    all_string_result,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    output = tmp_path / "tampered.xlsx"
+    report_module.write_all_string_workbook(output, all_string_result)
+    workbook = load_workbook(output)
+    workbook["Rekap_Yield_kWh"]["B1"] = "BROKEN"
+    workbook.save(output)
+    workbook.close()
+
+    with pytest.raises(RuntimeError, match="recap PV string headers"):
+        report_module.verify_all_string_workbook(output)
+
+
+@pytest.mark.parametrize(
+    "sensitive_key",
+    ["api_token", "session-cookie", "clientSecret", "credential_id", "db password"],
+)
+def test_workbook_rejects_sensitive_metadata_before_saving(
+    tmp_path,
+    all_string_result,
+    sensitive_key,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    all_string_result.metadata[sensitive_key] = "must-not-be-written"
+    output = tmp_path / "sensitive.xlsx"
+
+    with pytest.raises(ValueError, match="Sensitive metadata key"):
+        report_module.write_all_string_workbook(output, all_string_result)
+
+    assert not output.exists()
+
+
+def test_workbook_canonicalizes_source_url(tmp_path, all_string_result):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    all_string_result.metadata["source_url_csv"] = CSV_URL
+    output = tmp_path / "canonical.xlsx"
+
+    report_module.write_all_string_workbook(output, all_string_result)
+
+    workbook = load_workbook(output, data_only=False)
+    metadata = {
+        workbook["Metadata"].cell(row=row, column=1).value:
+        workbook["Metadata"].cell(row=row, column=2).value
+        for row in range(2, workbook["Metadata"].max_row + 1)
+    }
+    workbook.close()
+    assert metadata["source_url_csv"] == (
+        "https://drive.google.com/drive/folders/"
+        "1f_KrPuqfZJTE5I9cVQiyp65QrHbkF3Iw"
+    )
