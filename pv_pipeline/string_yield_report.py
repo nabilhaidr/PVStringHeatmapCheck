@@ -242,13 +242,20 @@ def download_manifest(manifest: SourceManifest, destination: Path) -> Downloaded
 
 
 def download_report_inputs(url_csv, url_poa, dates, destination):
+    url_csv = validate_drive_folder_url(url_csv)
+    url_poa = validate_drive_folder_url(url_poa)
     csv_items = inventory_drive_folder(url_csv)
     poa_inventory_error = None
     try:
         poa_items = inventory_drive_folder(url_poa)
     except Exception as exc:
         poa_items = []
-        poa_inventory_error = f"{type(exc).__name__}: {exc}"
+        poa_inventory_error = type(exc).__name__
+        if (
+            isinstance(exc, subprocess.CalledProcessError)
+            and isinstance(exc.returncode, int)
+        ):
+            poa_inventory_error += f" (return code {exc.returncode})"
     manifest = select_source_manifest(
         csv_items,
         poa_items,

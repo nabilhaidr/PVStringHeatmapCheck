@@ -222,6 +222,35 @@ def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
     assert got.url_poa == "https://drive.google.com/drive/folders/poa-folder"
 
 
+def test_download_report_inputs_validates_both_urls_before_inventory(
+    monkeypatch,
+    tmp_path,
+):
+    inventory_calls = []
+
+    def fake_inventory(url):
+        inventory_calls.append(url)
+        return []
+
+    monkeypatch.setattr(
+        "pv_pipeline.string_yield_report.inventory_drive_folder",
+        fake_inventory,
+    )
+
+    with pytest.raises(ValueError, match="(?i)resourcekey.*not supported"):
+        download_report_inputs(
+            "https://drive.google.com/drive/folders/csv-folder?usp=sharing",
+            (
+                "https://drive.google.com/drive/folders/poa-folder"
+                "?ReSoUrCeKeY=protected"
+            ),
+            parse_date_range("2026-05-01", "2026-05-01"),
+            tmp_path,
+        )
+
+    assert inventory_calls == []
+
+
 def test_download_report_inputs_keeps_csv_when_poa_inventory_fails(
     monkeypatch,
     tmp_path,
@@ -261,8 +290,86 @@ def test_download_report_inputs_keeps_csv_when_poa_inventory_fails(
     assert inputs.poa_by_year == {}
     assert manifest.missing_poa_years == [2026]
     assert inputs.download_errors == {
-        "POA folder inventory": "PermissionError: POA folder denied"
+        "POA folder inventory": "PermissionError"
     }
+
+
+def test_poa_inventory_failure_cannot_leak_query_into_workbook(
+    monkeypatch,
+    tmp_path,
+):
+    csv_url = "https://drive.google.com/drive/folders/csv-folder?usp=sharing"
+    poa_url = (
+        "https://drive.google.com/drive/folders/poa-folder"
+        "?access_token=TOPSECRET"
+    )
+
+    def fake_inventory(url):
+        if url == csv_url:
+            return [DriveItem("csv-url", "root/20260501.csv")]
+        assert url == poa_url
+        raise subprocess.CalledProcessError(
+            23,
+            [sys.executable, "-m", "gdown", poa_url, "--folder", "--json"],
+            stderr=f"permission denied for {poa_url}",
+        )
+
+    def fake_download(*, url, output, quiet):
+        assert (url, quiet) == ("csv-url", False)
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"],
+            "Inverter_ID": ["WB05-INV01"],
+            "PV3 Power(kW)": [6.0],
+        }).to_csv(output, index=False)
+        return output
+
+    monkeypatch.setattr(
+        "pv_pipeline.string_yield_report.inventory_drive_folder",
+        fake_inventory,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gdown",
+        SimpleNamespace(download=fake_download),
+    )
+    dates = parse_date_range("2026-05-01", "2026-05-01")
+
+    manifest, inputs = download_report_inputs(
+        csv_url,
+        poa_url,
+        dates,
+        tmp_path / "inputs",
+    )
+    report = build_report_data(
+        inputs.csv_by_date,
+        inputs.poa_by_year,
+        parse_string_selection("WB05-INV01-PV3"),
+        dates,
+        _write_geometry(tmp_path),
+        source_manifest=manifest,
+        download_errors=inputs.download_errors,
+    )
+    written = write_report_workbook(tmp_path / "sanitized.xlsx", report)
+
+    assert inputs.download_errors == {
+        "POA folder inventory": "CalledProcessError (return code 23)"
+    }
+    assert manifest.missing_poa_years == [2026]
+    assert report.daily.loc[0, "string_yield_kwh"] == pytest.approx(0.5)
+    assert "TOPSECRET" not in json.dumps(inputs.download_errors)
+    assert "access_token" not in json.dumps(inputs.download_errors)
+    workbook = load_workbook(written, data_only=False)
+    try:
+        metadata_text = "\n".join(
+            str(cell.value)
+            for row in workbook["Metadata"].iter_rows()
+            for cell in row
+            if cell.value is not None
+        )
+        assert "TOPSECRET" not in metadata_text
+        assert "access_token" not in metadata_text
+    finally:
+        workbook.close()
 
 
 def test_select_inventory_rejects_duplicate_requested_basename():
