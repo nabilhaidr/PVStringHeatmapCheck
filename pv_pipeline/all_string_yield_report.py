@@ -19,6 +19,7 @@ from pv_pipeline.string_yield_report import (
     _append_dataframe,
     _canonicalize_drive_folder_url_for_persistence,
     _excel_value,
+    _normalize_manage_object_value,
     _reject_sensitive_metadata_keys,
     _set_column_widths,
     download_manifest,
@@ -135,6 +136,9 @@ def _extract_all_string_power(
         if manage_column is None:
             raise KeyError("CSV missing Inverter_ID and ManageObject columns.")
         normalized = frame.rename(columns={manage_column: "ManageObject"})
+        normalized["ManageObject"] = normalized["ManageObject"].map(
+            _normalize_manage_object_value
+        )
         frame = add_inverter_id(normalized)
         inverter_column = "Inverter_ID"
 

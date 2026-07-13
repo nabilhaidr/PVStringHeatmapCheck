@@ -312,6 +312,27 @@ def test_complete_day_uses_manage_object_fallback(tmp_path):
     assert row["status"] == "COMPLETE"
 
 
+def test_manage_object_fallback_normalizes_mixed_case(tmp_path):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    path = _write_csv(
+        tmp_path / "20260501.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"],
+            "manageobject": ["root/inv_a_234_ikn"],
+            "PV3 Power(kW)": [4.0],
+        }),
+    )
+
+    result = report_module.build_all_string_daily_yield(
+        {date(2026, 5, 1): path},
+        pd.date_range("2026-05-01", periods=1),
+    )
+
+    assert result.daily["pv_string"].tolist() == ["WB02-INV34-PV3"]
+
+
 def test_metadata_preserves_inventory_and_download_diagnostics(tmp_path):
     report_module = importlib.import_module(
         "pv_pipeline.all_string_yield_report"
