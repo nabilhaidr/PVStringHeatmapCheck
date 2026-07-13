@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import ast
 from datetime import date
 import importlib
+import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 import numpy as np
 from openpyxl import load_workbook
@@ -491,3 +497,127 @@ def test_workbook_canonicalizes_source_url(tmp_path, all_string_result):
         "https://drive.google.com/drive/folders/"
         "1f_KrPuqfZJTE5I9cVQiyp65QrHbkF3Iw"
     )
+
+
+def test_builder_writes_nbformat_45_with_seven_expected_cells(tmp_path):
+    path = Path("output_string/_build_all_string_yield_notebook.py")
+    spec = importlib.util.spec_from_file_location(
+        "all_string_yield_nb_builder",
+        path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    target = module.build(tmp_path / "all-string.ipynb")
+    notebook = json.loads(target.read_text(encoding="utf-8"))
+    committed = json.loads(
+        Path("output_string/All_String_Daily_Yield.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert committed == notebook
+    assert (notebook["nbformat"], notebook["nbformat_minor"]) == (4, 5)
+    assert [cell["cell_type"] for cell in notebook["cells"]] == [
+        "markdown",
+        *("code" for _ in range(6)),
+    ]
+    markers = [
+        "gdown>=6.0.0",
+        "URL_CSV",
+        "download_csv_inputs",
+        "build_all_string_daily_yield",
+        "write_all_string_workbook",
+        "google.colab",
+    ]
+    for cell, marker in zip(notebook["cells"][1:], markers):
+        source = "".join(cell["source"])
+        assert marker in source
+        ast.parse(source)
+
+    config_source = "".join(notebook["cells"][2]["source"])
+    tree = ast.parse(config_source)
+    literal_assignments = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except (TypeError, ValueError):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        assert len(targets) == 1
+        assert isinstance(targets[0], ast.Name)
+        literal_assignments.append((targets[0].id, value))
+    assert literal_assignments == [
+        ("URL_CSV", CSV_URL),
+        ("START_DATE", "2026-05-01"),
+        ("END_DATE", "2026-05-14"),
+    ]
+    all_source = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+    )
+    assert "PV_STRING" not in all_source
+    assert "URL_RAW_DATA_INPUT" not in all_source
+    assert "POA" not in all_source
+
+
+def test_notebook_setup_cell_auto_clones_public_repo_offline(
+    tmp_path,
+    monkeypatch,
+):
+    notebook = json.loads(
+        Path("output_string/All_String_Daily_Yield.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    source = "".join(notebook["cells"][1]["source"])
+    clean_dir = tmp_path / "clean"
+    clone_dir = clean_dir / "PVStringHeatmapCheck"
+    input_dir = tmp_path / "inputs"
+    clean_dir.mkdir()
+    calls = []
+
+    def fake_check_call(command):
+        calls.append(command)
+        if command[:4] == ["git", "clone", "--depth", "1"]:
+            assert command[-1] == str(clone_dir)
+            (clone_dir / "pv_pipeline").mkdir(parents=True)
+            (clone_dir / "config").mkdir()
+
+    def fake_mkdtemp(*, prefix):
+        assert prefix == "all_string_yield_inputs_"
+        input_dir.mkdir()
+        return str(input_dir)
+
+    monkeypatch.chdir(clean_dir)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+    monkeypatch.setattr(tempfile, "mkdtemp", fake_mkdtemp)
+
+    scope = {}
+    exec(source, scope)
+
+    assert calls == [
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "--upgrade",
+            "gdown>=6.0.0",
+        ],
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "https://github.com/nabilhaidr/PVStringHeatmapCheck.git",
+            str(clone_dir),
+        ],
+    ]
+    assert scope["REPO_DIR"] == clone_dir.resolve()
+    assert scope["OUTPUT_DIR"] == clone_dir / "output_string"
+    assert scope["INPUT_DIR"] == input_dir
