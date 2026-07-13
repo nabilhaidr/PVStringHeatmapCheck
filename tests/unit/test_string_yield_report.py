@@ -770,6 +770,16 @@ def test_builder_writes_nbformat_45_with_nine_expected_cells(tmp_path):
     spec.loader.exec_module(module)
     target = module.build(tmp_path / "report.ipynb")
     nb = json.loads(target.read_text(encoding="utf-8"))
+    committed = json.loads(
+        Path("output_string/String_Yield_Power_Irradiance.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert committed == nb
+    drifted = json.loads(json.dumps(committed))
+    drifted["cells"][0]["source"].append("temporary drift")
+    with pytest.raises(AssertionError):
+        assert drifted == nb
     assert (nb["nbformat"], nb["nbformat_minor"]) == (4, 5)
     assert [cell["cell_type"] for cell in nb["cells"]] == [
         "markdown",
@@ -789,3 +799,40 @@ def test_builder_writes_nbformat_45_with_nine_expected_cells(tmp_path):
         source = "".join(cell["source"])
         assert marker in source
         ast.parse(source)
+
+
+def test_notebook_cell_2_has_exactly_five_approved_literal_defaults():
+    notebook = json.loads(
+        Path("output_string/String_Yield_Power_Irradiance.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    tree = ast.parse("".join(notebook["cells"][2]["source"]))
+    literal_assignments = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except (TypeError, ValueError):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        assert len(targets) == 1
+        assert isinstance(targets[0], ast.Name)
+        literal_assignments.append((targets[0].id, value))
+
+    assert literal_assignments == [
+        (
+            "URL_CSV",
+            "https://drive.google.com/drive/folders/"
+            "1f_KrPuqfZJTE5I9cVQiyp65QrHbkF3Iw?usp=sharing",
+        ),
+        (
+            "URL_RAW_DATA_INPUT",
+            "https://drive.google.com/drive/folders/"
+            "1y37AsVViI7IL1tCRhvAGEjiq9wWnfu_e?usp=drive_link",
+        ),
+        ("PV_STRING", "WB05-INV01-PV03"),
+        ("START_DATE", "2026-05-01"),
+        ("END_DATE", "2026-05-14"),
+    ]

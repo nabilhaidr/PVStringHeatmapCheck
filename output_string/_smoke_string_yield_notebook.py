@@ -129,10 +129,25 @@ def main() -> None:
             "OUTPUT_DIR": output_dir,
             "INPUT_DIR": input_dir,
         }
+        download_calls = []
+
+        def fake_download_report_inputs(
+            url_csv,
+            url_poa,
+            dates,
+            destination,
+        ):
+            download_calls.append((
+                url_csv,
+                url_poa,
+                tuple(timestamp.date() for timestamp in dates),
+                Path(destination),
+            ))
+            return manifest, inputs
 
         with patch(
             "pv_pipeline.string_yield_report.download_report_inputs",
-            return_value=(manifest, inputs),
+            side_effect=fake_download_report_inputs,
         ):
             _execute_report_cells(notebook, scope)
 
@@ -169,6 +184,16 @@ def main() -> None:
 
             plt.close("all")
             _execute_report_cells(notebook, scope)
+
+        expected_call = (
+            "https://drive.google.com/drive/folders/"
+            "1f_KrPuqfZJTE5I9cVQiyp65QrHbkF3Iw?usp=sharing",
+            "https://drive.google.com/drive/folders/"
+            "1y37AsVViI7IL1tCRhvAGEjiq9wWnfu_e?usp=drive_link",
+            (date(2026, 5, 1),),
+            input_dir,
+        )
+        assert download_calls == [expected_call, expected_call]
 
         workbooks = list(output_dir.glob("string_yield_*.xlsx"))
         assert workbooks == [output_xlsx]
