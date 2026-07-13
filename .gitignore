@@ -42,7 +42,9 @@ outputs/
 baseline/
 outputs_daily_runfast/
 models/
+output_string/string_yield_*.xlsx
 .superpowers/
+.worktrees/
 
 # Raw plant data (jangan publish ke GitHub; taruh manual di runtime/Drive)
 raw data input/
