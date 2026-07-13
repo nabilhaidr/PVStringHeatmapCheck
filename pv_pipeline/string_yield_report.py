@@ -108,9 +108,15 @@ def parse_date_range(start: str, end: str) -> pd.DatetimeIndex:
 
 
 def validate_drive_folder_url(url: str) -> str:
-    parsed = urlparse(str(url).strip())
+    url = str(url).strip()
+    parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.netloc != "drive.google.com" or "/drive/folders/" not in parsed.path:
         raise ValueError(f"Expected a public Google Drive folder URL, got {url!r}.")
+    return url
+
+
+def _canonicalize_drive_folder_url_for_persistence(url: str) -> str:
+    parsed = urlparse(validate_drive_folder_url(url))
     return parsed._replace(query="", fragment="").geturl()
 
 
@@ -157,8 +163,12 @@ def select_source_manifest(
     url_csv="",
     url_poa="",
 ) -> SourceManifest:
-    url_csv = validate_drive_folder_url(url_csv) if url_csv else ""
-    url_poa = validate_drive_folder_url(url_poa) if url_poa else ""
+    url_csv = (
+        _canonicalize_drive_folder_url_for_persistence(url_csv) if url_csv else ""
+    )
+    url_poa = (
+        _canonicalize_drive_folder_url_for_persistence(url_poa) if url_poa else ""
+    )
     requested_dates = [ts.date() for ts in dates]
     csv_names = {d.strftime("%Y%m%d") + ".csv" for d in requested_dates}
     years = sorted({d.year for d in requested_dates})
@@ -736,7 +746,7 @@ def write_report_workbook(output_path, report):
         cell.font = Font(bold=True)
     for key, value in report.metadata.items():
         if key in {"source_url_csv", "source_url_poa"} and value:
-            value = validate_drive_folder_url(value)
+            value = _canonicalize_drive_folder_url_for_persistence(value)
         if isinstance(value, (dict, list, tuple)):
             value = json.dumps(value, ensure_ascii=False, default=str)
         metadata_sheet.append([str(key), _excel_value(value)])

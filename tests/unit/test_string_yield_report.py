@@ -23,6 +23,7 @@ from pv_pipeline.string_yield_report import (
     build_output_path,
     build_report_data,
     download_manifest,
+    inventory_drive_folder,
     parse_date_range,
     parse_inventory_json,
     parse_string_selection,
@@ -130,9 +131,7 @@ def test_parse_date_range_is_inclusive_and_rejects_reverse():
 
 def test_drive_url_and_inventory_json_contract():
     url = "https://drive.google.com/drive/folders/folder-id?usp=sharing"
-    assert validate_drive_folder_url(url) == (
-        "https://drive.google.com/drive/folders/folder-id"
-    )
+    assert validate_drive_folder_url(url) == url
     items = parse_inventory_json('[{"url":"u1","path":"root/20260501.csv"}]')
     assert items == [DriveItem(url="u1", path="root/20260501.csv")]
     with pytest.raises(ValueError):
@@ -141,17 +140,36 @@ def test_drive_url_and_inventory_json_contract():
         parse_inventory_json('[{"url":"u1"}]')
 
 
-def test_drive_folder_url_removes_arbitrary_query_and_fragment():
+def test_drive_folder_validation_preserves_access_query_and_fragment():
     url = (
         "https://drive.google.com/drive/folders/folder-id"
-        "?access_token=abc&usp=sharing#frag"
+        "?resourcekey=drive-access-key&usp=sharing#frag"
     )
 
-    canonical = validate_drive_folder_url(url)
+    validated = validate_drive_folder_url(f"  {url}  ")
 
-    assert canonical == "https://drive.google.com/drive/folders/folder-id"
-    assert "access_token" not in canonical
-    assert "abc" not in canonical
+    assert validated == url
+
+
+def test_inventory_subprocess_receives_resourcekey_access_url(monkeypatch):
+    calls = []
+
+    def fake_run(command, *, check, capture_output, text):
+        calls.append((command, check, capture_output, text))
+        return SimpleNamespace(stdout="[]")
+
+    monkeypatch.setattr(
+        "pv_pipeline.string_yield_report.subprocess.run", fake_run
+    )
+    url = (
+        "https://drive.google.com/drive/folders/folder-id"
+        "?resourcekey=drive-access-key"
+    )
+
+    assert inventory_drive_folder(url) == []
+    command, check, capture_output, text = calls[0]
+    assert command[3] == url
+    assert (check, capture_output, text) == (True, True, True)
 
 
 def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
@@ -165,11 +183,24 @@ def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
         DriveItem("poa-27", "root/POA PLTS IKN 2027.xlsx"),
         DriveItem("other", "root/other.xlsx"),
     ]
-    got = select_source_manifest(csv_items, poa_items, dates)
+    got = select_source_manifest(
+        csv_items,
+        poa_items,
+        dates,
+        url_csv=(
+            "https://drive.google.com/drive/folders/csv-folder"
+            "?resourcekey=csv-access#frag"
+        ),
+        url_poa=(
+            "https://drive.google.com/drive/folders/poa-folder?usp=sharing"
+        ),
+    )
     assert got.csv_by_date == {date(2026, 12, 31): csv_items[1]}
     assert got.missing_csv_dates == [date(2027, 1, 1)]
     assert got.poa_by_year == {2026: poa_items[0], 2027: poa_items[1]}
     assert got.missing_poa_years == []
+    assert got.url_csv == "https://drive.google.com/drive/folders/csv-folder"
+    assert got.url_poa == "https://drive.google.com/drive/folders/poa-folder"
 
 
 def test_select_inventory_rejects_duplicate_requested_basename():
