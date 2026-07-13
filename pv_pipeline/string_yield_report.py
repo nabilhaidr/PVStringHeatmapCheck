@@ -11,6 +11,10 @@ from typing import Sequence
 from urllib.parse import urlparse
 
 import numpy as np
+from openpyxl import Workbook, load_workbook
+from openpyxl.chart import LineChart, Reference
+from openpyxl.styles import Font
+from openpyxl.utils.dataframe import dataframe_to_rows
 import pandas as pd
 import yaml
 
@@ -19,6 +23,17 @@ from pv_pipeline.poa import PyranometerLoader
 
 
 STRING_RE = re.compile(r"^(WB\d{2})-(INV\d{2})-PV(\d{1,2})$", re.I)
+DAILY_COLUMNS = [
+    "date", "string_yield_kwh", "valid_power_samples", "expected_samples",
+    "coverage_pct", "missing_power_samples", "poa_valid_samples", "source_csv",
+    "status",
+]
+FIVE_MINUTE_COLUMNS = [
+    "timestamp", "inverter_id", "pv_string", "power_kw", "poa_wm2",
+    "source_csv", "poa_source", "data_status",
+]
+SHEET_ORDER = ["Ringkasan_Harian", "Data_5Menit", "Grafik", "Metadata"]
+SENSITIVE_METADATA_TERMS = ("token", "cookie", "secret", "credential", "password")
 
 
 @dataclass(frozen=True)
@@ -497,3 +512,240 @@ def build_report_data(
         "warnings": warnings_list,
     }
     return ReportData(daily=daily, five_minute=five_minute, metadata=metadata)
+
+
+def plot_daily_yield(daily, selection):
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    ax.plot(
+        pd.to_datetime(daily["date"]),
+        daily["string_yield_kwh"],
+        marker="o",
+    )
+    ax.set(
+        title=f"Yield harian {selection.canonical}",
+        xlabel="Tanggal",
+        ylabel="String yield (kWh)",
+    )
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_power_vs_poa(five_minute, selection, start, end):
+    import matplotlib.pyplot as plt
+
+    fig, ax_power = plt.subplots(figsize=(14, 5))
+    ax_poa = ax_power.twinx()
+    line_power = ax_power.plot(
+        five_minute["timestamp"],
+        five_minute["power_kw"],
+        label="Power string",
+        color="tab:blue",
+    )[0]
+    line_poa = ax_poa.plot(
+        five_minute["timestamp"],
+        five_minute["poa_wm2"],
+        label="POA irradiance",
+        color="tab:orange",
+        alpha=0.75,
+    )[0]
+    ax_power.set(
+        xlabel="Waktu",
+        ylabel="Power string (kW)",
+        title=f"Power vs POA {selection.canonical} | {start} s.d. {end}",
+    )
+    ax_poa.set_ylabel("POA irradiance (W/m²)")
+    ax_power.legend(
+        [line_power, line_poa],
+        [line_power.get_label(), line_poa.get_label()],
+        loc="upper left",
+    )
+    ax_power.grid(True, alpha=0.25)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return fig, (ax_power, ax_poa)
+
+
+def _excel_value(value):
+    if value is None or value is pd.NA:
+        return None
+    if isinstance(value, np.generic):
+        value = value.item()
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        return value
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    return value
+
+
+def _append_dataframe(sheet, frame):
+    for row in dataframe_to_rows(frame, index=False, header=True):
+        sheet.append([_excel_value(value) for value in row])
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+
+
+def _set_column_widths(sheet, widths):
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+
+
+def _daily_excel_chart(source_sheet):
+    chart = LineChart()
+    chart.title = "String Yield Harian"
+    chart.y_axis.title = "Yield (kWh)"
+    chart.x_axis.title = "Tanggal"
+    chart.height = 8
+    chart.width = 16
+    chart.display_blanks = "gap"
+    values = Reference(
+        source_sheet,
+        min_col=2,
+        min_row=1,
+        max_row=source_sheet.max_row,
+    )
+    dates = Reference(
+        source_sheet,
+        min_col=1,
+        min_row=2,
+        max_row=source_sheet.max_row,
+    )
+    chart.add_data(values, titles_from_data=True)
+    chart.set_categories(dates)
+    return chart
+
+
+def build_output_path(output_dir, selection, start, end):
+    return Path(output_dir) / (
+        f"string_yield_{selection.inverter_id}_{selection.pv_label}_"
+        f"{start:%Y%m%d}_{end:%Y%m%d}.xlsx"
+    )
+
+
+def write_report_workbook(output_path, report):
+    if list(report.daily.columns) != DAILY_COLUMNS:
+        raise ValueError(f"Unexpected daily columns: {list(report.daily.columns)!r}")
+    if list(report.five_minute.columns) != FIVE_MINUTE_COLUMNS:
+        raise ValueError(
+            "Unexpected five-minute columns: "
+            f"{list(report.five_minute.columns)!r}"
+        )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    daily_sheet = workbook.create_sheet("Ringkasan_Harian")
+    five_sheet = workbook.create_sheet("Data_5Menit")
+    graph_sheet = workbook.create_sheet("Grafik")
+    metadata_sheet = workbook.create_sheet("Metadata")
+
+    _append_dataframe(daily_sheet, report.daily[DAILY_COLUMNS])
+    daily_sheet.freeze_panes = "A2"
+    daily_sheet.auto_filter.ref = daily_sheet.dimensions
+    for row in range(2, daily_sheet.max_row + 1):
+        daily_sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd"
+        daily_sheet.cell(row=row, column=2).number_format = "0.000"
+        daily_sheet.cell(row=row, column=5).number_format = '0.0"%"'
+    _set_column_widths(daily_sheet, {
+        "A": 12, "B": 18, "C": 20, "D": 18, "E": 14, "F": 22,
+        "G": 18, "H": 20, "I": 16,
+    })
+    daily_sheet.add_chart(_daily_excel_chart(daily_sheet), "K2")
+
+    _append_dataframe(five_sheet, report.five_minute[FIVE_MINUTE_COLUMNS])
+    five_sheet.freeze_panes = "A2"
+    five_sheet.auto_filter.ref = five_sheet.dimensions
+    for row in range(2, five_sheet.max_row + 1):
+        five_sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd hh:mm"
+        five_sheet.cell(row=row, column=4).number_format = "0.000"
+        five_sheet.cell(row=row, column=5).number_format = "0.0"
+    _set_column_widths(five_sheet, {
+        "A": 18, "B": 16, "C": 12, "D": 14, "E": 14, "F": 18,
+        "G": 14, "H": 18,
+    })
+
+    graph_sheet.sheet_view.showGridLines = False
+    graph_sheet.add_chart(_daily_excel_chart(daily_sheet), "A1")
+    power_chart = LineChart()
+    power_chart.title = "Power String vs POA Irradiance"
+    power_chart.y_axis.title = "Power string (kW)"
+    power_chart.x_axis.title = "Waktu"
+    power_chart.y_axis.axId = 10
+    power_chart.height = 12
+    power_chart.width = 24
+    power_chart.display_blanks = "gap"
+    time_values = Reference(
+        five_sheet,
+        min_col=1,
+        min_row=2,
+        max_row=five_sheet.max_row,
+    )
+    power_values = Reference(
+        five_sheet,
+        min_col=4,
+        min_row=1,
+        max_row=five_sheet.max_row,
+    )
+    power_chart.add_data(power_values, titles_from_data=True)
+    power_chart.set_categories(time_values)
+
+    poa_chart = LineChart()
+    poa_chart.y_axis.title = "POA irradiance (W/m²)"
+    poa_chart.y_axis.axId = 200
+    poa_chart.y_axis.crosses = "max"
+    poa_chart.display_blanks = "gap"
+    poa_values = Reference(
+        five_sheet,
+        min_col=5,
+        min_row=1,
+        max_row=five_sheet.max_row,
+    )
+    poa_chart.add_data(poa_values, titles_from_data=True)
+    poa_chart.set_categories(time_values)
+    power_chart += poa_chart
+    graph_sheet.add_chart(power_chart, "A18")
+
+    metadata_sheet.append(["key", "value"])
+    for cell in metadata_sheet[1]:
+        cell.font = Font(bold=True)
+    for key, value in report.metadata.items():
+        normalized_key = re.sub(r"[^a-z]", "", str(key).casefold())
+        if any(term in normalized_key for term in SENSITIVE_METADATA_TERMS):
+            raise ValueError(f"Sensitive metadata key is not allowed: {key!r}")
+        if isinstance(value, (dict, list, tuple)):
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        metadata_sheet.append([str(key), _excel_value(value)])
+    metadata_sheet.freeze_panes = "A2"
+    metadata_sheet.auto_filter.ref = metadata_sheet.dimensions
+    _set_column_widths(metadata_sheet, {"A": 32, "B": 80})
+
+    workbook.save(output_path)
+    verify_report_workbook(output_path)
+    return output_path
+
+
+def verify_report_workbook(path):
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"Workbook was not created: {path}")
+    workbook = load_workbook(path, read_only=False, data_only=False)
+    try:
+        if workbook.sheetnames != SHEET_ORDER:
+            raise RuntimeError(f"Unexpected sheet order: {workbook.sheetnames!r}")
+        if workbook["Ringkasan_Harian"].max_row < 2:
+            raise RuntimeError("Ringkasan_Harian has no data row.")
+        if workbook["Data_5Menit"].max_row < 2:
+            raise RuntimeError("Data_5Menit has no data row.")
+        if len(workbook["Ringkasan_Harian"]._charts) != 1:
+            raise RuntimeError("Ringkasan_Harian must contain one chart.")
+        if len(workbook["Grafik"]._charts) != 2:
+            raise RuntimeError("Grafik must contain daily and combo charts.")
+    finally:
+        workbook.close()

@@ -1,24 +1,82 @@
-from datetime import date
+from datetime import date, datetime
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 
+import matplotlib
 import numpy as np
+from openpyxl import load_workbook
 import pandas as pd
 import pytest
 
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
+
 from pv_pipeline.string_yield_report import (
     DriveItem,
+    ReportData,
     SourceManifest,
     _extract_string_power,
+    build_output_path,
     build_report_data,
     download_manifest,
     parse_date_range,
     parse_inventory_json,
     parse_string_selection,
+    plot_daily_yield,
+    plot_power_vs_poa,
     select_source_manifest,
     validate_drive_folder_url,
+    verify_report_workbook,
+    write_report_workbook,
 )
+
+
+@pytest.fixture
+def selection():
+    return parse_string_selection("WB05-INV01-PV03")
+
+
+@pytest.fixture
+def report_fixture():
+    grid = pd.date_range("2026-05-01", "2026-05-02 23:55", freq="5min")
+    power = pd.Series(np.nan, index=grid, dtype="float64")
+    power.iloc[pd.Index(range(13)).difference([1])] = 10.0
+    poa = pd.Series(500.0, index=grid)
+    return ReportData(
+        daily=pd.DataFrame({
+            "date": [date(2026, 5, 1), date(2026, 5, 2)],
+            "string_yield_kwh": [10.0, np.nan],
+            "valid_power_samples": [12, 0],
+            "expected_samples": [288, 288],
+            "coverage_pct": [12 / 288 * 100, 0.0],
+            "missing_power_samples": [276, 288],
+            "poa_valid_samples": [288, 288],
+            "source_csv": ["20260501.csv", None],
+            "status": ["PARTIAL", "MISSING_CSV"],
+        }),
+        five_minute=pd.DataFrame({
+            "timestamp": grid,
+            "inverter_id": "WB05-INV01",
+            "pv_string": "PV3",
+            "power_kw": power.to_numpy(),
+            "poa_wm2": poa.to_numpy(),
+            "source_csv": [
+                "20260501.csv" if ts.date() == date(2026, 5, 1) else None
+                for ts in grid
+            ],
+            "poa_source": "WS-2",
+            "data_status": np.where(power.notna(), "POWER_POA", "POA_ONLY"),
+        }),
+        metadata={
+            "source_url_csv": "https://drive.google.com/drive/folders/csv-test",
+            "source_url_poa": "https://drive.google.com/drive/folders/poa-test",
+            "missing_csv_dates": ["2026-05-02"],
+            "poa_fallback_samples": 1,
+            "warnings": [],
+        },
+    )
 
 
 def test_parse_string_selection_normalizes_case_and_pv_number():
@@ -409,3 +467,126 @@ def test_unreadable_poa_year_isolated_from_power_yield(tmp_path):
     assert report.daily.loc[0, "string_yield_kwh"] == pytest.approx(0.5)
     assert report.five_minute["poa_wm2"].isna().all()
     assert "POA PLTS IKN 2026.xlsx" in report.metadata["poa_read_errors"]
+
+
+def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
+    path = build_output_path(
+        tmp_path, selection, date(2026, 5, 1), date(2026, 5, 2)
+    )
+
+    assert path.name == "string_yield_WB05-INV01_PV3_20260501_20260502.xlsx"
+    written = write_report_workbook(path, report_fixture)
+    verify_report_workbook(written)
+
+    workbook = load_workbook(written, data_only=False)
+    try:
+        assert workbook.sheetnames == [
+            "Ringkasan_Harian", "Data_5Menit", "Grafik", "Metadata",
+        ]
+        daily = workbook["Ringkasan_Harian"]
+        five_minute = workbook["Data_5Menit"]
+        graph = workbook["Grafik"]
+        metadata_sheet = workbook["Metadata"]
+
+        assert daily.max_row == len(report_fixture.daily) + 1
+        assert five_minute.max_row == len(report_fixture.five_minute) + 1
+        assert daily.freeze_panes == "A2"
+        assert five_minute.freeze_panes == "A2"
+        assert metadata_sheet.freeze_panes == "A2"
+        assert daily.auto_filter.ref == daily.dimensions
+        assert five_minute.auto_filter.ref == five_minute.dimensions
+        assert metadata_sheet.auto_filter.ref == metadata_sheet.dimensions
+
+        assert isinstance(daily["A2"].value, (date, datetime))
+        assert daily["A2"].number_format == "yyyy-mm-dd"
+        assert daily["B2"].value == pytest.approx(10.0)
+        assert daily["B3"].value is None
+        assert daily["B2"].number_format == "0.000"
+        assert daily["E2"].value == pytest.approx(12 / 288 * 100)
+        assert daily["E2"].number_format == '0.0"%"'
+        assert isinstance(five_minute["A2"].value, datetime)
+        assert five_minute["A2"].number_format == "yyyy-mm-dd hh:mm"
+        assert five_minute["D2"].value == pytest.approx(10.0)
+        assert five_minute["D3"].value is None
+        assert five_minute["D2"].number_format == "0.000"
+        assert five_minute["E2"].number_format == "0.0"
+
+        assert all(cell.font.bold for cell in daily[1])
+        assert all(cell.font.bold for cell in five_minute[1])
+        assert all(cell.font.bold for cell in metadata_sheet[1])
+        assert daily.column_dimensions["A"].width >= 12
+        assert five_minute.column_dimensions["A"].width >= 18
+        assert metadata_sheet.column_dimensions["B"].width >= 40
+
+        assert len(daily._charts) == 1
+        assert len(graph._charts) == 2
+        summary_chart = daily._charts[0]
+        graph_daily_chart, combo_chart = graph._charts
+        assert summary_chart.display_blanks == "gap"
+        assert "Ringkasan_Harian" in summary_chart.ser[0].val.numRef.f
+        assert "Ringkasan_Harian" in graph_daily_chart.ser[0].val.numRef.f
+        assert len(combo_chart._charts) == 2
+        power_chart, poa_chart = combo_chart._charts
+        assert "Data_5Menit" in power_chart.ser[0].val.numRef.f
+        assert "Data_5Menit" in poa_chart.ser[0].val.numRef.f
+        assert power_chart.y_axis.axId != poa_chart.y_axis.axId
+        assert poa_chart.y_axis.crosses == "max"
+        assert power_chart.y_axis.title.tx.rich.p[0].r[0].t == "Power string (kW)"
+        assert poa_chart.y_axis.title.tx.rich.p[0].r[0].t == "POA irradiance (W/m²)"
+
+        metadata = dict(metadata_sheet.iter_rows(min_row=2, values_only=True))
+        assert metadata["source_url_csv"] == report_fixture.metadata["source_url_csv"]
+        assert metadata["source_url_poa"] == report_fixture.metadata["source_url_poa"]
+        assert metadata["poa_fallback_samples"] == 1
+        assert json.loads(metadata["missing_csv_dates"]) == ["2026-05-02"]
+        sensitive_terms = ("token", "cookie", "secret", "credential", "password")
+        for key in metadata:
+            normalized = "".join(char for char in str(key).casefold() if char.isalpha())
+            assert not any(term in normalized for term in sensitive_terms)
+    finally:
+        workbook.close()
+
+
+@pytest.mark.parametrize(
+    "sensitive_key",
+    ["api_token", "session-cookie", "clientSecret", "credential_id", "db password"],
+)
+def test_workbook_rejects_sensitive_metadata_before_saving(
+    tmp_path, report_fixture, sensitive_key
+):
+    report = ReportData(
+        daily=report_fixture.daily,
+        five_minute=report_fixture.five_minute,
+        metadata={**report_fixture.metadata, sensitive_key: "must-not-leak"},
+    )
+    path = tmp_path / "sensitive.xlsx"
+
+    with pytest.raises(ValueError, match="Sensitive metadata key"):
+        write_report_workbook(path, report)
+
+    assert not path.exists()
+
+
+def test_plot_contract_uses_gaps_and_secondary_axis(report_fixture, selection):
+    fig_yield, ax_yield = plot_daily_yield(report_fixture.daily, selection)
+    fig_power, (ax_power, ax_poa) = plot_power_vs_poa(
+        report_fixture.five_minute,
+        selection,
+        date(2026, 5, 1),
+        date(2026, 5, 2),
+    )
+    try:
+        assert np.isnan(ax_yield.lines[0].get_ydata()).any()
+        assert ax_yield.get_ylabel() == "String yield (kWh)"
+        assert np.isnan(ax_power.lines[0].get_ydata()).any()
+        assert ax_power.get_ylabel() == "Power string (kW)"
+        assert ax_poa.get_ylabel() == "POA irradiance (W/m²)"
+        assert ax_power is not ax_poa
+    finally:
+        plt.close(fig_yield)
+        plt.close(fig_power)
+
+
+def test_verify_report_workbook_rejects_missing_file(tmp_path):
+    with pytest.raises(RuntimeError, match="Workbook was not created"):
+        verify_report_workbook(tmp_path / "missing.xlsx")
