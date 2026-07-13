@@ -3,7 +3,9 @@ from datetime import date, datetime
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 from zipfile import ZipFile
@@ -25,6 +27,7 @@ from pv_pipeline.string_yield_report import (
     build_output_path,
     build_report_data,
     download_manifest,
+    download_report_inputs,
     inventory_drive_folder,
     parse_date_range,
     parse_inventory_json,
@@ -142,36 +145,50 @@ def test_drive_url_and_inventory_json_contract():
         parse_inventory_json('[{"url":"u1"}]')
 
 
-def test_drive_folder_validation_preserves_access_query_and_fragment():
+def test_drive_folder_validation_rejects_unsupported_resourcekey():
     url = (
         "https://drive.google.com/drive/folders/folder-id"
-        "?resourcekey=drive-access-key&usp=sharing#frag"
+        "?RESOURCEKEY=drive-access-key&usp=sharing#frag"
     )
 
-    validated = validate_drive_folder_url(f"  {url}  ")
+    with pytest.raises(ValueError, match="(?i)resourcekey.*not supported"):
+        validate_drive_folder_url(f"  {url}  ")
 
-    assert validated == url
 
-
-def test_inventory_subprocess_receives_resourcekey_access_url(monkeypatch):
+def test_inventory_subprocess_uses_utf8_for_non_ascii_json(monkeypatch):
     calls = []
+    non_ascii_path = "root/irradiance-" + chr(233) + ".csv"
 
-    def fake_run(command, *, check, capture_output, text):
-        calls.append((command, check, capture_output, text))
-        return SimpleNamespace(stdout="[]")
+    def fake_run(
+        command,
+        *,
+        check,
+        capture_output,
+        text,
+        encoding,
+        env,
+    ):
+        calls.append((command, check, capture_output, text, encoding, env))
+        return SimpleNamespace(stdout=json.dumps(
+            [{"url": "u1", "path": non_ascii_path}],
+            ensure_ascii=False,
+        ))
 
     monkeypatch.setattr(
         "pv_pipeline.string_yield_report.subprocess.run", fake_run
     )
-    url = (
-        "https://drive.google.com/drive/folders/folder-id"
-        "?resourcekey=drive-access-key"
-    )
+    monkeypatch.setenv("STRING_YIELD_TEST_ENV", "preserved")
+    url = "https://drive.google.com/drive/folders/folder-id?usp=sharing"
 
-    assert inventory_drive_folder(url) == []
-    command, check, capture_output, text = calls[0]
+    assert inventory_drive_folder(url) == [
+        DriveItem(url="u1", path=non_ascii_path)
+    ]
+    command, check, capture_output, text, encoding, env = calls[0]
     assert command[3] == url
     assert (check, capture_output, text) == (True, True, True)
+    assert encoding == "utf-8"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["STRING_YIELD_TEST_ENV"] == "preserved"
 
 
 def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
@@ -191,7 +208,7 @@ def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
         dates,
         url_csv=(
             "https://drive.google.com/drive/folders/csv-folder"
-            "?resourcekey=csv-access#frag"
+            "?usp=sharing#frag"
         ),
         url_poa=(
             "https://drive.google.com/drive/folders/poa-folder?usp=sharing"
@@ -203,6 +220,49 @@ def test_select_inventory_matches_only_requested_csv_dates_and_poa_years():
     assert got.missing_poa_years == []
     assert got.url_csv == "https://drive.google.com/drive/folders/csv-folder"
     assert got.url_poa == "https://drive.google.com/drive/folders/poa-folder"
+
+
+def test_download_report_inputs_keeps_csv_when_poa_inventory_fails(
+    monkeypatch,
+    tmp_path,
+):
+    csv_url = "https://drive.google.com/drive/folders/csv-folder?usp=sharing"
+    poa_url = "https://drive.google.com/drive/folders/poa-folder?usp=sharing"
+
+    def fake_inventory(url):
+        if url == poa_url:
+            raise PermissionError("POA folder denied")
+        assert url == csv_url
+        return [DriveItem("csv-url", "root/20260501.csv")]
+
+    def fake_download(*, url, output, quiet):
+        assert (url, quiet) == ("csv-url", False)
+        Path(output).write_text("synthetic", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr(
+        "pv_pipeline.string_yield_report.inventory_drive_folder",
+        fake_inventory,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gdown",
+        SimpleNamespace(download=fake_download),
+    )
+
+    manifest, inputs = download_report_inputs(
+        csv_url,
+        poa_url,
+        parse_date_range("2026-05-01", "2026-05-01"),
+        tmp_path,
+    )
+
+    assert inputs.csv_by_date[date(2026, 5, 1)].is_file()
+    assert inputs.poa_by_year == {}
+    assert manifest.missing_poa_years == [2026]
+    assert inputs.download_errors == {
+        "POA folder inventory": "PermissionError: POA folder denied"
+    }
 
 
 def test_select_inventory_rejects_duplicate_requested_basename():
@@ -542,6 +602,58 @@ def test_unreadable_poa_year_isolated_from_power_yield(tmp_path):
     assert "POA PLTS IKN 2026.xlsx" in report.metadata["poa_read_errors"]
 
 
+@pytest.mark.parametrize(
+    ("geometry_case", "expected_error"),
+    [
+        ("missing", "FileNotFoundError"),
+        ("malformed", "ParserError"),
+        ("non_mapping", "TypeError"),
+    ],
+)
+def test_geometry_failure_keeps_power_yield_and_leaves_poa_missing(
+    tmp_path,
+    geometry_case,
+    expected_error,
+):
+    csv_path = tmp_path / "20260501.csv"
+    poa_path = tmp_path / "POA PLTS IKN 2026.xlsx"
+    geometry_path = tmp_path / "site_geometry.yaml"
+    pd.DataFrame({
+        "Start Time": ["2026-05-01 00:00"],
+        "Inverter_ID": ["WB05-INV01"],
+        "PV3 Power(kW)": [6.0],
+    }).to_csv(csv_path, index=False)
+    _write_poa(
+        poa_path,
+        [pd.Timestamp("2026-05-01 00:00")],
+        [500.0],
+        [600.0],
+    )
+    if geometry_case == "malformed":
+        geometry_path.write_text("ws_to_wb: [", encoding="utf-8")
+    elif geometry_case == "non_mapping":
+        geometry_path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+
+    report = build_report_data(
+        {date(2026, 5, 1): csv_path},
+        {2026: poa_path},
+        parse_string_selection("WB05-INV01-PV3"),
+        parse_date_range("2026-05-01", "2026-05-01"),
+        geometry_path,
+    )
+
+    geometry_key = "POA geometry: site_geometry.yaml"
+    assert report.daily.loc[0, "string_yield_kwh"] == pytest.approx(0.5)
+    assert report.five_minute["power_kw"].notna().sum() == 1
+    assert report.five_minute["poa_wm2"].isna().all()
+    assert expected_error in report.metadata["poa_read_errors"][geometry_key]
+    assert (
+        "POA geometry is unavailable; WB-to-WS mapping was disabled and "
+        "the default sheet name was used."
+        in report.metadata["warnings"]
+    )
+
+
 def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
     path = build_output_path(
         tmp_path, selection, date(2026, 5, 1), date(2026, 5, 2)
@@ -799,6 +911,63 @@ def test_builder_writes_nbformat_45_with_nine_expected_cells(tmp_path):
         source = "".join(cell["source"])
         assert marker in source
         ast.parse(source)
+
+
+def test_notebook_cell_1_auto_clones_public_repo_offline(tmp_path, monkeypatch):
+    notebook = json.loads(
+        Path("output_string/String_Yield_Power_Irradiance.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    source = "".join(notebook["cells"][1]["source"])
+    clean_dir = tmp_path / "clean"
+    clone_dir = clean_dir / "PVStringHeatmapCheck"
+    input_dir = tmp_path / "inputs"
+    clean_dir.mkdir()
+    calls = []
+
+    def fake_check_call(command):
+        calls.append(command)
+        if command[:4] == ["git", "clone", "--depth", "1"]:
+            assert command[-1] == str(clone_dir)
+            (clone_dir / "pv_pipeline").mkdir(parents=True)
+            (clone_dir / "config").mkdir()
+
+    def fake_mkdtemp(*, prefix):
+        assert prefix == "string_yield_inputs_"
+        input_dir.mkdir()
+        return str(input_dir)
+
+    monkeypatch.chdir(clean_dir)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+    monkeypatch.setattr(tempfile, "mkdtemp", fake_mkdtemp)
+
+    scope = {}
+    exec(source, scope)
+
+    assert calls == [
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "--upgrade",
+            "gdown>=6.0.0",
+        ],
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "https://github.com/nabilhaidr/PVStringHeatmapCheck.git",
+            str(clone_dir),
+        ],
+    ]
+    assert scope["REPO_DIR"] == clone_dir.resolve()
+    assert scope["OUTPUT_DIR"] == clone_dir / "output_string"
+    assert scope["INPUT_DIR"] == input_dir
 
 
 def test_notebook_cell_2_has_exactly_five_approved_literal_defaults():

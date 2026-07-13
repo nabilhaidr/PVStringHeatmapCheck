@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -8,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Sequence
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import numpy as np
 from openpyxl import Workbook, load_workbook
@@ -112,6 +113,14 @@ def validate_drive_folder_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.netloc != "drive.google.com" or "/drive/folders/" not in parsed.path:
         raise ValueError(f"Expected a public Google Drive folder URL, got {url!r}.")
+    if any(
+        key.casefold() == "resourcekey"
+        for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    ):
+        raise ValueError(
+            "Google Drive folder resourcekey URLs are not supported by "
+            "the gdown inventory adapter."
+        )
     return url
 
 
@@ -134,11 +143,15 @@ def parse_inventory_json(payload: str) -> list[DriveItem]:
 
 def inventory_drive_folder(folder_url: str) -> list[DriveItem]:
     folder_url = validate_drive_folder_url(folder_url)
+    child_env = os.environ.copy()
+    child_env["PYTHONIOENCODING"] = "utf-8"
     result = subprocess.run(
         [sys.executable, "-m", "gdown", folder_url, "--folder", "--json"],
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=child_env,
     )
     return parse_inventory_json(result.stdout)
 
@@ -230,7 +243,12 @@ def download_manifest(manifest: SourceManifest, destination: Path) -> Downloaded
 
 def download_report_inputs(url_csv, url_poa, dates, destination):
     csv_items = inventory_drive_folder(url_csv)
-    poa_items = inventory_drive_folder(url_poa)
+    poa_inventory_error = None
+    try:
+        poa_items = inventory_drive_folder(url_poa)
+    except Exception as exc:
+        poa_items = []
+        poa_inventory_error = f"{type(exc).__name__}: {exc}"
     manifest = select_source_manifest(
         csv_items,
         poa_items,
@@ -238,7 +256,10 @@ def download_report_inputs(url_csv, url_poa, dates, destination):
         url_csv=url_csv,
         url_poa=url_poa,
     )
-    return manifest, download_manifest(manifest, Path(destination))
+    inputs = download_manifest(manifest, Path(destination))
+    if poa_inventory_error is not None:
+        inputs.download_errors["POA folder inventory"] = poa_inventory_error
+    return manifest, inputs
 
 
 def _find_column(df: pd.DataFrame, predicate) -> str | None:
@@ -381,12 +402,31 @@ def build_report_data(
             f"No valid power sample found for {selection.canonical} in requested range."
         )
 
-    geometry = yaml.safe_load(Path(geometry_path).read_text(encoding="utf-8")) or {}
-    ws_to_wb = geometry.get("ws_to_wb") or {}
-    sheet = str((geometry.get("pyranometer") or {}).get("sheet", "POA PLTS IKN"))
+    geometry_path = Path(geometry_path)
+    poa_read_errors = {}
+    geometry_failed = False
+    try:
+        geometry = yaml.safe_load(geometry_path.read_text(encoding="utf-8"))
+        if geometry is None:
+            geometry = {}
+        if not isinstance(geometry, dict):
+            raise TypeError("POA geometry YAML root must be a mapping.")
+        ws_to_wb = geometry.get("ws_to_wb") or {}
+        pyranometer = geometry.get("pyranometer") or {}
+        if not isinstance(ws_to_wb, dict):
+            raise TypeError("POA geometry ws_to_wb must be a mapping.")
+        if not isinstance(pyranometer, dict):
+            raise TypeError("POA geometry pyranometer must be a mapping.")
+        sheet = str(pyranometer.get("sheet", "POA PLTS IKN"))
+    except Exception as exc:
+        geometry_failed = True
+        poa_read_errors[f"POA geometry: {geometry_path.name}"] = (
+            f"{type(exc).__name__}: {exc}"
+        )
+        ws_to_wb = {}
+        sheet = "POA PLTS IKN"
     poa = pd.Series(index=grid, dtype="float64", name="poa_wm2")
     poa_source = pd.Series(index=grid, dtype="object", name="poa_source")
-    poa_read_errors = {}
     loaded_poa_files = []
     poa_fallback_samples = 0
     mapped_ws = None
@@ -490,6 +530,11 @@ def build_report_data(
         warnings_list.append("Rows outside their YYYYMMDD.csv date were dropped.")
     if negative_samples:
         warnings_list.append("Negative power samples were retained.")
+    if geometry_failed:
+        warnings_list.append(
+            "POA geometry is unavailable; WB-to-WS mapping was disabled and "
+            "the default sheet name was used."
+        )
     if missing_poa_years or poa_read_errors:
         warnings_list.append("POA is unavailable for one or more requested years.")
 

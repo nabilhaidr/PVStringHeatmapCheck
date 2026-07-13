@@ -31,7 +31,17 @@ def find_repo_root(start=None):
             return candidate
     raise RuntimeError("Repo root tidak ditemukan; jalankan notebook dari clone SolarYieldPro.")
 
-REPO_DIR = find_repo_root()
+PUBLIC_REPO_URL = "https://github.com/nabilhaidr/PVStringHeatmapCheck.git"
+DEFAULT_REPO_DIR = Path.cwd() / "PVStringHeatmapCheck"
+try:
+    REPO_DIR = find_repo_root()
+except RuntimeError:
+    if not DEFAULT_REPO_DIR.exists():
+        subprocess.check_call([
+            "git", "clone", "--depth", "1", PUBLIC_REPO_URL,
+            str(DEFAULT_REPO_DIR),
+        ])
+    REPO_DIR = find_repo_root(DEFAULT_REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 OUTPUT_DIR = REPO_DIR / "output_string"
