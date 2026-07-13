@@ -42,6 +42,7 @@ outputs/
 baseline/
 outputs_daily_runfast/
 models/
+output_string/string_yield_*.xlsx
 .superpowers/
 .worktrees/
 

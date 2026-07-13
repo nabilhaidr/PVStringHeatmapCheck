@@ -1,4 +1,6 @@
+import ast
 from datetime import date, datetime
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -758,3 +760,32 @@ def test_plot_contract_uses_gaps_and_secondary_axis(report_fixture, selection):
 def test_verify_report_workbook_rejects_missing_file(tmp_path):
     with pytest.raises(RuntimeError, match="Workbook was not created"):
         verify_report_workbook(tmp_path / "missing.xlsx")
+
+
+def test_builder_writes_nbformat_45_with_nine_expected_cells(tmp_path):
+    path = Path("output_string/_build_string_yield_notebook.py")
+    spec = importlib.util.spec_from_file_location("string_yield_nb_builder", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    target = module.build(tmp_path / "report.ipynb")
+    nb = json.loads(target.read_text(encoding="utf-8"))
+    assert (nb["nbformat"], nb["nbformat_minor"]) == (4, 5)
+    assert [cell["cell_type"] for cell in nb["cells"]] == [
+        "markdown",
+        *(["code"] * 8),
+    ]
+    markers = [
+        "gdown>=6.0.0",
+        "URL_CSV",
+        "download_report_inputs",
+        "build_report_data",
+        "plot_daily_yield",
+        "plot_power_vs_poa",
+        "write_report_workbook",
+        "google.colab",
+    ]
+    for cell, marker in zip(nb["cells"][1:], markers):
+        source = "".join(cell["source"])
+        assert marker in source
+        ast.parse(source)
