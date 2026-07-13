@@ -105,16 +105,38 @@ def _serialized_chart_axes(path):
             axes = []
             for tag in ("catAx", "dateAx", "valAx"):
                 axes.extend((tag, node) for node in plot_area.findall(f"c:{tag}", namespaces))
-            charts.append((title_text, axes))
+            charts.append((title_text, axes, root))
     return charts, namespaces
 
 
 def _serialized_combo_axes(path):
     charts, namespaces = _serialized_chart_axes(path)
-    for title_text, axes in charts:
+    for title_text, axes, _ in charts:
         if "Power String vs POA Irradiance" in title_text:
             return axes, namespaces
     raise AssertionError("Serialized power/POA combo chart was not found.")
+
+
+def _serialized_chart_widths(path):
+    namespaces = {
+        "xdr": (
+            "http://schemas.openxmlformats.org/drawingml/2006/"
+            "spreadsheetDrawing"
+        ),
+    }
+    widths = []
+    with ZipFile(path) as archive:
+        for name in archive.namelist():
+            if not name.startswith("xl/drawings/drawing") or not name.endswith(
+                ".xml"
+            ):
+                continue
+            root = ET.fromstring(archive.read(name))
+            for anchor in root.findall("xdr:oneCellAnchor", namespaces):
+                if anchor.find("xdr:graphicFrame", namespaces) is None:
+                    continue
+                widths.append(int(anchor.find("xdr:ext", namespaces).get("cx")))
+    return widths
 
 
 def test_parse_string_selection_normalizes_case_and_pv_number():
@@ -895,23 +917,43 @@ def test_output_path_and_workbook_contract(tmp_path, report_fixture, selection):
         assert serialized_crossings[secondary_id] == category_id
 
         serialized_charts, chart_namespaces = _serialized_chart_axes(written)
-        daily_axes = [
-            axes for title, axes in serialized_charts
+        daily_charts = [
+            (axes, root) for title, axes, root in serialized_charts
             if "String Yield Harian" in title
         ]
-        assert len(daily_axes) == 2
-        for axes in daily_axes:
+        assert len(daily_charts) == 2
+        for axes, root in daily_charts:
             assert [tag for tag, _ in axes].count("dateAx") == 1
+            assert [tag for tag, _ in axes].count("valAx") == 1
             assert [tag for tag, _ in axes].count("catAx") == 0
             date_axis = next(node for tag, node in axes if tag == "dateAx")
+            value_axis = next(node for tag, node in axes if tag == "valAx")
+            assert date_axis.find("c:axId", chart_namespaces).get("val") == "10"
+            assert value_axis.find("c:axId", chart_namespaces).get("val") == "100"
+            assert date_axis.find("c:crossAx", chart_namespaces).get("val") == "100"
+            assert value_axis.find("c:crossAx", chart_namespaces).get("val") == "10"
             num_fmt = date_axis.find("c:numFmt", chart_namespaces)
             assert num_fmt.get("formatCode") == "yyyy-mm-dd"
+            assert date_axis.find(
+                "c:baseTimeUnit", chart_namespaces
+            ).get("val") == "days"
+            assert date_axis.find("c:majorUnit", chart_namespaces).get("val") == "1"
+            assert date_axis.find(
+                "c:majorTimeUnit", chart_namespaces
+            ).get("val") == "days"
+            axis_title = "".join(
+                node.text or ""
+                for node in date_axis.findall(".//a:t", chart_namespaces)
+            )
+            assert axis_title == "Tanggal"
+            assert root.find("c:chart/c:legend", chart_namespaces) is None
 
         combo_date_axis = next(
             node for tag, node in serialized_axes if tag == "dateAx"
         )
         combo_num_fmt = combo_date_axis.find("c:numFmt", namespaces)
         assert combo_num_fmt.get("formatCode") == "dd-mmm hh:mm"
+        assert _serialized_chart_widths(written) == [8640000, 8640000, 8640000]
 
         metadata = dict(metadata_sheet.iter_rows(min_row=2, values_only=True))
         assert metadata["source_url_csv"] == report_fixture.metadata["source_url_csv"]
@@ -1039,6 +1081,21 @@ def test_verify_report_workbook_rejects_unformatted_time_axis(
         workbook.close()
 
     with pytest.raises(RuntimeError, match="formatted date axis"):
+        verify_report_workbook(written)
+
+
+def test_verify_report_workbook_rejects_missing_x_axis(
+    tmp_path, report_fixture, monkeypatch
+):
+    written = write_report_workbook(tmp_path / "missing-axis.xlsx", report_fixture)
+    workbook = load_workbook(written, data_only=False)
+    workbook["Ringkasan_Harian"]._charts[0].__dict__["x_axis"] = None
+    monkeypatch.setattr(
+        "pv_pipeline.string_yield_report.load_workbook",
+        lambda *args, **kwargs: workbook,
+    )
+
+    with pytest.raises(RuntimeError, match="missing x-axis"):
         verify_report_workbook(written)
 
 

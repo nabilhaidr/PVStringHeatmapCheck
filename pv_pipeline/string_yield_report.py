@@ -684,7 +684,7 @@ def _daily_excel_chart(source_sheet):
     chart.x_axis.majorUnit = 1
     chart.x_axis.majorTimeUnit = "days"
     chart.height = 8
-    chart.width = 16
+    chart.width = 24
     chart.display_blanks = "gap"
     chart.legend = None
     values = Reference(
@@ -849,6 +849,8 @@ def verify_report_workbook(path):
             (combo_chart, "dd-mmm hh:mm", "Grafik combo chart"),
         )
         for chart, number_format, label in axis_contracts:
+            if chart.x_axis is None:
+                raise RuntimeError(f"{label} is missing x-axis.")
             axis_number_format = getattr(chart.x_axis.numFmt, "formatCode", None)
             if (
                 chart.x_axis.tagname != "dateAx"
