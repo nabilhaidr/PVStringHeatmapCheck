@@ -5,7 +5,7 @@
 **Spec referensi**: Master Context §4.2.3 — *Ground fault (partial)*: `I_string` tinggi abnormal **AND** `Voc` turun signifikan (`voc_ratio < 0.85`); butuh insulation-resistance test untuk konfirmasi (tidak tersedia di SCADA)
 **Dependency**: `POAProvider` (`get_poa`, `get_solar_elevation`), `PanelSpec` (`voc_at_cell_temp`, `modules_per_string`), `CellTempProvider`, `voc_estimator.estimate_voc_at_low_current`, `load_empty_pv_map`
 **Output sheet Python**: `InverterEvents` (per-inverter, flagged-only) + `StringStatus` (per-PV: NORMAL | ground_fault | EMPTY) + `PreprocessingAudit` (opsional)
-**Output Excel workbook**: sheet `Raw_Data_GF`, `Helpers_GF`, `GF_StringMetrics`, `M2c_GroundFault`, `M2c_GF_StringStatus` di `docs/M2_PV_Performance_Workbook.xlsx` (kini 25 sheet)
+**Output Excel workbook**: sheet `Raw_Data_GF`, `Helpers_GF`, `GF_StringMetrics`, `M2c_GroundFault`, `M2c_GF_StringStatus` di `docs/M2_PV_Performance_Workbook.xlsx` (25 sheet saat iterasi 5; kini 46)
 **Status verifikasi**: ✅ Python reference cocok dengan literal data workbook (4 inverter × 6 string) + audit formula string per sel + regen 0-diff. ⚠️ Live recalc LibreOffice **tidak** dijalankan (binary crash di sandbox) — lihat Section 7.
 
 ---

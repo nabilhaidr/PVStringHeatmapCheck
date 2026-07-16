@@ -6,7 +6,7 @@
 **Dependency**: `POAProvider` (`get_poa`, `get_solar_elevation`), `load_empty_pv_map` (core), opsional Hampel preprocessing
 **Dipanggil di**: pipeline M2 engine, `M2bOpenCircuit(poa=prov)`
 **Output sheet Python**: `StringStatus` (+ `PreprocessingAudit` opsional saat Hampel aktif)
-**Output Excel workbook**: sheet `Raw_Data_OC`, `Helpers_OC`, `M2b_OpenCircuit`, `M2b_OC_StringStatus` di `docs/M2_PV_Performance_Workbook.xlsx` (kini 20 sheet)
+**Output Excel workbook**: sheet `Raw_Data_OC`, `Helpers_OC`, `M2b_OpenCircuit`, `M2b_OC_StringStatus` di `docs/M2_PV_Performance_Workbook.xlsx` (20 sheet saat iterasi 4; kini 46)
 **Status verifikasi**: ✅ Python reference cocok dengan literal data workbook (5 PV × 26 timestep) + audit formula string per sel + regen 0-diff. ⚠️ Live recalc LibreOffice **tidak** dijalankan (binary crash di sandbox) — lihat Section 7.
 
 ---

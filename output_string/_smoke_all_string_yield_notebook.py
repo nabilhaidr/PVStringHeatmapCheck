@@ -152,14 +152,24 @@ def main() -> None:
                 "Metadata",
             ]
             recap = workbook["Rekap_Yield_kWh"]
-            assert [cell.value for cell in recap[1]] == [
-                "date",
+            assert recap["A1"].value == "pv_string"
+            assert [
+                pd.Timestamp(recap.cell(row=1, column=column).value).date()
+                for column in range(2, recap.max_column + 1)
+            ] == [
+                date(2026, 5, 1),
+                date(2026, 5, 2),
+            ]
+            assert [
+                recap.cell(row=row, column=1).value
+                for row in range(2, recap.max_row + 1)
+            ] == [
                 "WB01-INV01-PV1",
                 "WB01-INV02-PV1",
             ]
             assert recap["B2"].value == 12.0
-            assert recap["C2"].value == 6.0
-            assert recap["B3"].value == 10.0
+            assert recap["C2"].value == 10.0
+            assert recap["B3"].value == 6.0
             assert recap["C3"].value is None
             assert workbook["Detail_Harian"].max_row == 5
             metadata = _metadata_values(workbook)
@@ -167,6 +177,7 @@ def main() -> None:
             assert metadata["detected_string_count"] == 2
             row_counts = (
                 recap.max_row,
+                recap.max_column,
                 workbook["Detail_Harian"].max_row,
             )
             workbook.close()
@@ -185,6 +196,7 @@ def main() -> None:
         rerun = load_workbook(output_xlsx, data_only=False)
         assert (
             rerun["Rekap_Yield_kWh"].max_row,
+            rerun["Rekap_Yield_kWh"].max_column,
             rerun["Detail_Harian"].max_row,
         ) == row_counts
         rerun.close()

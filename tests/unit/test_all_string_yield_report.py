@@ -142,7 +142,13 @@ def test_daily_yield_builds_union_once_and_leaves_missing_values_blank(
         "WB02-INV02-PV2",
         "WB02-INV10-PV1",
     ]
-    assert list(result.summary.columns) == ["date", *expected_strings]
+    expected_dates = [
+        date(2026, 5, 1),
+        date(2026, 5, 2),
+        date(2026, 5, 3),
+    ]
+    assert list(result.summary.columns) == ["pv_string", *expected_dates]
+    assert result.summary["pv_string"].tolist() == expected_strings
     assert len(result.daily) == 9
     indexed = result.daily.set_index(["date", "pv_string"])
     assert indexed.loc[
@@ -161,7 +167,12 @@ def test_daily_yield_builds_union_once_and_leaves_missing_values_blank(
         (date(2026, 5, 3), "WB02-INV02-PV1"),
         "status",
     ] == "MISSING_CSV"
-    assert pd.isna(result.summary.loc[2, "WB02-INV02-PV1"])
+    summary = result.summary.set_index("pv_string")
+    assert summary.loc[
+        "WB02-INV02-PV1",
+        date(2026, 5, 1),
+    ] == pytest.approx(10.0)
+    assert pd.isna(summary.loc["WB02-INV02-PV1", date(2026, 5, 3)])
 
 
 def test_direct_power_does_not_fall_back_when_values_are_empty(tmp_path):
@@ -480,7 +491,9 @@ def test_build_does_not_concat_power_across_days(monkeypatch):
         pd.date_range("2026-05-01", "2026-05-02", freq="D"),
     )
 
-    assert result.summary["WB01-INV01-PV1"].tolist() == [
+    assert result.summary.set_index("pv_string").loc[
+        "WB01-INV01-PV1"
+    ].tolist() == [
         pytest.approx(5 / 60),
         pytest.approx(5 / 60),
     ]
@@ -512,6 +525,35 @@ def test_detail_row_limit_fails_before_materializing_product(
         report_module.build_all_string_daily_yield(
             {date(2026, 5, 1): path},
             pd.date_range("2026-05-01", periods=1),
+        )
+
+
+def test_recap_date_column_limit_matches_transposed_layout(
+    tmp_path,
+    monkeypatch,
+):
+    report_module = importlib.import_module(
+        "pv_pipeline.all_string_yield_report"
+    )
+    path = _write_csv(
+        tmp_path / "20260501.csv",
+        pd.DataFrame({
+            "Start Time": ["2026-05-01 00:00"],
+            "Inverter_ID": ["WB01-INV01"],
+            "PV1 Power(kW)": [1.0],
+        }),
+    )
+    monkeypatch.setattr(
+        report_module,
+        "EXCEL_MAX_COLUMNS",
+        2,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="Rekap_Yield_kWh.*column limit"):
+        report_module.build_all_string_daily_yield(
+            {date(2026, 5, 1): path},
+            pd.date_range("2026-05-01", "2026-05-02", freq="D"),
         )
 
 
@@ -605,13 +647,21 @@ def test_all_string_workbook_has_wide_detail_and_metadata_contract(
         "Metadata",
     ]
     recap = workbook["Rekap_Yield_kWh"]
-    assert [cell.value for cell in recap[1]] == list(
-        all_string_result.summary.columns
-    )
+    assert recap["A1"].value == "pv_string"
+    assert [
+        pd.Timestamp(recap.cell(row=1, column=column).value).date()
+        for column in range(2, recap.max_column + 1)
+    ] == [
+        date(2026, 5, 1),
+        date(2026, 5, 2),
+        date(2026, 5, 3),
+    ]
+    assert recap["A2"].value == "WB01-INV01-PV1"
     assert recap.freeze_panes == "B2"
+    assert recap["B1"].number_format == "yyyy-mm-dd"
     assert recap["B2"].number_format == "0.000"
     assert recap["B2"].value == 0
-    assert recap["B3"].value is None
+    assert recap["C2"].value is None
     detail = workbook["Detail_Harian"]
     assert [cell.value for cell in detail[1]] == (
         report_module.DETAIL_COLUMNS
@@ -635,11 +685,11 @@ def test_workbook_verifier_rejects_noncanonical_recap_header(
     output = tmp_path / "tampered.xlsx"
     report_module.write_all_string_workbook(output, all_string_result)
     workbook = load_workbook(output)
-    workbook["Rekap_Yield_kWh"]["B1"] = "BROKEN"
+    workbook["Rekap_Yield_kWh"]["A2"] = "BROKEN"
     workbook.save(output)
     workbook.close()
 
-    with pytest.raises(RuntimeError, match="recap PV string headers"):
+    with pytest.raises(RuntimeError, match="recap PV string rows"):
         report_module.verify_all_string_workbook(output)
 
 
@@ -653,9 +703,9 @@ def test_workbook_verifier_rejects_duplicate_recap_date(
     output = tmp_path / "duplicate-recap-date.xlsx"
     report_module.write_all_string_workbook(output, all_string_result)
     workbook = load_workbook(output)
-    workbook["Rekap_Yield_kWh"]["A3"] = workbook[
+    workbook["Rekap_Yield_kWh"]["C1"] = workbook[
         "Rekap_Yield_kWh"
-    ]["A2"].value
+    ]["B1"].value
     workbook.save(output)
     workbook.close()
 

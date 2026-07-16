@@ -6,7 +6,7 @@
 **Spec referensi**: Master Context — whole-inverter shading (Fase 3 Part 2 Task #4; di luar rule §4.2.x utama)
 **Dependency**: `POAProvider` (`get_poa`), `load_empty_pv_map`
 **Output sheet Python**: `HourlyMetrics` (per inverter×jam) + `ShadingSummary` (per inverter)
-**Output Excel workbook**: sheet `Raw_Data_SH`, `Helpers_SH`, `SH_Hourly`, `M2a_Shading` di `docs/M2_PV_Performance_Workbook.xlsx` (kini 37 sheet)
+**Output Excel workbook**: sheet `Raw_Data_SH`, `Helpers_SH`, `SH_Hourly`, `M2a_Shading` di `docs/M2_PV_Performance_Workbook.xlsx` (37 sheet saat iterasi 8; kini 46)
 **Status verifikasi**: ✅ **Reproduksi PENUH** — CV/PR/asimetri/severity cocok eksak antara proto, recompute Python, dan formula Excel (`STDEVP`/`MEDIAN`/`AVERAGE`/`SUMPRODUCT`) + audit formula per sel + regen 0-diff. ⚠️ Live recalc LibreOffice tidak dijalankan (crash) — lihat Section 7.
 
 ---

@@ -14,6 +14,7 @@ rentang tanggal inklusif.
 - Sumber: folder Google Drive publik CSV Export PV String.
 - Yield: `sum(power_kw_valid * 5/60)` tanpa mengisi data yang hilang.
 - Output: workbook tiga-sheet di `output_string/`.
+- Rekap Excel: PV string sebagai baris dan tanggal sebagai kolom.
 - Jika detail melampaui batas baris Excel, pendekkan rentang tanggal sesuai pesan error.
 - Cell terakhir menyediakan download workbook saat dijalankan di Colab.
 

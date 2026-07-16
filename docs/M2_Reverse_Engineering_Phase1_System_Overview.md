@@ -17,11 +17,13 @@ Setiap nama file di dokumen ini relatif terhadap repo root `C:\Users\nabil\Downl
 
 ## 1. Konteks dan Tujuan Sistem
 
-Notebook ini bukan sekadar "heatmap PV string". Sejak v1.2 → v1.5 (yaitu sepanjang Mei 2026), notebook telah berkembang menjadi **frontend dari sebuah pipeline analitik PLTS bernama M2 Engine** yang berisi 8 detector aktif. Cell-cell di notebook (Cell 4 khususnya) hanya melakukan orchestration; semua logika perhitungan berada di paket Python `pv_pipeline/` (~13.000 baris, 27 modul).
+> **Update 2026-07-11**: dokumen ini snapshot 2026-05-28, direvisi untuk perubahan besar sejak itu: (1) **M2bMpptRatio** — detector baru M2b berbasis rasio arus partner se-MPPT (2026-06-12, `M2_RE_11`); (2) **LSTM-AE terlatih** — `train_lstm_ae.py` Sprint 4, model `lstm_ae_20260706_084352`, wired `enabled=True` di Cell 4 template (2026-07-06) → Cell 4 kini **10 submodule**; (3) **ekstensi soiling** — koreksi suhu PR, mask availability M2e, rekap manual cleaning, analysis run standalone (2026-07, `M2_RE_09` §0); (4) **baseline day-filter** outage/curtailment berbasis setpoint (2026-06-12). Jumlah baris cell/modul di tabel-tabel bawah = snapshot Mei 2026, tidak diperbarui per baris.
+
+Notebook ini bukan sekadar "heatmap PV string". Sejak v1.2 → v1.5 (yaitu sepanjang Mei 2026), notebook telah berkembang menjadi **frontend dari sebuah pipeline analitik PLTS bernama M2 Engine** yang kini berisi 10 submodule. Cell-cell di notebook (Cell 4 khususnya) hanya melakukan orchestration; semua logika perhitungan berada di paket Python `pv_pipeline/` (~13.000 baris per Mei 2026).
 
 Tujuan utama M2 adalah **diagnosis diferensial underperformance per PV string**: membedakan soiling, shading, kerusakan kabel DC, intermittent fault, ground fault, dan ketidaktersediaan (availability loss), dengan baseline berbasis fisika (pvlib) — bukan sekadar mean statistik.
 
-Master Context (`M2_PV_Performance_Master_Context.docx`) mendefinisikan **target idealnya** dalam 6 modul: M2a (Soiling/Shading), M2b (DC Cable Fault), M2c (Microcrack EL+IV), M2d (Bifacial Backside), M2e (Availability), M2f (Loss Attribution). Yang sudah live di notebook v1.5 adalah M2a (3 dari 3 sub-detector), M2b (3 dari 4 sub-detector — LSTM-AE skeleton, belum terlatih), M2e (1 dari 1), plus M2 IsolationForest sebagai general anomaly detector. M2c, M2d, dan M2f **belum diimplementasi** (butuh sensor EL/IV, rear POA, dan SHAP-based attribution).
+Master Context (`M2_PV_Performance_Master_Context.docx`) mendefinisikan **target idealnya** dalam 6 modul: M2a (Soiling/Shading), M2b (DC Cable Fault), M2c (Microcrack EL+IV), M2d (Bifacial Backside), M2e (Availability), M2f (Loss Attribution). Yang sudah live di notebook adalah M2a (3 dari 3 sub-detector), M2b (5 sub-detector: peer z-score, open circuit, ground fault, **MpptRatio** — tambahan 2026-06 di luar Master Context, dan **LSTM-AE intermittent** — terlatih & wired 2026-07), M2e (1 dari 1), plus M2 IsolationForest sebagai general anomaly detector. M2c, M2d, dan M2f **belum diimplementasi** (butuh sensor EL/IV, rear POA, dan SHAP-based attribution).
 
 ---
 
@@ -35,10 +37,10 @@ Notebook v1.5 terdiri dari 9 cell (1 markdown + 8 code). Berikut peran masing-ma
 | 1 | Code | 54 | Resolve repo root, download Excel inverter dari Google Drive via `gdown` |
 | 2 | Code | 27 | Load Excel → `combined_df`. Hitung `PVx Power(kW) = V × I / 1000`, pivot per-inverter |
 | 3 | Code | 22 | Heatmap matplotlib per inverter (PV1..PV28 × waktu) |
-| **4** | Code | **248** | **M2 Pipeline UNIFIED** — instantiate 8 detector + run + write JSONL/XLSX multi-sheet. Inti analitis. |
+| **4** | Code | **248** | **M2 Pipeline UNIFIED** — instantiate 10 submodule (update 2026-07; semula 8) + run + write JSONL/XLSX multi-sheet. Inti analitis. |
 | 5 | Code | 161 | Performance Ratio harian (Wave 7) + cross-check Curtailment (Wave 11) |
 | 6 | Code | 350 | Sanity check infrastruktur Sprint 3.1/3.2: POAProvider, AlbedoLoader, CellTempProvider, PanelSpec |
-| 7 | Code | 166 | Baseline Accumulator: simpan data NORMAL ke `baseline/{YYYY-MM}/{YYYY-MM-DD}.parquet` untuk training LSTM-AE |
+| 7 | Code | 166 | Baseline Accumulator: simpan data NORMAL ke `baseline/{YYYY-MM}/{YYYY-MM-DD}.{parquet,csv}` untuk training LSTM-AE. Sejak 2026-06-12: **day-filter outage/curtailment** berbasis setpoint (fleet kW & median arus di bawah floor ≥80% slot daylight, atau setpoint Busbar rendah ≥30% slot → hari di-skip total; tercatat di `manifest.csv` kolom `day_skip_reason`) |
 | 8 | Code | 37 | Simpan `df_plot` ke CSV via `google.colab.files.download` (legacy Colab path) |
 
 ### Aliran Data (Dependency)
@@ -62,7 +64,7 @@ Notebook v1.5 terdiri dari 9 cell (1 markdown + 8 code). Berikut peran masing-ma
         ▼              ▼                                          ▼
   ┌──────────┐  ┌──────────┐                              ┌──────────┐
   │ Cell 3   │  │ Cell 4   │  ← inti analitis             │ Cell 8   │  ← legacy CSV
-  │ heatmap  │  │ M2 8-det │                              │ download │
+  │ heatmap  │  │ M2 10-sub│                              │ download │
   └──────────┘  └─────┬────┘
                       │ menghasilkan: cfg, findings, sm_e,
                       │              poa_provider, panel_spec, cell_temp_provider,
@@ -80,7 +82,7 @@ Notebook v1.5 terdiri dari 9 cell (1 markdown + 8 code). Berikut peran masing-ma
                                                  │
                                                  ▼
                                          baseline/YYYY-MM/YYYY-MM-DD.parquet
-                                         (untuk training LSTM-AE Sprint 4 — BLOCKED)
+                                         (untuk training LSTM-AE Sprint 4 — SELESAI 2026-07)
 ```
 
 **Catatan dependency yang penting**:
@@ -118,15 +120,17 @@ pv_pipeline/
 ├── panel_spec.py            PanelSpec dari panel_spec.yaml; Voc helpers (per Tcell)
 ├── voc_estimator.py         Voc_actual @ I→0 (median V saat I < threshold)
 ├── cell_temp.py             CellTempProvider: per-WS measurement + SAPM fallback
-├── baseline.py              BaselineAccumulator: filter NORMAL → daily parquet
+├── baseline.py              BaselineAccumulator: filter NORMAL → daily parquet+csv, + day-filter outage/curtailment (2026-06)
 ├── availability.py          [M2eAvailability] hybrid inverter+string availability
 ├── peer_zscore.py           [M2bPeerZScore] Rstr=V/I peer Z-score + voc_ratio rule
 ├── open_circuit.py          [M2bOpenCircuit] I/I_q95 < 5% + debounce
 ├── ground_fault.py          [M2bGroundFault] V_to_ground triple-signal
+├── mppt_ratio.py            [M2bMpptRatio] rasio arus vs median partner se-MPPT + debounce (baru 2026-06-12)
 ├── iforest.py               [M2IForest] sklearn IsolationForest per inverter, 5-feat
 ├── m2a/
 │   ├── shading.py           [M2aShading] Diurnal CV + PR-proxy + AM/PM asymmetry
-│   ├── soiling.py           [M2aSoiling] rdtools SRR (SKELETON — gracefully insufficient_data)
+│   ├── soiling.py           [M2aSoiling] rdtools SRR + koreksi suhu + mask availability + cleaning impact (matang 2026-07; OFF di pipeline harian, analysis run standalone)
+│   ├── cleaning_report.py   Rekap manual cleaning (checklist STSn + mapping DC cable ST→PV)
 │   └── low_irradiance.py    [M2aLowIrradiance] OLS regression PR_proxy vs POA di 50-250 W/m²
 ├── poa/
 │   ├── loader.py            PyranometerLoader (multi-year xlsx)
@@ -137,16 +141,16 @@ pv_pipeline/
 │   └── loader.py            AmbientTempLoader, WindSpeedLoader, WindDirectionLoader
 ├── generation/
 │   └── loader.py            GenerationLoader (IKN Generation Summary PV daily kWh)
-├── training_data.py         BaselineLoader + SequenceBuilder (96-step @ 15-min) — Sprint 4 skeleton
-├── lstm_ae.py               LSTM-AE PyTorch + M2bIntermittentDetector — Sprint 4 skeleton (BLOCKED)
+├── training_data.py         BaselineLoader + SequenceBuilder + build_day_windows (96-step @ 15-min)
+├── lstm_ae.py               LSTM-AE PyTorch + M2bIntermittentDetector — TERLATIH (train_lstm_ae.py Sprint 4; model 2026-07-06, wired Cell 4)
 └── dashboard/               Streamlit prototype (Fase 4) — masih in-development
 ```
 
 ### 3.3 Stack Library Eksternal Aktif
 
 Berdasarkan `requirements.txt` + import statements:
-- **Solar physics**: `pvlib`, `pvanalytics`, `rdtools` (skeleton soiling)
-- **ML / numerik**: `numpy`, `pandas`, `scikit-learn` (IsolationForest), `pyarrow` (parquet), `pytorch` (LSTM-AE skeleton, belum dilatih)
+- **Solar physics**: `pvlib`, `pvanalytics`, `rdtools` (soiling SRR)
+- **ML / numerik**: `numpy`, `pandas`, `scikit-learn` (IsolationForest), `pyarrow` (parquet), `pytorch` (LSTM-AE — model terlatih 2026-07-06 via `train_lstm_ae.py`)
 - **I/O**: `openpyxl`, `gdown`, `PyYAML`
 - **Visualisasi**: `matplotlib`; Streamlit untuk dashboard (Fase 4)
 - **Testing**: `pytest` (418 test passing per snapshot terakhir di Master Context)
@@ -166,12 +170,13 @@ Berdasarkan inspeksi langsung Cell 4 notebook v1.5 dan `m2_config.yaml`:
 | 5 | M2IForest | `iforest.py` | ⚠ noisy | OFF (opt-in via yaml) | `anomaly` | ❌ excluded |
 | 6 | M2aShading | `m2a/shading.py` | ✅ opt-in | OFF default, ON di yaml saat ini | `shading_morning/afternoon/uniform` | ❌ excluded |
 | 7 | M2aLowIrradiance | `m2a/low_irradiance.py` | ✅ opt-in | OFF default, ON di yaml saat ini | `low_irradiance_underperform / general_underperform` | ✅ |
-| 8 | M2aSoiling | `m2a/soiling.py` | 🟡 SKELETON | OFF | `insufficient_data` sampai 90+ hari baseline | ❌ |
+| 8 | M2aSoiling | `m2a/soiling.py` | 🟡 OFF di pipeline harian; **analysis run standalone matang** (2026-07) | OFF | `soiling_detected / cleaning_recommended / insufficient_data / rdtools_error` | ❌ |
+| 9 | M2bMpptRatio | `mppt_ratio.py` | ✅ produksi (baru 2026-06-12) | ON | `mppt_partner_underperform` | ✅ |
+| 10 | M2bIntermittent (LSTM-AE) | `lstm_ae.py` | ✅ terlatih (2026-07-06), wired Cell 4 template | OFF di konstruktor (opt-in `model_path`/`meta_path`/`enabled=True`) | `intermittent` | ✅ |
 
 **Catatan tentang `exclude_from_findings_sheet=true`**: 4 detector (iforest, shading, soiling, low_irradiance saat dieksklusi) menulis ke sheet artefak masing-masing (`M2_iforest_AnomalyScores`, dst.), namun **tidak masuk sheet Findings utama** dan tidak men-trigger auto-skip baseline di Cell 7. Alasan: iforest dengan `contamination=0.01` bisa emit ribuan finding per hari → membanjiri Findings sheet dan membuang data baseline yang sebenarnya valid. Detector M2b yang lebih konservatif tetap masuk Findings.
 
 **Detector yang BELUM ada di sistem real** (vs spec Master Context):
-- M2b LSTM-AE Intermittent (`lstm_ae.py::M2bIntermittentDetector`) — skeleton ada, `enabled=False`, **BLOCKED** sampai ≥3 bulan data baseline (Sprint 4 prerequisite).
 - M2c Microcrack (EL Image YOLOv8 + IV Curve) — belum ada modul, butuh kampanye EL imaging + IV tracer.
 - M2d Bifacial Backside — belum ada modul, butuh rear POA sensor (min 4 per row per IEC TS 60904-1-2).
 - M2f Loss Attribution + Pareto + SHAP — belum ada modul.
@@ -201,9 +206,13 @@ m2_findings_<datestr>.xlsx
 ├── M2a_shading_ShadingSummary
 ├── M2a_low_irradiance_LowIrradianceFit   ← regression coef per inverter
 ├── M2a_low_irradiance_Summary
-├── M2a_soiling_EconomicAnalysis          ← payback days
+├── M2b_mppt_ratio_StringStatus           ← per-PV: NORMAL | mppt_partner_underperform | EMPTY (baru 2026-06)
+├── M2b_intermittent_WindowErrors         ← error rekonstruksi LSTM semua window (baru 2026-07)
+├── M2a_soiling_EconomicAnalysis          ← payback days (+ Temp_Loss sejak 2026-07)
 ├── M2a_soiling_SoilingRatio              ← rdtools SRR output
-└── M2a_soiling_CleaningEvents
+├── M2a_soiling_CleaningEvents
+└── M2a_soiling_* (2026-07, saat analysis run): PRDaily, AvailabilityMask, ManualCleaning,
+    CleaningImpact, DirectCleaningImpact(PerString), PerInverterSRR, MonthlySoilingLoss
 ```
 
 Output tambahan di luar xlsx: `outputs/m2_findings_<datestr>.jsonl` (1 baris per finding), `outputs/inverter_operation_<datestr>.csv` (legacy M2e log).
@@ -236,7 +245,9 @@ Setiap baris di sini akan diturunkan **rumus matematis penuhnya** di iterasi dee
 | **M2IForest** | `anomaly_score` (sklearn), 5-feat (V, I, V_dev, I_dev, R) | per-(inv, PV, ts) | by score quartile |
 | **M2aShading** | `CV_h` per jam, `PR_proxy_h`, AM/PM imbalance | per-inverter shading_{morning/afternoon/uniform} | by # suspicious hours |
 | **M2aLowIrradiance** | slope_low, slope_mid, R², dari OLS PR vs POA di 50-250 W/m² | per-inverter low_irradiance_underperform vs general_underperform | by slope significance |
-| **M2aSoiling** | (saat live) insolation-weighted soiling ratio, cleaning events, payback_days | per-site | rdtools-based |
+| **M2aSoiling** | (saat analysis run) insolation-weighted soiling ratio (temperature-corrected, masked availability), cleaning events, payback_days | per-site | rdtools-based |
+| **M2bMpptRatio** (2026-06) | `ratio = I_string/median(I_partner se-MPPT)`, `ratio_event_median`, `n_debounced_events` | per-(inv, PV) mppt_partner_underperform | <0.20 CRITICAL · <0.50 HIGH · else MEDIUM |
+| **M2bIntermittent LSTM-AE** (2026-07) | `reconstruction_error` per window 24-jam vs `threshold μ+3σ` | per-(inv, window) intermittent | MEDIUM (conf 70) |
 
 ### 6.3 KPI Sistem (di luar detector)
 
@@ -255,7 +266,7 @@ Semua threshold dan tunable berada di 5 YAML config (jangan hardcode di kode):
 
 | File | Isi |
 |---|---|
-| `config/m2_config.yaml` | DEFAULT_M2_CONFIG override: thresholds per detector (m2e, m2b, m2b_open_circuit, m2b_ground_fault, m2a_shading, m2a_soiling, m2a_low_irradiance, m2_iforest), POA source list, preprocessing flag |
+| `config/m2_config.yaml` | DEFAULT_M2_CONFIG override: thresholds per detector (m2e, m2b, m2b_open_circuit, m2b_ground_fault, **m2b_mppt_ratio**, m2a_shading, m2a_soiling, m2a_low_irradiance, m2_iforest), POA source list, preprocessing flag |
 | `config/site_geometry.yaml` | Koordinat (lat −0.99, lon 116.64), elev 85m, tz Asia/Makassar, tilt 10°, azimuth 0° (N), `ws_to_wb` mapping (5 WS untuk POA, 4 WS untuk Tcell/Weather), paths ke pyranometer/Tcell/albedo/weather xlsx |
 | `config/panel_spec.yaml` | Jinko JKM625N STC + NOCT + temperature coef + bifacial gain + per-WB `modules_per_string` (WB01-02: 24, WB03-10: 26) |
 | `config/strings.yaml` | `EMPTY_PV_MAP`: 244 entri inverter → list PV slot yang fisik tidak terpasang (untuk skip dari peer comparison) |
@@ -265,6 +276,7 @@ Semua threshold dan tunable berada di 5 YAML config (jangan hardcode di kode):
 - `m2b.z_threshold = 2.5`, `voc_ratio_threshold = 0.95`
 - `m2b_open_circuit.i_ratio_threshold = 0.05`, `poa_threshold_wm2 = 700`, `debounce_consecutive_steps = 20` (≈ 1h40m persistensi pada 5-menitan)
 - `m2b_ground_fault.v_to_ground_abs_threshold_v = 50`, `adaptive_z_threshold = 3.0`
+- `m2b_mppt_ratio.ratio_threshold = 0.85` (`ratio_high = 0.50`, `ratio_critical = 0.20`), `debounce_consecutive_steps = 20`, `poa_threshold_wm2 = 300`
 - `m2e.string_proxy.pstr_zero_threshold_kw = 0.1`, `sibling_median_active_kw = 1.0`, `debounce = 20`
 - `m2a_shading.cv_low_multiplier = 0.5`, `pr_low_multiplier = 0.85`
 - `m2a_low_irradiance.poa_low_range = [50, 250]`, `r_squared_min = 0.3`
@@ -308,9 +320,9 @@ Beberapa hal yang saya verifikasi langsung di kode + worth diketahui sebelum kit
 
 6. **POA fan-out 5 source** — Setiap detector M2b (peer_zscore, open_circuit, ground_fault) loop di 5 POA source (`emit_all_sources: true`). Artinya finding bisa duplikat dengan `evidence.poa_source` berbeda. Ini *intentional* untuk cross-validation antar source. Excel design perlu reflect ini.
 
-7. **Soiling detector statusnya SKELETON** — `M2aSoiling.run()` cenderung emit finding dengan `fault_type='insufficient_data'` (severity INFO) saat baseline < 90 hari. **Excel saya akan implement versi simplified** (PR drift rolling 14-hari + recovery detection) yang bisa langsung dipakai tanpa menunggu 6 bulan data.
+7. **Soiling detector** — *(update 2026-07: tidak lagi skeleton)* — di pipeline harian tetap OFF dan emit `insufficient_data` saat < 90 hari, tetapi jalur produksinya kini **analysis run standalone multi-bulan** (`run_soiling_analysis.py`; SRR dijalankan atas 2025-01..2026-04 dengan presipitasi, koreksi suhu, dan mask availability M2e). Detail: `M2_RE_09` §0.
 
-8. **LSTM-AE skeleton** — Modul ada (`lstm_ae.py` + `training_data.py`), tapi model belum dilatih (`enabled=False`). Sampai baseline ≥3 bulan akumulasi, detector ini noop.
+8. **LSTM-AE** — *(update 2026-07: terlatih)* — `train_lstm_ae.py` (Sprint 4) melatih dari baseline CSV; model `lstm_ae_20260706_084352` wired `enabled=True` di Cell 4 template (2026-07-06). Default konstruktor tetap `enabled=False` (opt-in). Detail: `M2_RE_10`.
 
 ---
 
@@ -360,7 +372,7 @@ Berdasarkan kompleksitas, criticality, dan tingkat dependency, saya rekomendasik
 | **8** | **M2aSoiling** | Skeleton — kita design simplified version (rolling PR drift + recovery). |
 | **9** | (opsional) **Physics baseline + PR + Curtailment cross-check** (Cell 5) | Foundation untuk semua detector. |
 
-**Detector LSTM-AE Intermittent** akan kita masukkan sebagai "limitasi" section di Excel (bukan iterasi terpisah) karena memang belum aktif di sistem real.
+**Detector LSTM-AE Intermittent** akan kita masukkan sebagai "limitasi" section di Excel (bukan iterasi terpisah). *(Update 2026-07: model kini terlatih & aktif di Cell 4 template — didokumentasikan penuh di `M2_RE_10`, tetap tanpa sheet Excel karena input-only.)*
 
 ---
 

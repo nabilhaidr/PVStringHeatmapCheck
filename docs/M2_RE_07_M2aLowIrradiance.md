@@ -6,7 +6,7 @@
 **Spec referensi**: Master Context — underperformance low-light vs soiling (Fase 3 Part 2 Task #6; di luar rule §4.2.x utama)
 **Dependency**: `POAProvider` (`get_poa`, `get_solar_elevation`), `load_empty_pv_map`
 **Output sheet Python**: `LowIrradianceFit` (per inverter) + `LowIrradianceSummary` (hitung klasifikasi)
-**Output Excel workbook**: sheet `Raw_Data_LI`, `Helpers_LI`, `M2a_LowIrradiance`, `LI_Summary` di `docs/M2_PV_Performance_Workbook.xlsx` (kini 33 sheet)
+**Output Excel workbook**: sheet `Raw_Data_LI`, `Helpers_LI`, `M2a_LowIrradiance`, `LI_Summary` di `docs/M2_PV_Performance_Workbook.xlsx` (33 sheet saat iterasi 7; kini 46)
 **Status verifikasi**: ✅ **Reproduksi PENUH (bukan approksimasi)** — OLS dua band cocok eksak antara proto, recompute Python, dan formula `SUMPRODUCT` Excel + audit formula per sel + regen 0-diff. ⚠️ Live recalc LibreOffice tidak dijalankan (crash) — lihat Section 7.
 
 ---

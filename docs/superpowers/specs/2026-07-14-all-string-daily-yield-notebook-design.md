@@ -39,7 +39,7 @@ Alternatif yang ditolak:
 - Download hanya file `YYYYMMDD.csv` yang diminta.
 - Ekstraksi power seluruh string dari setiap CSV yang dibaca satu kali.
 - Perhitungan yield harian teramati tanpa imputasi.
-- Rekap matriks tanggal x string dan detail audit per string-hari.
+- Rekap matriks string x tanggal dan detail audit per string-hari.
 - Workbook Excel tiga sheet, verifikasi setelah disimpan, dan download Colab.
 - Unit test serta smoke test notebook offline.
 
@@ -192,8 +192,10 @@ Setiap kombinasi tanggal x string muncul tepat satu kali.
 
 Rekap lebar dibentuk dari detail harian:
 
-- Kolom pertama `date`.
-- Kolom berikutnya satu kolom per `pv_string` canonical.
+- Kolom pertama `pv_string`.
+- Kolom berikutnya satu kolom per tanggal dalam rentang inklusif.
+- Setiap baris mewakili satu `pv_string` canonical dalam urutan alami WB, INV,
+  lalu PV.
 - Nilai adalah `string_yield_kwh`.
 - `PARTIAL` tetap memiliki nilai yield teramati.
 - `NO_STRING_DATA`, `MISSING_CSV`, dan `CSV_READ_ERROR` menghasilkan sel kosong.
@@ -209,10 +211,10 @@ output_string/all_string_yield_<yyyymmdd>_<yyyymmdd>.xlsx
 Urutan sheet:
 
 1. **`Rekap_Yield_kWh`**
-   - Matriks tanggal x string.
-   - Freeze pane pada header dan tanggal.
+   - Matriks string x tanggal.
+   - Freeze pane pada header dan identitas string.
    - Filter aktif.
-   - Format tanggal `yyyy-mm-dd` dan yield `0.000`.
+   - Header tanggal memakai format `yyyy-mm-dd` dan yield memakai `0.000`.
 2. **`Detail_Harian`**
    - Data panjang sesuai kontrak kolom.
    - Freeze pane, filter, serta format tanggal, yield, dan coverage numerik.

@@ -5,7 +5,7 @@
 **Sifat**: detektor **machine-learning** (sklearn `IsolationForest`), bukan rule fisika. **Opt-in** (`enabled` default `False`); di config IKN di-set `True` tapi `exclude_from_findings_sheet=True`.
 **Dependency**: `sklearn.ensemble.IsolationForest` (auto-install via `_ensure_sklearn`), `POAProvider`, `load_empty_pv_map`
 **Output sheet Python**: `AnomalyScores` (per-(inv, PV, ts) skor+flag) + `AnomalySummary` (per-inverter)
-**Output Excel workbook**: sheet `Raw_Data_IF`, `Features_IF`, `IF_Anomaly`, `IF_Summary` di `docs/M2_PV_Performance_Workbook.xlsx` (kini 29 sheet)
+**Output Excel workbook**: sheet `Raw_Data_IF`, `Features_IF`, `IF_Anomaly`, `IF_Summary` di `docs/M2_PV_Performance_Workbook.xlsx` (29 sheet saat iterasi 6; kini 46)
 
 > ⚠️ **CAVEAT UTAMA — baca dulu.** Detektor asli adalah **IsolationForest terlatih (100 pohon, contamination 0.01, seed 42)**. Skornya = panjang-lintasan ensembel = **black box terlatih yang TIDAK bisa direproduksi sebagai formula Excel**. sklearn juga **tidak tersedia di sandbox** (butuh scipy). Maka sheet Excel di sini adalah **APPROKSIMASI TRANSPARAN berbasis MAD** (sesuai rencana System Overview), yang **meniru STRUKTUR** detektor (fitur identik, per-inverter, flag fraksi contamination, severity kuartil, confidence) **tetapi memakai skor yang berbeda** (MAX robust-z, bukan path-length). **Approksimasi ini akan menandai sampel yang BERBEDA dari iForest asli.** Pakai untuk transparansi logika & severity, bukan sebagai pengganti detektor produksi. Detail di §5.
 

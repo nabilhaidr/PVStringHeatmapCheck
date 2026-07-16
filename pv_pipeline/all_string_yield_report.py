@@ -307,10 +307,15 @@ def build_all_string_daily_yield(
             f"shorten the range to at most {maximum_days} days for "
             f"{len(strings):,} detected strings."
         )
-    if len(strings) + 1 > EXCEL_MAX_COLUMNS:
+    if len(strings) + 1 > EXCEL_MAX_ROWS:
+        raise ValueError(
+            "Rekap_Yield_kWh would exceed the Excel row limit "
+            f"({len(strings) + 1:,} > {EXCEL_MAX_ROWS:,})."
+        )
+    if len(requested_days) + 1 > EXCEL_MAX_COLUMNS:
         raise ValueError(
             "Rekap_Yield_kWh would exceed the Excel column limit "
-            f"({len(strings) + 1:,} > {EXCEL_MAX_COLUMNS:,})."
+            f"({len(requested_days) + 1:,} > {EXCEL_MAX_COLUMNS:,})."
         )
 
     daily_rows = []
@@ -353,10 +358,10 @@ def build_all_string_daily_yield(
 
     daily = pd.DataFrame(daily_rows, columns=DETAIL_COLUMNS)
     summary = daily.pivot(
-        index="date",
-        columns="pv_string",
+        index="pv_string",
+        columns="date",
         values="string_yield_kwh",
-    ).reindex(index=requested_days, columns=strings)
+    ).reindex(index=strings, columns=requested_days)
     summary.columns.name = None
     summary = summary.reset_index()
 
@@ -456,13 +461,19 @@ def write_all_string_workbook(
             f"Unexpected detail columns: {list(report.daily.columns)!r}"
         )
     summary_columns = list(report.summary.columns)
-    if not summary_columns or summary_columns[0] != "date":
+    if not summary_columns or summary_columns[0] != "pv_string":
         raise ValueError(
             f"Unexpected summary columns: {summary_columns!r}"
         )
-    pv_strings = summary_columns[1:]
+    pv_strings = report.summary["pv_string"].tolist()
     if pv_strings != sorted(pv_strings, key=_natural_string_key):
-        raise ValueError("Summary PV string columns are not naturally sorted.")
+        raise ValueError("Summary PV string rows are not naturally sorted.")
+    recap_dates = [
+        pd.Timestamp(value).date()
+        for value in summary_columns[1:]
+    ]
+    if recap_dates != sorted(set(recap_dates)):
+        raise ValueError("Summary date columns are not unique and sorted.")
     _reject_sensitive_metadata_keys(report.metadata)
 
     output_path = Path(output_path)
@@ -476,13 +487,13 @@ def write_all_string_workbook(
     _append_dataframe(recap_sheet, report.summary)
     recap_sheet.freeze_panes = "B2"
     recap_sheet.auto_filter.ref = recap_sheet.dimensions
-    for row in range(2, recap_sheet.max_row + 1):
-        recap_sheet.cell(row=row, column=1).number_format = "yyyy-mm-dd"
-        for column in range(2, recap_sheet.max_column + 1):
-            recap_sheet.cell(row=row, column=column).number_format = "0.000"
-    recap_widths = {"A": 12}
     for column in range(2, recap_sheet.max_column + 1):
-        recap_widths[get_column_letter(column)] = 20
+        recap_sheet.cell(row=1, column=column).number_format = "yyyy-mm-dd"
+        for row in range(2, recap_sheet.max_row + 1):
+            recap_sheet.cell(row=row, column=column).number_format = "0.000"
+    recap_widths = {"A": 22}
+    for column in range(2, recap_sheet.max_column + 1):
+        recap_widths[get_column_letter(column)] = 12
     _set_column_widths(recap_sheet, recap_widths)
 
     _append_dataframe(detail_sheet, report.daily[DETAIL_COLUMNS])
@@ -543,11 +554,14 @@ def verify_all_string_workbook(path: Path) -> None:
         detail_sheet = workbook["Detail_Harian"]
         metadata_sheet = workbook["Metadata"]
         recap_headers = [cell.value for cell in recap_sheet[1]]
-        if not recap_headers or recap_headers[0] != "date":
+        if not recap_headers or recap_headers[0] != "pv_string":
             raise RuntimeError(
                 f"Unexpected recap headers: {recap_headers!r}"
             )
-        recap_strings = recap_headers[1:]
+        recap_strings = [
+            recap_sheet.cell(row=row, column=1).value
+            for row in range(2, recap_sheet.max_row + 1)
+        ]
         try:
             naturally_sorted = sorted(
                 recap_strings,
@@ -555,15 +569,15 @@ def verify_all_string_workbook(path: Path) -> None:
             )
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
-                "Unexpected recap PV string headers."
+                "Unexpected recap PV string rows."
             ) from exc
         if recap_strings != naturally_sorted:
             raise RuntimeError(
-                "Unexpected recap PV string headers."
+                "Unexpected recap PV string rows."
             )
         if len(set(recap_strings)) != len(recap_strings):
             raise RuntimeError(
-                "Unexpected recap PV string headers."
+                "Unexpected recap PV string rows."
             )
         detail_headers = [cell.value for cell in detail_sheet[1]]
         if detail_headers != DETAIL_COLUMNS:
@@ -599,11 +613,13 @@ def verify_all_string_workbook(path: Path) -> None:
         ]
         if len(expected_dates) != requested_days:
             raise RuntimeError("Metadata has invalid report dates.")
-        if recap_sheet.max_row != requested_days + 1:
-            raise RuntimeError("Recap row count does not match requested days.")
-        if recap_sheet.max_column != detected_strings + 1:
+        if recap_sheet.max_row != detected_strings + 1:
             raise RuntimeError(
-                "Recap column count does not match detected strings."
+                "Recap row count does not match detected strings."
+            )
+        if recap_sheet.max_column != requested_days + 1:
+            raise RuntimeError(
+                "Recap column count does not match requested days."
             )
         if detail_sheet.max_row != requested_days * detected_strings + 1:
             raise RuntimeError(
@@ -612,9 +628,9 @@ def verify_all_string_workbook(path: Path) -> None:
         try:
             recap_dates = [
                 pd.Timestamp(
-                    recap_sheet.cell(row=row, column=1).value
+                    recap_sheet.cell(row=1, column=column).value
                 ).date()
-                for row in range(2, recap_sheet.max_row + 1)
+                for column in range(2, recap_sheet.max_column + 1)
             ]
         except (TypeError, ValueError) as exc:
             raise RuntimeError("Unexpected recap dates.") from exc

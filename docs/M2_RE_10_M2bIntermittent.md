@@ -1,13 +1,13 @@
 # M2 Reverse Engineering — Iterasi 10: M2bIntermittent (LSTM-AE)
 
-**Modul**: `pv_pipeline/lstm_ae.py` (540 baris) + `pv_pipeline/training_data.py` (441 baris)
+**Modul**: `pv_pipeline/lstm_ae.py` (625 baris) + `pv_pipeline/training_data.py` (502 baris) + `train_lstm_ae.py` (246 baris, root repo)
 **Class utama**: `M2bIntermittentDetector(SubModule)` — `name = "M2b_intermittent"`
-**Sifat**: detektor **deep-learning** (LSTM Autoencoder, PyTorch). **SKELETON / BLOCKED** — `enabled=False`, belum ada model terlatih; menunggu akumulasi baseline **≥3 bulan** (Sprint 4 prerequisite, blocked on Sprint 3.3).
+**Sifat**: detektor **deep-learning** (LSTM Autoencoder, PyTorch). **TERLATIH & TER-WIRE (update 2026-07-11)** — model dilatih via `train_lstm_ae.py` (Sprint 4) dari baseline CSV; artifacts `lstm_ae_20260706_084352.pt/.json`. Di Cell 4 template notebook, `M2bIntermittentDetector(model_path=..., meta_path=..., enabled=True)` sejak 2026-07-06 (commit 19e3bf2) — submodule ke-10 pipeline. Default konstruktor tetap `enabled=False` (opt-in eksplisit).
 **Spec referensi**: Master Context §4.2.3 — *intermittent fault* (pergeseran pola halus: konektor longgar, partial-shading bergeser)
-**Dependency**: `torch` (lazy-import ~200MB), `pv_pipeline.training_data` (`SequenceBuilder`, `fit_normalization`), `BaselineAccumulator` (Sprint 3.3)
-**Output**: `M2Finding(fault_type="intermittent", severity=MEDIUM, confidence=70)` per window ber-error tinggi
-**Output Excel workbook**: **TIDAK ADA** — detektor ini **input-only** (jaringan PyTorch terlatih = black box; lihat §4 & §5).
-**Status verifikasi**: ✅ Lapisan **data-pipeline** (resample → window → normalisasi → split) dijalankan dengan kode ASLI (`SequenceBuilder`) — angka nyata terverifikasi. ⚠️ Train + reconstruction error = **dokumentasi** (torch tak tersedia di sandbox; ~200MB).
+**Dependency**: `torch` (lazy-import ~200MB), `pv_pipeline.training_data` (`build_day_windows`, `fit_normalization`; `SequenceBuilder` kini hanya jalur legacy), `BaselineAccumulator` (Sprint 3.3)
+**Output**: `M2Finding(fault_type="intermittent", severity=MEDIUM, confidence=70)` per window ber-error tinggi + artifact **`WindowErrors`** (sheet xlsx: error rekonstruksi SEMUA window per inverter-hari — ranking harian & tren mendekati threshold; sejak 2026-07-07, commit 4b2bce7)
+**Output Excel workbook**: **TIDAK ADA** — detektor ini **input-only** (jaringan PyTorch terlatih = black box; lihat §4 & §5). `WindowErrors` adalah artifact output Python, bukan reproduksi formula.
+**Status verifikasi**: ✅ Lapisan **data-pipeline** (resample → window → normalisasi → split) dijalankan dengan kode ASLI — angka nyata terverifikasi (catatan: worked example §3 memakai `SequenceBuilder` sliding-window, jalur training lama; training & inferensi kini day-grid `build_day_windows`, lihat §2). ⚠️ Train + reconstruction error = **dokumentasi** (torch tak tersedia di sandbox; ~200MB).
 
 > ⚠️ **CAVEAT UTAMA.** Ini detektor yang **paling tidak bisa direproduksi di Excel** dari seluruh famili M2. Nilai detektor SELURUHNYA ada di **bobot jaringan saraf terlatih** (encoder/decoder LSTM, ~puluhan ribu parameter) — tidak ada formula spreadsheet yang masuk akal untuk forward-pass apalagi training. Berbeda dari iForest (bisa approksimasi MAD) atau SRR-soiling (ekonomi hilir bisa live), di sini **tidak ada lapisan hilir yang bermakna tanpa modelnya**. Maka **tidak ada sheet workbook**; iterasi ini murni dokumentasi reverse-engineering.
 
@@ -36,7 +36,8 @@ Window dengan `e > threshold` → emit `intermittent` (MEDIUM, confidence 70).
 ### Bagian A — Data (`training_data.py`)
 
 1. **BaselineLoader** (baris 58-144): baca daily parquet `baseline/{YYYY-MM}/*.parquet` (output Sprint 3.3 `BaselineAccumulator` — hanya hari **NORMAL** yang disimpan). `load_range`/`load_all` → concat DataFrame.
-2. **SequenceBuilder** (baris 163-293): (a) `resample` 5-min → **15-min** (mean/median/last) per inverter; (b) pilih kolom fitur `PV{1..28} input current(A)`; (c) `build_sequences` — sliding window `window_size=96`, `stride=1`, per `Inverter_ID` → `(n_windows, 96, n_features)` + metadata per window.
+2. **SequenceBuilder** (sliding window `window_size=96`, `stride=1`, per `Inverter_ID`): (a) `resample` 5-min → **15-min** (mean/median/last) per inverter; (b) pilih kolom fitur `PV{1..28} input current(A)`; (c) `build_sequences` → `(n_windows, 96, n_features)` + metadata per window. **Sejak 2026-07 ini jalur legacy** — training & inferensi memakai `build_day_windows`.
+2b. **build_day_windows** (baru, 2026-07): grid harian penuh 00:00..23:45 (**96 slot** @15-min) per inverter-hari; slot kosong/malam diisi **0.0 A** (baseline hanya menyimpan ~12 jam operasional — malam memang 0 A) → **1 window per inverter-hari**. Dipakai `train_lstm_ae.py` (training) dan `build_inference_windows` (inferensi) supaya distribusi input match.
 3. **fit_normalization** (baris 327-342): z-score per-fitur (`mean`/`std` di-*fit* di training), `transform` saat inferensi.
 4. **train_val_test_split** (baris 345-385): **temporal** (kronologis, no shuffle) 70/15/15 — penting untuk time-series.
 
@@ -49,10 +50,11 @@ Window dengan `e > threshold` → emit `intermittent` (MEDIUM, confidence 70).
 7. **compute_reconstruction_errors** (baris 238-268): per-window `mean((recon−x)²)` → `(n_windows,)`.
 8. **compute_anomaly_threshold** (baris 271-278): `mean + 3·std` dari error training NORMAL.
 9. **save_model_artifacts** (baris 286-319): simpan bobot `.pt` + meta `.json` (threshold, feature_cols, norm stats).
+10. **`train_lstm_ae.py`** (root repo, Sprint 4 — 2026-07-05): baca baseline **CSV** `baseline/{YYYY-MM}/{YYYY-MM-DD}.csv` (Drive/Colab; `BaselineLoader` hanya baca parquet, file di Drive mayoritas CSV) → `build_day_windows` per inverter-hari → split temporal 70/15/15 → train (default `epochs=50`, `batch=32`, `patience=5`, `hidden=64`, `layers=2`) → `threshold = μ + σ·std` (`--sigma` default 3.0) → simpan `models/{name}_{timestamp}.pt/.json`. **Run nyata: `lstm_ae_20260706_084352`.**
 
-### Bagian C — Inferensi (`M2bIntermittentDetector.run`, baris 407-471)
+### Bagian C — Inferensi (`M2bIntermittentDetector.run`)
 
-`enabled=False` → skip (saat ini). Bila aktif & artifacts ada: `SequenceBuilder.process(combined_df)` → `norm_stats.transform` → `compute_reconstruction_errors`. Untuk tiap window `err > threshold` → emit `M2Finding(fault_type="intermittent", severity=MEDIUM, value=err, confidence=70)`, evidence `{reconstruction_error, threshold, window_std, ...}` (+ cross-check `window_std` vs `high_std_threshold=0.5`).
+Wiring Cell 4 template (sejak 2026-07-06): `M2bIntermittentDetector(model_path=".../lstm_ae_20260706_084352.pt", meta_path="....json", enabled=True)`. Default konstruktor `enabled=False` → skip. Bila aktif & artifacts ada: `build_inference_windows(combined_df, feature_cols)` — day-grid 96 slot + night-fill 0 A, preprocessing **sama dengan training** (`SequenceBuilder` sliding-window butuh ≥96 step ter-resample sehingga menghasilkan **0 window** pada data harian ~12 jam operasional — alasan penggantian) → `norm_stats.transform` → `compute_reconstruction_errors` → artifact **`WindowErrors`** (`build_window_errors_df`: date, inverter_id, reconstruction_error, threshold, error_ratio, flagged, window_std — SEMUA window, sortir error desc). Untuk tiap window `err > threshold` → emit `M2Finding(fault_type="intermittent", severity=MEDIUM, value=err, confidence=70)`, evidence `{reconstruction_error, threshold, window_std, ...}` (+ cross-check `window_std` vs `high_std_threshold=0.5`).
 
 ---
 
@@ -103,9 +105,9 @@ Status reproduksibilitas Excel: **INPUT-ONLY / N/A** — kategori terkuat dari t
 
 Singkatnya: ≥3 bulan = **minimum viable** untuk (a) cukup contoh tanpa overfit, (b) cukup **ragam normal** agar tak salah-tuduh, (c) statistik ambang stabil. Idealnya ≈1 tahun (semua musim).
 
-### 5.2 Status skeleton & dependensi
+### 5.2 Status & dependensi — UPDATE 2026-07
 
-`enabled=False`, belum ada model `.pt`/`.json` → `run()` skip dengan warning. torch lazy-install (~200MB) — **gagal di sandbox** (seperti sklearn/rdtools). Cold-start: detektor tak berguna sampai (i) baseline terkumpul, (ii) pipeline training (Sprint 4) dijalankan, (iii) artifacts tersimpan.
+Ketiga prasyarat cold-start kini **terpenuhi**: (i) baseline terakumulasi (CSV harian di Drive), (ii) pipeline training Sprint 4 dijalankan (`train_lstm_ae.py`, Colab), (iii) artifacts tersimpan (`lstm_ae_20260706_084352.pt/.json`) dan ter-wire `enabled=True` di Cell 4 template. Default konstruktor tetap `enabled=False` — tanpa `model_path`/`meta_path`, `run()` skip dengan warning. torch lazy-install (~200MB) — tetap gagal di sandbox dokumentasi ini.
 
 ### 5.3 Catatan desain
 
@@ -122,11 +124,11 @@ Singkatnya: ≥3 bulan = **minimum viable** untuk (a) cukup contoh tanpa overfit
 | Spec | §4.2.3 intermittent fault | pola halus, butuh ML |
 | fault_type | `intermittent` | per-window, inverter-aggregate |
 | severity / confidence | MEDIUM / 70 | tetap (bukan ladder) |
-| window | 96 ts @15-min (24 jam) | `SequenceBuilder` |
+| window | 96 ts @15-min (24 jam) | `build_day_windows` day-grid + night-fill 0 (training & inferensi) |
 | arsitektur | LSTM-AE 64-hidden, 2-layer | encoder→bottleneck→decoder |
-| threshold | `μ+3σ` error NORMAL | per training set |
-| Excel | **INPUT-ONLY (tak ada sheet)** | black box terlatih |
-| status | SKELETON, `enabled=False` | BLOCKED ≥3 bulan baseline |
+| threshold | `μ+3σ` error NORMAL | per training set (`--sigma` default 3.0) |
+| Excel | **INPUT-ONLY (tak ada sheet)** | black box terlatih; `WindowErrors` = artifact Python |
+| status | **TERLATIH** (`lstm_ae_20260706_084352`), wired Cell 4 | default konstruktor `enabled=False` (opt-in) |
 
 Posisi di famili M2: melengkapi detektor rule (yang menangkap fault eksplisit) dengan deteksi **anomali pola halus** yang lolos rule. Bersama M2_iForest, ini satu dari dua detektor ML; LSTM-AE lebih spesifik ke **struktur temporal** (urutan 24-jam), iForest ke **outlier multivariat per-titik**.
 
@@ -145,28 +147,31 @@ Posisi di famili M2: melengkapi detektor rule (yang menangkap fault eksplisit) d
 
 ---
 
-## 8. Rekomendasi
+## 8. Rekomendasi (update 2026-07)
 
-- **Jangan aktifkan** sampai (i) baseline ≥3 bulan (idealnya 6–12) terkumpul via `BaselineAccumulator`, (ii) pipeline training Sprint 4 dijalankan & model tersimpan, (iii) threshold divalidasi pada hari-fault yang diketahui (label).
-- Saat training nanti: bandingkan `resample_method` (mean/median/last) dan validasi false-positive-rate di hari-normal yang ditahan (held-out) — terutama lintas musim.
+- Model **sudah dilatih & aktif** (`lstm_ae_20260706_084352`). Prioritas sekarang: **validasi threshold pada hari-fault berlabel** dan monitor false-positive-rate lintas musim (model baru melihat baseline sampai awal Juli 2026 — konsep "normal"-nya belum mencakup semua musim).
+- **Retrain berkala** saat baseline bertambah (idealnya sampai mencakup 6–12 bulan); bandingkan `resample_method` (mean/median/last) saat retrain.
+- Pakai artifact **`WindowErrors`** untuk ranking harian dan memantau inverter yang mendekati threshold sebelum benar-benar terflag.
 - Karena tak ada sheet Excel, gunakan dokumen ini + `M2_Family_Summary` sebagai referensi; integrasi ke workbook **tidak disarankan** (akan menyesatkan seolah bisa direkalkulasi).
 
 ---
 
 ## 9. Penutup
 
-LSTM-AE menutup peta detektor M2 yang ber-modul (8 aktif + 1 skeleton ML ini). Ia menandai batas reproduksibilitas: **murni input-only**. Sisa yang belum ada modul (M2c Microcrack EL/IV, M2d Bifacial, M2f Loss-Attribution) butuh hardware/modul baru, di luar cakupan reverse-engineering kode saat ini.
+LSTM-AE kini bagian dari **10 submodule** pipeline Cell 4 (bukan lagi skeleton — terlatih 2026-07-06 dan wired `enabled=True` di template). Ia tetap menandai batas reproduksibilitas: **murni input-only**. Sisa yang belum ada modul (M2c Microcrack EL/IV, M2d Bifacial, M2f Loss-Attribution) butuh hardware/modul baru, di luar cakupan reverse-engineering kode saat ini.
 
-Langkah lanjut yang mungkin: (1) update `M2_Index` + `M2_Family_Summary` untuk mencatat M2_RE_10 (status input-only); (2) validasi detektor existing terhadap data Huawei aktual (paste-over `Raw_Data_*`); (3) tunggu baseline untuk benar-benar melatih LSTM-AE.
+Langkah lanjut yang mungkin: (1) validasi model terhadap hari-fault berlabel + monitor FP lintas musim; (2) validasi detektor existing terhadap data Huawei aktual (paste-over `Raw_Data_*`); (3) retrain berkala seiring baseline bertambah.
 
 ---
 
 ## Sources
 
-- `pv_pipeline/lstm_ae.py` (540 baris) — full read: `build_lstm_autoencoder`, `train_lstm_ae`, `compute_reconstruction_errors`, `compute_anomaly_threshold`, `M2bIntermittentDetector`
-- `pv_pipeline/training_data.py` (441 baris) — full read: `BaselineLoader`, `SequenceBuilder`, `fit_normalization`, `train_val_test_split`
+- `pv_pipeline/lstm_ae.py` (625 baris) — full read: `build_lstm_autoencoder`, `train_lstm_ae`, `compute_reconstruction_errors`, `compute_anomaly_threshold`, `build_inference_windows`, `build_window_errors_df`, `M2bIntermittentDetector`
+- `pv_pipeline/training_data.py` (502 baris) — full read: `BaselineLoader`, `SequenceBuilder`, `build_day_windows`, `fit_normalization`, `train_val_test_split`
+- `train_lstm_ae.py` (246 baris, Sprint 4) — training dari baseline CSV; artifacts run nyata `lstm_ae_20260706_084352.pt/.json`
+- `notebook/20260209stringmap_v1.5.ipynb` Cell 4 — wiring `enabled=True` (commit 19e3bf2, 2026-07-06)
 - `pv_pipeline/core.py` — `M2Finding`, `Severity`, `SubModule`
 - `outputs/proto_iter10.py` — worked example data-pipeline (kode ASLI dijalankan: 1155 window, split 808/173/174)
-- `docs/M2_Reverse_Engineering_Phase1_System_Overview.md` — LSTM-AE listed BLOCKED (≥3 bln baseline, Sprint 4)
+- `docs/M2_Reverse_Engineering_Phase1_System_Overview.md` — konteks sistem (status LSTM-AE di sana ikut diupdate 2026-07-11)
 - Master Context §4.2.3 (intermittent fault); IEC 61724 (PR context)
 - Verified: lapisan data-pipeline (kode asli, angka nyata) + pembacaan arsitektur. Neural net = dokumentasi (torch N/A). **Tidak ada sheet Excel — input-only.**
