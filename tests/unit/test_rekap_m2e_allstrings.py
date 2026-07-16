@@ -89,6 +89,24 @@ def test_build_uptime_pivot_dates_as_columns(outputs_dir):
     assert pv2["2026-05-02"] == pytest.approx(80.0)
 
 
+def test_build_uptime_pivot_natural_pv_order(tmp_path):
+    """pv_string harus terurut natural (PV1, PV2, PV10), bukan leksikal
+    (PV1, PV10, PV2) -- supaya sheet mudah dibaca berurutan."""
+    _write_findings_xlsx(tmp_path / "m2_findings_20260501.xlsx", [
+        _allstrings_row(inv="WB01-INV02", pv="PV1", uptime=99.0),
+        _allstrings_row(inv="WB01-INV01", pv="PV10", uptime=97.0),
+        _allstrings_row(inv="WB01-INV01", pv="PV2", uptime=98.0),
+        _allstrings_row(inv="WB01-INV01", pv="PV1", uptime=99.0),
+        _allstrings_row(inv="WB01-INV01", pv="PV11", uptime=96.0),
+    ])
+    pivot = build_uptime_pivot(_combined(tmp_path))
+    assert list(zip(pivot["inverter_id"], pivot["pv_string"])) == [
+        ("WB01-INV01", "PV1"), ("WB01-INV01", "PV2"),
+        ("WB01-INV01", "PV10"), ("WB01-INV01", "PV11"),
+        ("WB01-INV02", "PV1"),
+    ]
+
+
 def test_build_rekap_per_string_stats_and_order(outputs_dir):
     rekap = build_rekap_per_string(_combined(outputs_dir), 95.0)
     assert list(rekap.columns) == REKAP_PER_STRING_COLUMNS

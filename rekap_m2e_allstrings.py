@@ -71,8 +71,21 @@ def load_allstrings(path: str, day: pd.Timestamp) -> Optional[pd.DataFrame]:
     return df
 
 
+_PV_NUM_RE = re.compile(r"(\d+)")
+
+
+def _pv_num(pv_string) -> int:
+    """'PV10' -> 10 (kunci sort natural); tanpa angka -> paling akhir."""
+    m = _PV_NUM_RE.search(str(pv_string))
+    return int(m.group(1)) if m else 10 ** 9
+
+
 def build_uptime_pivot(long_df: pd.DataFrame) -> pd.DataFrame:
-    """Pivot uptime_pct: baris (inverter_id, pv_string), kolom tanggal."""
+    """Pivot uptime_pct: baris (inverter_id, pv_string), kolom tanggal.
+
+    Baris diurutkan NATURAL per nomor PV (PV1, PV2, ..., PV10) -- sort
+    default pivot_table leksikal ('PV10' < 'PV2') menyulitkan pembacaan.
+    """
     pv = long_df.pivot_table(
         index=["inverter_id", "pv_string"],
         columns="date",
@@ -80,7 +93,11 @@ def build_uptime_pivot(long_df: pd.DataFrame) -> pd.DataFrame:
         aggfunc="mean",
     )
     pv.columns = [pd.Timestamp(c).strftime("%Y-%m-%d") for c in pv.columns]
-    return pv.reset_index()
+    out = pv.reset_index()
+    out["_pv_num"] = out["pv_string"].map(_pv_num)
+    return out.sort_values(
+        ["inverter_id", "_pv_num", "pv_string"], ignore_index=True,
+    ).drop(columns="_pv_num")
 
 
 def build_rekap_per_string(
