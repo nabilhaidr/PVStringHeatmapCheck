@@ -1,8 +1,8 @@
 # Ide Artikel & Jurnal — Sistem Analitik Performa PV String dan Soiling Analysis
 
-Status: Draft v1.0
-Tanggal: 2026-07-11
-Basis: kode, konfigurasi, dan hasil run aktual repo `https://github.com/ompltsikn/PVStringHeatmapCheck` per 11 Juli 2026
+Status: Draft v1.1 (update hasil run soiling 16 Juli 2026)
+Tanggal: 2026-07-17
+Basis: kode, konfigurasi, dan hasil run aktual repo `https://github.com/ompltsikn/PVStringHeatmapCheck` per 17 Juli 2026
 Penyusun: O&M PLTS IKN
 
 Dokumen ini memetakan ide publikasi (jurnal internasional, jurnal nasional, konferensi, artikel populer) yang **didukung oleh kode dan data yang sudah ada** — bukan wishlist. Tiap ide mencantumkan: pertanyaan riset, kontribusi/kebaruan, bahan yang sudah tersedia (file konkret di repo), yang masih kurang, target venue, dan risiko. Bagian akhir berisi matriks prioritas dan prasyarat sebelum menulis.
@@ -36,30 +36,35 @@ Dokumen ini memetakan ide publikasi (jurnal internasional, jurnal nasional, konf
 
 ### 1.3 Hasil run nyata (siap dianalisis untuk paper)
 
-Run SRR 2025-01-03 s.d. 2026-05-14 (`coba/test run m2asoiling 11072026/`), dengan CI 68,2% dan sawtooth PNG per scope:
+Run definitif SRR 2025-01-03 s.d. 2026-06-30, ≈18 bulan (`coba/run m2a soiling 16072026/`), CI 68,2%, sawtooth PNG per scope, dan **biaya cleaning riil per blok** (WB01/02: Rp582.500/WB; WB03–10: Rp6.875.000/WB):
 
-| Scope | SR p50 | CI | Soiling loss | Hari valid |
-|---|---|---|---|---|
-| WB01 | 0,936 | [0,889–0,970] | 6,4% | 182 |
-| WB02 | 0,989 | [0,983–0,995] | 1,1% | 181 |
-| WB03 | 0,931 | [0,911–0,947] | 6,9% | 299 |
-| WB04 | 0,935 | [0,835–0,985] | 6,5% | 296 |
-| WB05 | 0,955 | [0,927–0,975] | 4,5% | 295 |
-| WB06 | 0,963 | [0,944–0,977] | 3,7% | 287 |
-| WB07 | 0,927 | [0,884–0,956] | 7,3% | 288 |
-| WB08 | 0,963 | [0,951–0,973] | 3,7% | 285 |
-| WB09 | 0,936 | [0,913–0,956] | 6,4% | 288 |
-| WB10 | 0,972 | [0,958–0,984] | 2,8% | 286 |
-| Grup WB01–02 | 0,966 | [0,934–0,990] | 3,4% | 184 |
-| Grup WB03–10 | 0,962 | [0,949–0,973] | 3,8% | 307 |
+| Scope | SR p50 | CI | Soiling loss | Hari valid | Payback (hari) | Severity |
+|---|---|---|---|---|---|---|
+| WB01 | 0,973 | [0,936–0,992] | 2,7% | 212 | 0,7 | MEDIUM |
+| WB02 | 0,981 | [0,973–0,988] | 2,0% | 211 | 1,0 | INFO |
+| WB03 | 0,935 | [0,915–0,950] | 6,5% | 336 | 3,3 | HIGH |
+| WB04 | 0,918 | [0,830–0,967] | 8,2% | 333 | 2,1 | HIGH |
+| WB05 | 0,946 | [0,920–0,963] | 5,4% | 331 | 3,2 | HIGH |
+| WB06 | 0,968 | [0,955–0,980] | 3,2% | 324 | 5,0 | MEDIUM |
+| WB07 | 0,939 | [0,919–0,957] | 6,1% | 325 | 3,2 | HIGH |
+| WB08 | 0,969 | [0,955–0,981] | 3,1% | 322 | 6,1 | MEDIUM |
+| WB09 | 0,925 | [0,899–0,948] | 7,5% | 325 | 2,2 | HIGH |
+| WB10 | 0,966 | [0,952–0,978] | 3,4% | 323 | 5,7 | MEDIUM |
+| Grup WB01–02 | 0,961 | [0,929–0,981] | 3,9% | 214 | 0,5 | MEDIUM |
+| Grup WB03–10 | 0,961 | [0,946–0,971] | 3,9% | 344 | 4,6 | MEDIUM |
 
-Catatan penting: run **site-level blend** (8 Juli) tidak menghasilkan sheet `EconomicAnalysis` — konsisten dengan risiko `NoValidIntervalError` yang tercatat di `prd.md` (interval kering terfragmentasi oleh hujan monsoon). Kegagalan ini **bukan aib — justru temuan metodologis** (lihat J1).
+Pola baru yang layak dianalisis: WB01–02 kini zona terbersih (2,0–2,7%), WB03–10 rentang 3,1–8,2% dengan 5 blok berstatus HIGH; payback < 7 hari di semua scope. Laporan internal run ini sudah ada (`Laporan_M2aSoiling_run16072026.docx` + `Presentasi_M2aSoiling_run16072026.pptx`) — bisa jadi kerangka awal paper.
+
+Catatan penting:
+
+1. Run **site-level blend** (8 Juli) tidak menghasilkan sheet `EconomicAnalysis` — konsisten dengan risiko `NoValidIntervalError` di `prd.md` (interval kering terfragmentasi hujan monsoon); run-run berikutnya memang langsung per-zona. Kegagalan ini **bukan aib — justru temuan metodologis** (lihat J1).
+2. **SR bergeser antar window**: vs run 11 Juli (data s.d. 14 Mei), WB01 berubah 6,4% → 2,7% dan WB02 1,1% → 2,0% setelah window diperpanjang ke 30 Juni. Ini wajib dijelaskan di paper (event cleaning/hujan baru di periode tambahan, efek mask availability, atau sensitivitas segmentasi SRR) — lihat prasyarat §8.3.
 
 ---
 
 ## 2. Posisi Kebaruan (hasil scoping literatur singkat, 11 Jul 2026)
 
-1. **Anggapan umum**: di iklim tropis basah, hujan dianggap "self-cleaning" dan soiling loss dianggap kecil (~3%, mis. studi Kerala melaporkan 3→6% pasca-monsoon tanpa cleaning). Mayoritas studi soiling tropis memakai **kupon kaca / rooftop kecil**, bukan data operasional skala utilitas. Hasil kita: **per-blok 1,1–7,3%** pada plant 71,5 MWp — beberapa blok jauh di atas narasi "hujan cukup".
+1. **Anggapan umum**: di iklim tropis basah, hujan dianggap "self-cleaning" dan soiling loss dianggap kecil (~3%, mis. studi Kerala melaporkan 3→6% pasca-monsoon tanpa cleaning). Mayoritas studi soiling tropis memakai **kupon kaca / rooftop kecil**, bukan data operasional skala utilitas. Hasil kita: **per-blok 2,0–8,2%** pada plant 71,5 MWp — beberapa blok jauh di atas narasi "hujan cukup".
 2. **SRR di iklim monsoon** hampir tidak dibahas: metode SRR lahir dari iklim kering (sawtooth panjang). Masalah interval terfragmentasi + kegagalan site-level + solusi per-zona & `precip_and_shift` adalah cerita metodologis yang belum banyak ditulis. Dalam scoping singkat, tidak ditemukan studi SRR skala utilitas untuk Indonesia/Asia Tenggara (klaim ini perlu dicek ulang lebih ketat saat penulisan).
 3. **Availability-masked SRR** (drop energi + kapasitas inverter-day ber-uptime rendah dari penyebut PR agar outage tidak terbaca soiling) — praktik yang jarang dieksplisitkan di literatur; kandidat kontribusi metode, bahkan kandidat kontribusi upstream ke rdtools.
 4. **Deteksi fault PV berbasis ML sudah ramai** (VAE, LSTM-AE, GNN; akurasi 80-an %). Angle kita yang membedakan: **kurasi healthy-baseline otomatis oleh detektor rule-based** (menjawab masalah "train on unlabeled healthy data" yang diakui literatur) + posisi ML sebagai sinyal pendukung dalam framework glass-box, bukan pengganti.
@@ -80,17 +85,18 @@ Catatan penting: run **site-level blend** (8 Juli) tidak menghasilkan sheet `Eco
 3. Apakah cleaning manual masih ekonomis di iklim hujan tinggi — dan di zona mana?
 
 **Kontribusi**:
-- Angka soiling operasional 16,5 bulan, per-WB dengan CI, di segmen iklim yang kurang terwakili (Af, khatulistiwa) — heterogenitas antar blok 1,1–7,3% pada site yang sama adalah temuan tersendiri (hipotesis penjelas yang bisa diuji: tinggi panel WB01–02 70 cm vs WB03–10 50–250 cm, jarak ke jalan/area konstruksi IKN, terrain).
+- Angka soiling operasional ≈18 bulan (Jan 2025–Jun 2026), per-WB dengan CI, di segmen iklim yang kurang terwakili (Af, khatulistiwa) — heterogenitas antar blok 2,0–8,2% pada site yang sama adalah temuan tersendiri: WB01–02 terbersih (2,0–2,7%), 5 blok WB03–10 berstatus HIGH (hipotesis penjelas yang bisa diuji: tinggi panel WB01–02 70 cm vs WB03–10 50–250 cm, frekuensi cleaning per zona, jarak ke jalan/area konstruksi IKN, terrain).
 - Protokol SRR untuk iklim basah: kegagalan site-level blend → analisis per cleaning-zone; kriteria `precip_and_shift` + min_interval 7 + day_scale 13; reindex harian.
 - Mask availability M2e ke penyebut PR (energi + kapasitas) — mencegah bias outage→soiling.
 - Validasi silang recovery: klasifikasi hujan vs manual (data curah hujan + checklist cleaning) dan **DirectCleaningImpact** pre/post yang independen dari SRR.
 - Ekonomi cleaning riil (tarif, biaya, payback per zona) + rekomendasi prioritas per string.
 
-**Sketsa abstrak (EN, draft)**: *Soiling is commonly assumed negligible in rainforest climates due to frequent rain cleaning. Using 16.5 months of 5-minute operational data from a 71.5 MWp PV plant near the equator (East Kalimantan, Indonesia), we quantify soiling with the stochastic rate-and-recovery (SRR) method extended with module-temperature-corrected daily PR and an inverter-availability mask that removes low-uptime inverter-days from both energy and capacity. Site-level SRR fails due to rain-fragmented soiling intervals; zone-level analysis with a precipitation-aware clean criterion yields P50 soiling losses of 1.1–7.3% across ten inverter blocks. Manual-cleaning records and rainfall data allow classification of recovery events and independent pre/post validation. Cleaning economics remain favorable in the dirtiest zones (payback < 10 days). The results challenge the rain-cleaning assumption for utility-scale plants in the humid tropics and provide a reusable SRR protocol for monsoon climates.*
+**Sketsa abstrak (EN, draft)**: *Soiling is commonly assumed negligible in rainforest climates due to frequent rain cleaning. Using 18 months of 5-minute operational data from a 71.5 MWp PV plant near the equator (East Kalimantan, Indonesia), we quantify soiling with the stochastic rate-and-recovery (SRR) method extended with module-temperature-corrected daily PR and an inverter-availability mask that removes low-uptime inverter-days from both energy and capacity. Site-level SRR fails due to rain-fragmented soiling intervals; zone-level analysis with a precipitation-aware clean criterion yields P50 soiling losses of 2.0–8.2% across ten inverter blocks. Manual-cleaning records and rainfall data allow classification of recovery events and independent pre/post validation. With per-block cleaning costs, payback stays below one week in every block (0.5–6 days). The results challenge the rain-cleaning assumption for utility-scale plants in the humid tropics and provide a reusable SRR protocol for monsoon climates.*
 
-**Yang sudah ada**: seluruh kode + hasil (§1.3), sawtooth PNG per scope, presipitasi harian, checklist cleaning, dokumen metode (`docs/M2_RE_09_M2aSoiling.md`).
+**Yang sudah ada**: seluruh kode + hasil (§1.3), sawtooth PNG per scope, presipitasi harian, checklist cleaning, dokumen metode (`docs/M2_RE_09_M2aSoiling.md`), laporan & presentasi internal run 16 Juli (kerangka awal paper).
 **Yang masih kurang**:
 - Analisis sensitivitas knob SRR (day_scale, min_interval, criterion) — 1–2 minggu komputasi + analisis.
+- **Analisis stabilitas antar-window** — jelaskan pergeseran SR saat window diperpanjang (WB01 6,4% → 2,7% antara run 11 Jul dan 16 Jul); dekomposisi: event baru vs mask availability vs segmentasi.
 - Uji hipotesis heterogenitas antar WB (tinggi panel, jarak sumber debu, curah hujan per WS) — data sebagian ada.
 - Perbandingan dengan metode alternatif (fixed rate / loss factor sederhana) sebagai baseline.
 - Izin publikasi data dari pemilik aset; keputusan anonimisasi.
@@ -142,7 +148,7 @@ Menarik (tilt 10° face-north di lat −1°, albedo NSRDB tanpa albedometer), ta
 **Judul kerja**: "Sistem analitik performa string PLTS skala utilitas berbasis Python open-source: studi kasus PLTS IKN 50 MW". Isi: arsitektur pipeline, 10 detektor, workflow Colab/Drive, contoh temuan. Kandidat venue (cek scope & akreditasi terkini sebelum submit): Jurnal Nasional Teknik Elektro dan Teknologi Informasi (JNTETI/UGM), Jurnal Rekayasa Elektrika (Unsyiah), jurnal energi terbarukan LIPI/BRIN. Nilai: diseminasi nasional cepat, portofolio, umpan balik sebelum versi internasional.
 
 ### N2 — Ekonomi cleaning tropis
-**Judul kerja**: "Analisis keekonomian pembersihan modul PLTS di iklim tropis basah: payback berbasis soiling ratio". Angka riil (tarif 1.500 IDR/kWh, biaya cleaning, payback 0,2–8 hari per zona) — menarik untuk jurnal teknik/energi maupun manajemen aset. Bisa ditulis paralel dengan J1 tanpa saling memakan (fokus ekonomi vs metodologi).
+**Judul kerja**: "Analisis keekonomian pembersihan modul PLTS di iklim tropis basah: payback berbasis soiling ratio". Angka riil (tarif 1.500 IDR/kWh, biaya cleaning aktual per blok, payback 0,5–6 hari) — menarik untuk jurnal teknik/energi maupun manajemen aset. Bisa ditulis paralel dengan J1 tanpa saling memakan (fokus ekonomi vs metodologi).
 
 ---
 
@@ -161,7 +167,7 @@ Menarik (tilt 10° face-north di lat −1°, albedo NSRDB tanpa albedometer), ta
 
 | Ide | Hook | Outlet kandidat |
 |---|---|---|
-| A1 — "Soiling in the rain belt" | Kontra-intuitif: plant di iklim hujan khatulistiwa tetap kehilangan 1–7% per blok karena debu; hujan ternyata tidak merata membersihkan | PV Magazine, pv-tech (EN); versi ID di media energi nasional |
+| A1 — "Soiling in the rain belt" | Kontra-intuitif: plant di iklim hujan khatulistiwa tetap kehilangan 2–8% per blok karena debu; hujan ternyata tidak merata membersihkan | PV Magazine, pv-tech (EN); versi ID di media energi nasional |
 | A2 — "Dari 45 MB Excel per hari menjadi daftar prioritas cleaning" | Cerita transformasi kerja O&M dengan Python open-source, tanpa server | LinkedIn/Medium (EN+ID) — juga berfungsi sebagai portofolio tim |
 | A3 — "Fault atau curtailment?" | Salah diagnosa paling mahal di PLTS ber-curtailment; bagaimana cross-check otomatis menghindarkannya | LinkedIn/Medium, majalah asosiasi energi |
 | A4 — Kontribusi upstream rdtools | Usulkan availability-mask & pengalaman monsoon sebagai GitHub discussion/PR ke rdtools; kredibilitas + sitasi komunitas | github.com/NREL/rdtools |
@@ -174,7 +180,7 @@ Artikel populer bisa terbit **sebelum** jurnal (tidak dianggap prior publication
 
 | # | Ide | Kesiapan data | Effort tulis+analisis | Impact | Rekomendasi waktu |
 |---|---|---|---|---|---|
-| 1 | J1 Soiling tropis | ●●●●○ (hasil+CI sudah ada) | 2–3 bulan | Tinggi | Mulai sekarang; submit Q4 2026 |
+| 1 | J1 Soiling tropis | ●●●●● (hasil+CI+ekonomi riil per blok) | 2–3 bulan | Tinggi | Mulai sekarang; submit Q4 2026 |
 | 2 | A1 + A4 | ●●●●● | 1–2 minggu | Sedang (visibilitas) | Segera setelah izin |
 | 3 | PVPMC/PVSC abstrak | ●●●●○ | 2–4 minggu | Sedang-tinggi | Sesuai deadline CFP |
 | 4 | N1 / N2 | ●●●●○ | 3–6 minggu | Sedang (nasional) | Paralel dengan J1 |
@@ -188,8 +194,8 @@ Artikel populer bisa terbit **sebelum** jurnal (tidak dianggap prior publication
 ## 8. Prasyarat Sebelum Menulis (checklist)
 
 1. **Izin & kepemilikan data** — persetujuan tertulis pemilik/operator aset untuk publikasi data operasional; putuskan anonimisasi ("a 71.5 MWp plant in East Kalimantan") vs nama terbuka. Tentukan authorship & afiliasi.
-2. **Kunci dataset publikasi** — bekukan satu run definitif (kandidat: `coba/test run m2asoiling 11072026/`, data 2025-01-03..2026-05-14, CI lengkap). Catatan: run 8 Juli lama menghasilkan `sr_ci_lower/upper` kosong (sebelum perbaikan `_ci_bounds` di `soiling.py`); **pakai run terbaru, jangan campur**.
-3. **Analisis sensitivitas** — variasikan `day_scale`, `min_interval_length`, `clean_criterion`, `availability_min_uptime_pct`; laporkan kestabilan SR.
+2. **Kunci dataset publikasi** — run definitif: `coba/run m2a soiling 16072026/` (data 2025-01-03..2026-06-30, CI lengkap, biaya cleaning riil per blok). Jangan campur dengan run lama: run 8 Juli menghasilkan `sr_ci_lower/upper` kosong (sebelum perbaikan `_ci_bounds` di `soiling.py`), dan run 11 Juli memakai window lebih pendek (s.d. 14 Mei) dengan hasil berbeda.
+3. **Analisis sensitivitas & stabilitas** — variasikan `day_scale`, `min_interval_length`, `clean_criterion`, `availability_min_uptime_pct`; laporkan kestabilan SR. Tambahkan **stabilitas antar-window**: jalankan SRR pada window bergeser/berlapis (mis. per 3 bulan penambahan) dan jelaskan pergeseran WB01 6,4% → 2,7% antara run 11 Jul dan 16 Jul.
 4. **Uji hipotesis heterogenitas WB** — regresikan soiling loss per WB terhadap tinggi panel, curah hujan WS terdekat, jarak sumber debu (perlu data jarak; sebagian dari layout site).
 5. **Kampanye ground truth (untuk J2/J3)** — protokol: sampel temuan per detektor → verifikasi lapangan O&M → label confirmed/false; target ≥ 50–100 event.
 6. **Reproducibility statement** — kode sudah rapi (YAML config, pytest, dokumentasi RE); putuskan apakah pv_pipeline akan di-open-source (membuka opsi software paper di JOSS, dan memperkuat J1/J2).
@@ -202,7 +208,8 @@ Artikel populer bisa terbit **sebelum** jurnal (tidak dianggap prior publication
 - LSTM-AE sebagai detektor produksi — baru terlatih, input-only, belum dievaluasi kuantitatif.
 - Albedo terukur — yang ada forecast NSRDB TMY.
 - Soiling site-level tunggal — run site blend gagal interval; laporkan per-zona apa adanya.
-- Kerugian soiling "tahunan" — data 16,5 bulan dengan hari valid 181–307 per scope; nyatakan periode eksplisit.
+- Kerugian soiling "tahunan" — data ≈18 bulan dengan hari valid 211–344 per scope; nyatakan periode eksplisit.
+- Angka soiling sebagai nilai tetap — SR bergeser antar window run (WB01 6,4% → 2,7%); selalu sebutkan window data dan versi run yang dipakai.
 
 ---
 
@@ -214,4 +221,4 @@ Artikel populer bisa terbit **sebelum** jurnal (tidak dianggap prior publication
 - [EPJ PV: peta soiling Eropa dengan efek pembersihan hujan parsial (2026)](https://www.epj-pv.org/articles/epjpv/full_html/2026/01/pv20250058/pv20250058.html) — pembanding metodologi rain-cleaning
 - [Studi Kerala PRCLM (tropis basah, rooftop)](https://masujournal.org/view_journal.php?id=720) — pembanding angka 3–6%
 - Deteksi fault ML pembanding: [VAE monitoring](https://www.sciencedirect.com/science/article/abs/pii/S019689042400606X), [hybrid AE+RF (MDPI 2025)](https://www.mdpi.com/2673-4117/6/10/254), [PVeSight string anomaly (2025)](https://www.sciencedirect.com/science/article/pii/S2468502X25000269)
-- Internal: `prd.md`, `docs/M2_RE_09_M2aSoiling.md`, `docs/M2_Family_Summary.md`, hasil run `coba/test run m2asoiling 11072026/`
+- Internal: `prd.md`, `docs/M2_RE_09_M2aSoiling.md`, `docs/M2_Family_Summary.md`, hasil run definitif `coba/run m2a soiling 16072026/` (+ pembanding window: `coba/test run m2asoiling 11072026/`), `Laporan_M2aSoiling_run16072026.docx`
