@@ -24,11 +24,12 @@ Isi:
 3. **Cell 3** — Heatmap semua inverter; PNG disimpan ke `outputs_daily_runfast/`.
 4. **Cell 4** — M2eAvailability only → `m2_findings_{tanggal}.jsonl/.xlsx` +
    `inverter_operation_{tanggal}.csv` di `outputs_daily_runfast/`.
+5. **Cell 5** — Export `df_plot` → `{tanggal}.csv` + download browser
+   (sama dengan Cell 8 notebook penuh).
 
 Yang sengaja TIDAK ada: detector POA-aware (PeerZ / OpenCircuit / GroundFault /
-IForest / Shading / LowIrradiance), soiling, LSTM-AE, baseline CSV/parquet
-(Cell 7 notebook penuh), dan export df_plot (Cell 8). Output tidak menimpa
-`outputs/` milik run penuh.
+IForest / Shading / LowIrradiance), soiling, LSTM-AE, dan baseline CSV/parquet
+(Cell 7 notebook penuh). Output tidak menimpa `outputs/` milik run penuh.
 
 Notebook ini di-generate `notebook/_build_daily_runfast_nb.py` — edit builder,
 bukan .ipynb langsung.
@@ -269,12 +270,56 @@ print(f"\\n[m2e-runfast] DONE. data dates: {DATA_DATESTR}")
 print(f"[m2e-runfast] output folder : {DAILY_OUT_DIR}")
 """
 
+CODE_CELL5 = """\
+# Cell 5 - Simpan df_plot ke CSV dgn nama mengikuti tanggal data
+# (dependency google.colab.files DIPERTAHANKAN sesuai instruksi Phase 0).
+# Isi sama dengan Cell 8 notebook stringmap: df_plot di runfast dibangun
+# Cell 3 lewat prepare_df_work() yang sama, jadi CSV-nya identik untuk
+# file Excel input yang sama.
+import os
+import pandas as pd
+from google.colab import files
+
+if 'df_plot' not in globals():
+    raise RuntimeError("df_plot tidak ditemukan. Jalankan Cell 3 terlebih dahulu.")
+if df_plot.empty:
+    raise ValueError("df_plot kosong, tidak ada data untuk disimpan.")
+
+start_times = pd.to_datetime(df_plot['Start Time'], errors='coerce').dropna()
+if start_times.empty:
+    raise ValueError("Kolom 'Start Time' di df_plot tidak punya tanggal valid.")
+
+unique_dates = sorted(start_times.dt.date.unique())
+if len(unique_dates) == 1:
+    date_str = unique_dates[0].strftime("%Y%m%d")
+else:
+    date_str = f"{unique_dates[0].strftime('%Y%m%d')}-{unique_dates[-1].strftime('%Y%m%d')}"
+    print(f"  WARNING: Data mencakup {len(unique_dates)} tanggal "
+          f"({unique_dates[0]} s.d. {unique_dates[-1]})")
+
+OUTPUT_FILENAME = f"{date_str}.csv"
+df_plot.to_csv(OUTPUT_FILENAME, index=False, encoding='utf-8')
+
+file_size_kb = os.path.getsize(OUTPUT_FILENAME) / 1024
+print(f"File berhasil dibuat di Colab")
+print(f"  Nama        : {OUTPUT_FILENAME}")
+print(f"  Ukuran      : {file_size_kb:.1f} KB")
+print(f"  Baris       : {len(df_plot):,}")
+print(f"  Kolom       : {df_plot.shape[1]}")
+print(f"  Tanggal data: {date_str}")
+
+print("\\nMemulai download...")
+files.download(OUTPUT_FILENAME)
+print(f"\\n'{OUTPUT_FILENAME}' akan masuk ke folder Downloads browser Anda.")
+"""
+
 CELLS = [
     ("markdown", MD_INTRO),
     ("code", CODE_CELL1),
     ("code", CODE_CELL2),
     ("code", CODE_CELL3),
     ("code", CODE_CELL4),
+    ("code", CODE_CELL5),
 ]
 
 
