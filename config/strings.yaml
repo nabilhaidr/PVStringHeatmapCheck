@@ -146,7 +146,7 @@ empty_pv_map:
   WB04-INV05: [5, 14, 28]
   WB04-INV06: [9, 14, 23, 28]              # edited 25
   WB04-INV07: [9, 23, 28]
-  WB04-INV08: [9, 23, 26]                  # edited 5
+  WB04-INV08: [5, 23, 26]                  # edited 5
   WB04-INV09: [5, 23, 28]
   WB04-INV10: [9, 23, 28]                  # edited 27
   WB04-INV11: [9, 14, 27]
