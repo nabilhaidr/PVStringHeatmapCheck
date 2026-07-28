@@ -322,9 +322,10 @@ def _run_and_save(
     if isinstance(dps, pd.DataFrame) and not dps.empty:
         top = dps.iloc[0]
         print(f"[soiling-run] DirectCleaningImpactPerString: {len(dps)} "
-              f"string-campaign; median uplift = {dps['uplift_pct'].median():.2f}%; "
+              f"string-campaign; median soiling_loss_pct = "
+              f"{dps['soiling_loss_pct'].median():.2f}%; "
               f"terkotor: {top['inverter_id']} PV{top['pv']} "
-              f"(uplift {top['uplift_pct']:.2f}%)")
+              f"(loss {top['soiling_loss_pct']:.2f}%)")
     pis = detector.artifacts.get("PerInverterSRR")
     if isinstance(pis, pd.DataFrame) and not pis.empty:
         ok = pis[pis["status"] == "ok"]

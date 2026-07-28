@@ -484,7 +484,8 @@ def test_build_cleaning_impact_computes_uplift_and_rupiah():
     assert ev["date"] == pd.Timestamp("2026-01-15")
     assert ev["sr_before"] == pytest.approx(0.90)   # end interval 0
     assert ev["sr_after"] == pytest.approx(0.98)    # start interval 1
-    assert ev["uplift_pct"] == pytest.approx(8.0)
+    # Selisih SR dalam POIN PERSEN (0.98 - 0.90), bukan perubahan relatif.
+    assert ev["sr_gain_pp"] == pytest.approx(8.0)
     assert ev["energy_recovered_kwh_per_day"] == pytest.approx(0.08 * 100_000.0)
     assert ev["rupiah_per_day"] == pytest.approx(8000.0 * 1500.0)
     assert ev["likely_cause"] == "manual"
@@ -646,15 +647,18 @@ def test_build_direct_cleaning_impact_per_string_ranks_dirtiest_first():
     assert len(out) == 2
     top = out.iloc[0]
     assert (top["inverter_id"], top["pv"], top["st"]) == ("WB03-INV01", 10, 5)
-    assert top["rank_uplift"] == 1
+    assert top["rank_soiling_loss"] == 1
     assert top["cleaning_start"] == pd.Timestamp("2026-03-10")
     assert top["cleaning_end"] == pd.Timestamp("2026-03-11")
     assert top["pr_before"] == pytest.approx(0.72)
     assert top["pr_after"] == pytest.approx(0.90)
-    assert top["uplift_pct"] == pytest.approx((0.90 - 0.72) / 0.90 * 100.0)
+    # Definisi identik dengan soiling_loss_pct level plant: (a - b) / a.
+    assert top["soiling_loss_pct"] == pytest.approx((0.90 - 0.72) / 0.90 * 100.0)
     second = out.iloc[1]
-    assert second["pv"] == 11 and second["rank_uplift"] == 2
-    assert second["uplift_pct"] == pytest.approx((0.90 - 0.87) / 0.90 * 100.0)
+    assert second["pv"] == 11 and second["rank_soiling_loss"] == 2
+    assert second["soiling_loss_pct"] == pytest.approx(
+        (0.90 - 0.87) / 0.90 * 100.0
+    )
 
 
 def test_build_direct_cleaning_impact_per_string_empty_inputs():
@@ -1062,7 +1066,7 @@ def test_build_cleaning_recommendation_ranks_dirty_string_first():
     sd = pd.DataFrame(rows)
     per_inv = pd.DataFrame([{"inverter_id": "WB01-INV01", "p_loss_pct": 3.0}])
     dps = pd.DataFrame([
-        {"inverter_id": "WB01-INV01", "pv": 3, "uplift_pct": 6.0},
+        {"inverter_id": "WB01-INV01", "pv": 3, "soiling_loss_pct": 6.0},
     ])
 
     out = build_cleaning_recommendation(
@@ -1074,10 +1078,46 @@ def test_build_cleaning_recommendation_ranks_dirty_string_first():
     # deficit = (50-30)/50 = 40% terhadap median sibling.
     assert top["deficit_vs_siblings_pct"] == pytest.approx(40.0)
     assert top["inverter_p_loss_pct"] == pytest.approx(3.0)
-    assert top["hist_uplift_pct"] == pytest.approx(6.0)
+    assert top["hist_soiling_loss_pct"] == pytest.approx(6.0)
     assert top["score"] == pytest.approx(43.0)
     # Sibling normal: deficit ~ negatif kecil, tidak diprioritaskan.
     assert (out[out["pv"] != 3]["rank"] > 1).all()
+
+
+def test_build_cleaning_recommendation_excludes_dead_string_from_ranking():
+    """String mati tidak boleh menggeser string kotor dari puncak ranking.
+
+    Sheet ini dipakai langsung sebagai perintah kerja regu cleaning. String
+    dengan pr_recent ~ 0 punya deficit_vs_siblings ~ 100% sehingga selalu
+    menang skor, padahal membersihkannya percuma -- itu kasus M2e
+    availability, bukan soiling. Mengirim regu ke sana membuang satu trip
+    sementara string yang benar-benar kotor terus merugi.
+    """
+    from pv_pipeline.m2a.soiling import (
+        RECOMMENDATION_COLUMNS, build_cleaning_recommendation,
+    )
+
+    days = pd.date_range("2026-04-01", periods=20, freq="D")
+    insol = pd.Series(5.0, index=days)
+    rows = []
+    for d in days:
+        for pv, e in [(1, 50.0), (2, 50.0), (3, 50.0),
+                      (4, 30.0),    # kotor parsial -> deficit 40%
+                      (5, 0.5)]:    # mati/offline  -> deficit 99%
+            rows.append({"date": d, "Inverter_ID": "WB01-INV01",
+                         "pv": pv, "energy_kwh": e})
+    sd = pd.DataFrame(rows)
+
+    out = build_cleaning_recommendation(sd, insol, window_days=30, min_days=10)
+    assert list(out.columns) == RECOMMENDATION_COLUMNS
+
+    by_pv = out.set_index("pv")
+    assert by_pv.loc[5, "status"] == "DEAD_OR_OFFLINE"
+    assert pd.isna(by_pv.loc[5, "rank"])
+    assert by_pv.loc[4, "status"] == "NORMAL"
+    assert by_pv.loc[4, "rank"] == 1
+    # Prioritas teratas di sheet = string kotor, bukan string mati.
+    assert out.iloc[0]["pv"] == 4
 
 
 def test_build_cleaning_recommendation_min_days_and_empty():

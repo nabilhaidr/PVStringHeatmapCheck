@@ -554,7 +554,7 @@ def build_monthly_soiling_loss(
 
 
 CLEANING_IMPACT_COLUMNS: List[str] = [
-    "date", "sr_before", "sr_after", "uplift_pct",
+    "date", "sr_before", "sr_after", "sr_gain_pp",
     "energy_recovered_kwh_per_day", "rupiah_per_day", "likely_cause",
 ]
 
@@ -565,15 +565,19 @@ def build_cleaning_impact(
     tariff_idr_per_kwh: float,
 ) -> pd.DataFrame:
     """Dampak tiap event cleaning (batas antar interval SRR): PR sebelum vs
-    sesudah, uplift, energi & rupiah yang dipulihkan per hari.
+    sesudah, kenaikan SR, energi & rupiah yang dipulihkan per hari.
 
     Satu event = transisi interval i-1 -> i (rdtools memotong deret di
     tiap cleaning). sr_before = ``inferred_end_loss`` interval sebelumnya
     (kotor, tepat sebelum dibersihkan); sr_after = ``inferred_start_loss``
     interval berikutnya (bersih, tepat sesudah). Keduanya soiling ratio
     (fraksi performa dipertahankan). Energi dipulihkan/hari =
-    uplift * avg_daily_kwh (aproksimasi; avg_daily_kwh = actual soiled
+    sr_gain * avg_daily_kwh (aproksimasi; avg_daily_kwh = actual soiled
     energy 30 hari terakhir).
+
+    ``sr_gain_pp`` = sr_after - sr_before dalam POIN PERSEN -- selisih dua
+    rasio, BUKAN perubahan relatif. Beda satuan dengan ``soiling_loss_pct``
+    di sheet DirectCleaningImpact*; jangan dibandingkan langsung.
     """
     empty = pd.DataFrame(columns=CLEANING_IMPACT_COLUMNS)
     if cleaning_events is None or cleaning_events.empty:
@@ -589,13 +593,13 @@ def build_cleaning_impact(
         sr_after = float(cur["inferred_start_loss"])
         if not (np.isfinite(sr_before) and np.isfinite(sr_after)):
             continue
-        uplift = sr_after - sr_before
-        energy = uplift * float(avg_daily_kwh)
+        sr_gain = sr_after - sr_before
+        energy = sr_gain * float(avg_daily_kwh)
         rows.append({
             "date": pd.Timestamp(cur["start"]).normalize(),
             "sr_before": sr_before,
             "sr_after": sr_after,
-            "uplift_pct": uplift * 100.0,
+            "sr_gain_pp": sr_gain * 100.0,
             "energy_recovered_kwh_per_day": energy,
             "rupiah_per_day": energy * float(tariff_idr_per_kwh),
             "likely_cause": cur.get("likely_cause", "unknown"),
@@ -729,7 +733,7 @@ def _inverter_capacity_kwp(
 DIRECT_PER_STRING_COLUMNS: List[str] = [
     "inverter_id", "pv", "st", "cleaning_start", "cleaning_end",
     "n_days_before", "n_days_after", "pr_before", "pr_after",
-    "uplift_pct", "rank_uplift",
+    "soiling_loss_pct", "rank_soiling_loss",
 ]
 
 
@@ -744,14 +748,17 @@ def build_direct_cleaning_impact_per_string(
 ) -> pd.DataFrame:
     """Pre/post PR PER STRING di sekitar tanggal cleaning string itu sendiri
     (independen SRR). Menangkap soiling NON-UNIFORM yang tak terlihat di
-    agregat: string ber-uplift tinggi = paling kotor; uplift ~0 = cleaning
+    agregat: string ber-loss tinggi = paling kotor; loss ~0 = cleaning
     tak berdampak (kandidat masalah non-soiling).
 
     ``string_energy_daily``: long df kolom [date, Inverter_ID, pv,
     energy_kwh] (hasil loader per-string). PR string = (E_str / H_POA) /
-    kapasitas_string; uplift = (pr_after - pr_before) / pr_after. Koreksi
-    suhu tidak diterapkan di level string (jendela pre/post berdekatan,
-    drift suhu musiman ~batal). ``rank_uplift`` = 1 untuk uplift terbesar.
+    kapasitas_string; soiling_loss_pct = (pr_after - pr_before) / pr_after
+    -- definisi yang SAMA dengan ``soiling_loss_pct`` di
+    ``build_direct_cleaning_impact`` (level plant) dan di
+    ``pv_pipeline.yf_ratio_report``. Koreksi suhu tidak diterapkan di level
+    string (jendela pre/post berdekatan, drift suhu musiman ~batal).
+    ``rank_soiling_loss`` = 1 untuk loss terbesar.
     """
     empty = pd.DataFrame(columns=DIRECT_PER_STRING_COLUMNS)
     if string_energy_daily is None or string_energy_daily.empty:
@@ -817,21 +824,24 @@ def build_direct_cleaning_impact_per_string(
                 "n_days_after": int(len(after)),
                 "pr_before": y_b / cap,
                 "pr_after": y_a / cap,
-                "uplift_pct": (y_a - y_b) / y_a * 100.0,
+                "soiling_loss_pct": (y_a - y_b) / y_a * 100.0,
             })
     if not rows:
         return empty
     out = pd.DataFrame(rows)
-    out["rank_uplift"] = out["uplift_pct"].rank(ascending=False, method="min").astype(int)
-    return out.sort_values("uplift_pct", ascending=False, ignore_index=True)[
-        DIRECT_PER_STRING_COLUMNS
-    ]
+    out["rank_soiling_loss"] = out["soiling_loss_pct"].rank(
+        ascending=False, method="min",
+    ).astype(int)
+    return out.sort_values(
+        "soiling_loss_pct", ascending=False, ignore_index=True,
+    )[DIRECT_PER_STRING_COLUMNS]
 
 
+DEFAULT_RECOMMENDATION_DEAD_RATIO: float = 0.10
 RECOMMENDATION_COLUMNS: List[str] = [
     "inverter_id", "pv", "n_days", "pr_recent", "pr_inverter_median",
-    "deficit_vs_siblings_pct", "inverter_p_loss_pct", "hist_uplift_pct",
-    "score", "rank",
+    "deficit_vs_siblings_pct", "inverter_p_loss_pct", "hist_soiling_loss_pct",
+    "score", "status", "rank",
 ]
 
 
@@ -843,6 +853,7 @@ def build_cleaning_recommendation(
     *,
     window_days: int = 30,
     min_days: int = 10,
+    dead_ratio: float = DEFAULT_RECOMMENDATION_DEAD_RATIO,
 ) -> pd.DataFrame:
     """Rekomendasi area cleaning: satukan yield string terkini (basis
     heatmap) dengan ranking soiling inverter + uplift historis.
@@ -855,11 +866,17 @@ def build_cleaning_recommendation(
         se-inverter);
       inverter_p_loss_pct (join PerInverterSRR) -- soiling MERATA level
         inverter yang tak terlihat dari deficit sibling;
-      hist_uplift_pct (join DirectCleaningImpactPerString, mean per string)
-        -- bukti historis string ini memang pulih saat dibersihkan.
+      hist_soiling_loss_pct (join DirectCleaningImpactPerString, mean per
+        string) -- bukti historis string ini memang pulih saat dibersihkan.
 
     score = deficit_vs_siblings_pct + inverter_p_loss_pct (0 bila tak ada)
     ~ estimasi % energi string yang hilang; rank 1 = prioritas tertinggi.
+
+    String dengan pr_recent < ``dead_ratio`` x median inverter ditandai
+    ``DEAD_OR_OFFLINE`` dan DIKELUARKAN dari ranking (rank NA): defisitnya
+    ~100% sehingga selalu menang skor, padahal itu kasus availability (M2e),
+    bukan soiling -- membersihkannya tidak memulihkan apa pun. Ambang dan
+    penamaan status mengikuti ``pv_pipeline.yf_ratio_report``.
     """
     empty = pd.DataFrame(columns=RECOMMENDATION_COLUMNS)
     if string_energy_daily is None or string_energy_daily.empty:
@@ -912,26 +929,37 @@ def build_cleaning_recommendation(
         )["p_loss_pct"]
         out["inverter_p_loss_pct"] = out["inverter_id"].map(pl)
 
-    out["hist_uplift_pct"] = np.nan
+    out["hist_soiling_loss_pct"] = np.nan
     if (direct_per_string is not None and not direct_per_string.empty
-            and {"inverter_id", "pv", "uplift_pct"} <= set(direct_per_string.columns)):
-        up = (
-            direct_per_string.groupby(["inverter_id", "pv"])["uplift_pct"]
-            .mean().rename("hist_uplift_pct").reset_index()
+            and {"inverter_id", "pv", "soiling_loss_pct"}
+            <= set(direct_per_string.columns)):
+        hist = (
+            direct_per_string.groupby(["inverter_id", "pv"])["soiling_loss_pct"]
+            .mean().rename("hist_soiling_loss_pct").reset_index()
         )
-        up["inverter_id"] = up["inverter_id"].astype(str)
-        up["pv"] = up["pv"].astype(int)
-        out = out.drop(columns=["hist_uplift_pct"]).merge(
-            up, on=["inverter_id", "pv"], how="left",
+        hist["inverter_id"] = hist["inverter_id"].astype(str)
+        hist["pv"] = hist["pv"].astype(int)
+        out = out.drop(columns=["hist_soiling_loss_pct"]).merge(
+            hist, on=["inverter_id", "pv"], how="left",
         )
 
     out["score"] = (
         out["deficit_vs_siblings_pct"].fillna(0.0)
         + out["inverter_p_loss_pct"].fillna(0.0)
     )
-    out["rank"] = out["score"].rank(ascending=False, method="min").astype(int)
+    out["status"] = np.where(
+        (med > 0) & (out["pr_recent"] < med * float(dead_ratio)),
+        "DEAD_OR_OFFLINE",
+        "NORMAL",
+    )
+    # DEAD_OR_OFFLINE bukan kandidat cleaning -> dikeluarkan dari ranking
+    # supaya prioritas teratas benar-benar string kotor, bukan string mati.
+    rank_basis = out["score"].where(out["status"] != "DEAD_OR_OFFLINE")
+    out["rank"] = rank_basis.rank(
+        ascending=False, method="min",
+    ).astype("Int64")
     return out.sort_values(
-        "score", ascending=False, ignore_index=True,
+        ["rank", "inverter_id", "pv"], na_position="last", ignore_index=True,
     )[RECOMMENDATION_COLUMNS]
 
 

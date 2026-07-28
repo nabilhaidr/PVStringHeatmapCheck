@@ -374,10 +374,17 @@ Payback days    = cleaning_cost_IDR / daily_value_loss
 Output sheets (`soiling_srr_*.xlsx`):
 - `EconomicAnalysis`, `MonthlySoilingLoss`, `PRDaily`, `SoilingRatio` (SR p50 + CI), `CleaningEvents`, `CleaningImpact`, `DirectCleaningImpact`, `DirectCleaningImpactPerString`, `PerInverterSRR` (opt-in), `CleaningRecommendation`, `ManualCleaning`, `AvailabilityMask`.
 
+Column naming (changed 2026-07-29 — workbooks generated before this date carry the old names):
+- `DirectCleaningImpactPerString`: `uplift_pct` → `soiling_loss_pct`, `rank_uplift` → `rank_soiling_loss`. The formula is unchanged, `(after - before) / after`. The old name implied the `(after - before) / before` convention used by `pv_pipeline.yf_ratio_report`, and contradicted `soiling_loss_pct` in the sibling sheet `DirectCleaningImpact`, which computes exactly the same quantity.
+- `CleaningRecommendation`: `hist_uplift_pct` → `hist_soiling_loss_pct` (mean of the renamed column).
+- `CleaningImpact`: `uplift_pct` → `sr_gain_pp`. This is `sr_after - sr_before`, a difference of two ratios in percentage points — a different unit from `soiling_loss_pct`, so sharing the name `uplift_pct` invited direct comparison of incomparable numbers.
+- Old workbooks are deliberately not migrated. Renaming rather than redefining means a stale consumer fails loudly with `KeyError` instead of silently reading a number that means something else.
+
 Acceptance criteria:
 - If days of data are below minimum, emit insufficient-data output (`PRDaily` is still exported).
 - If enough data exists, produce soiling ratio with confidence interval, monthly loss breakdown, classified cleaning events and recovery, cleaning economics, and per-string cleaning priority.
 - Sawtooth trend (daily PR points + SRR interval fits + SR confidence band) can be replotted from the workbook without re-running SRR or rdtools.
+- `CleaningRecommendation` is directly usable as a work order: strings whose recent PR falls below `dead_ratio` (default 0.10) of their inverter median are flagged `status = DEAD_OR_OFFLINE` and excluded from `rank` (rank is NA), because a ~100% deficit is an availability fault owned by M2e, not soiling. Threshold and status vocabulary match `pv_pipeline.yf_ratio_report`.
 
 ### 8.12 PR and Curtailment Cross-Check
 
