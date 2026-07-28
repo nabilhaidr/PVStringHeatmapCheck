@@ -21,7 +21,7 @@ Sepuluh commit 2026-07-06..07-10 memperluas modul 715 → 1818 baris. Ringkasan 
 1. **Rekap manual cleaning** (185b09c) — `cleaning_report_path` (checklist TRUE per string per tanggal, sheet `STSn`, via `m2a/cleaning_report.py`) + `dc_cable_list_path` (mapping nomor String checklist → nomor PV Huawei untuk WB03–WB10). Artifact `ManualCleaning`.
 2. **Analysis run per kelompok WB** (c5a4842) — `wb_filter` / CLI `--wb --capacity-kwp` (referensi: WB01–02 ~13.500 kWp, WB03–10 ~58.000 kWp); manual cleaning dibatasi ke kelompok yang dianalisis.
 3. **Knob segmentasi SRR** (d786e77) + **reindex `freq='D'`** sebelum `soiling_srr` (0c178a9) — `rdtools_clean_criterion` (default `"shift"`; opsi `precip_and_shift` dst.), `rdtools_precip_threshold` (0.01 mm), `rdtools_min_interval_length` (7 hari), `rdtools_day_scale` (13). Di iklim monsoon dengan PR berisik, ini mengurangi `NoValidIntervalError`. Plus notebook analysis run `notebook/M2aSoiling.ipynb`.
-4. **CleaningImpact** (5473ed9) — uplift PR per event/interval + klasifikasi cause hujan vs manual (`cleaning_precip_threshold_mm` 1.0; match window ±`cleaning_match_window_days` 3) + analisis per-WB.
+4. **CleaningImpact** (5473ed9) — kenaikan SR (`sr_gain_pp`, poin persen) per event/interval + klasifikasi cause hujan vs manual (`cleaning_precip_threshold_mm` 1.0; match window ±`cleaning_match_window_days` 3) + analisis per-WB.
 5. **DirectCleaningImpact** (6fdcc69) — pre/post PR di sekitar campaign cleaning manual (`direct_impact_window_days` 7, `direct_impact_gap_days` 7), **independen SRR** (tetap terisi walau `NoValidIntervalError`).
 6. **Koreksi suhu PR sebelum SRR** (653be85) — `temperature_correction: true` (default), `CF = 1 + (γ/100)(Tcell − 25)` dengan γ dari `temp_coef_pmax_pct_per_c` (−0.29 %/°C Jinko JKM625N; kosong = dari panel_spec). PR = E/(H·C·CF) → depresi suhu musiman hilang, soiling terisolasi; `Temp_Loss` (insolation-weighted, %) eksplisit di `EconomicAnalysis`.
 7. **DirectCleaningImpactPerString + PerInverterSRR** (92bd9f1) — per-string (jendela sama dgn #5) dan `soiling_srr` per inverter (~194 unit; MAHAL — opt-in `per_inverter_srr`, `per_inverter_reps` 200).
@@ -88,7 +88,7 @@ Bila `n_days < min_days` → emit `insufficient_data` (INFO, value=n_days) + art
 
 ### Langkah 7 — Artifacts hilir cleaning (baru)
 
-Bila `cleaning_report_path` diisi: `ManualCleaning` (rekap checklist), `CleaningImpact` (uplift per event/interval SRR), `DirectCleaningImpact` + `DirectCleaningImpactPerString` (pre/post PR sekitar campaign, independen SRR), `MonthlySoilingLoss`, rekomendasi cleaning (`build_cleaning_recommendation`), dan `PerInverterSRR` bila opt-in.
+Bila `cleaning_report_path` diisi: `ManualCleaning` (rekap checklist), `CleaningImpact` (`sr_gain_pp` per event/interval SRR), `DirectCleaningImpact` + `DirectCleaningImpactPerString` (pre/post PR sekitar campaign, independen SRR; kolom `soiling_loss_pct`/`rank_soiling_loss`), `MonthlySoilingLoss`, rekomendasi cleaning (`build_cleaning_recommendation`, string mati ditandai `status=DEAD_OR_OFFLINE` dan keluar dari ranking), dan `PerInverterSRR` bila opt-in.
 
 ---
 
