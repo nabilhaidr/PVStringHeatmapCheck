@@ -49,7 +49,8 @@ LONG_COLUMNS: List[str] = ["ts", "inverter_id", "pv", "power_kw"]
 CLASSIFICATION_COLUMNS: List[str] = [
     "pv_string", "inverter_id", "pv", "n_days", "ratio_median",
     "deficit_pct", "ratio_range", "ratio_max_hourly", "jam_terburuk",
-    "jam_terbaik", "pagi", "sore", "dropout_share_pct", "kategori",
+    "jam_terbaik", "pagi", "sore", "dropout_share_pct",
+    "vdrop_pct", "vdrop_minus_inv_median", "kategori",
 ]
 RAIN_COLUMNS: List[str] = [
     "pv_string", "event", "ratio_before", "ratio_after", "delta_pp",
@@ -193,10 +194,45 @@ def _dropout_share(ratio_df: pd.DataFrame, late_hour: int) -> pd.Series:
     return share
 
 
+def _attach_cable_metrics(
+    out: pd.DataFrame, cable_metrics: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    """Isi kolom bukti rugi resistif kabel DC pada tabel klasifikasi.
+
+    ``vdrop_minus_inv_median`` memakai pembanding yang sama dengan
+    ``ratio`` (median se-inverter) supaya bisa dibaca berdampingan: kalau
+    sebuah string UNIFORM juga jauh di atas median vdrop inverternya,
+    sebagian defisitnya permanen dan tidak akan hilang setelah dicuci.
+    NA berarti string itu tidak punya baris di cable list -- bukan 0.
+    """
+    if (out.empty or cable_metrics is None or cable_metrics.empty
+            or not {"inverter_id", "pv", "vdrop_pct"} <= set(cable_metrics.columns)):
+        return out
+    cm = cable_metrics.drop_duplicates(["inverter_id", "pv"])[
+        ["inverter_id", "pv", "vdrop_pct"]
+    ].rename(columns={"pv": "_pv_idx", "vdrop_pct": "_vd"})
+    cm["inverter_id"] = cm["inverter_id"].astype(str)
+    cm["_pv_idx"] = pd.to_numeric(cm["_pv_idx"], errors="coerce")
+
+    work = out.drop(columns=["vdrop_pct", "vdrop_minus_inv_median"])
+    # Kolom ``pv`` di tabel ini berbentuk label ("PV4"), cable list memakai int.
+    work["_pv_idx"] = pd.to_numeric(
+        out["pv"].astype(str).str.extract(r"(\d+)")[0], errors="coerce",
+    )
+    work = work.merge(cm, on=["inverter_id", "_pv_idx"], how="left")
+    work["vdrop_pct"] = work["_vd"]
+    work["vdrop_minus_inv_median"] = (
+        work["vdrop_pct"]
+        - work.groupby("inverter_id")["vdrop_pct"].transform("median")
+    )
+    return work[CLASSIFICATION_COLUMNS]
+
+
 def classify_strings(
     ratio_df: pd.DataFrame,
     profile: pd.DataFrame,
     *,
+    cable_metrics: Optional[pd.DataFrame] = None,
     dead_ratio: float = DEFAULT_DEAD_RATIO,
     recovery_ratio: float = DEFAULT_RECOVERY_RATIO,
     flat_range: float = DEFAULT_FLAT_RANGE,
@@ -260,7 +296,9 @@ def classify_strings(
             "dropout_share_pct": round(drop, 1),
             "kategori": kat,
         })
-    out = pd.DataFrame(rows, columns=CLASSIFICATION_COLUMNS)
+    out = _attach_cable_metrics(
+        pd.DataFrame(rows, columns=CLASSIFICATION_COLUMNS), cable_metrics,
+    )
     return out.sort_values("ratio_median", ignore_index=True)
 
 
@@ -343,6 +381,7 @@ def build_intraday_diagnostic(
     inverter_ids: Optional[Iterable[str]] = None,
     empty_pv_map: Optional[Dict[str, List[int]]] = None,
     rain_events: Sequence[dict] = (),
+    cable_metrics: Optional[pd.DataFrame] = None,
     pv_max: int = DEFAULT_PV_MAX,
 ) -> IntradayDiagnosticReport:
     """Orkestrasi penuh: CSV baseline -> klasifikasi + profil + uji hujan."""
@@ -353,7 +392,9 @@ def build_intraday_diagnostic(
     )
     ratio_df = add_sibling_ratio(long_df)
     profile = build_hourly_profile(ratio_df)
-    classification = classify_strings(ratio_df, profile)
+    classification = classify_strings(
+        ratio_df, profile, cable_metrics=cable_metrics,
+    )
     rain = rain_recovery(ratio_df, rain_events)
     dates = sorted(ratio_df["ts"].dt.date.unique()) if not ratio_df.empty else []
     meta = pd.DataFrame([

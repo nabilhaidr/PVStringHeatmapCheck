@@ -841,7 +841,7 @@ DEFAULT_RECOMMENDATION_DEAD_RATIO: float = 0.10
 RECOMMENDATION_COLUMNS: List[str] = [
     "inverter_id", "pv", "n_days", "pr_recent", "pr_inverter_median",
     "deficit_vs_siblings_pct", "inverter_p_loss_pct", "hist_soiling_loss_pct",
-    "score", "status", "rank",
+    "cable_vdrop_pct", "score", "status", "rank",
 ]
 
 
@@ -851,6 +851,7 @@ def build_cleaning_recommendation(
     per_inverter_srr: Optional[pd.DataFrame] = None,
     direct_per_string: Optional[pd.DataFrame] = None,
     *,
+    cable_metrics: Optional[pd.DataFrame] = None,
     window_days: int = 30,
     min_days: int = 10,
     dead_ratio: float = DEFAULT_RECOMMENDATION_DEAD_RATIO,
@@ -941,6 +942,24 @@ def build_cleaning_recommendation(
         hist["pv"] = hist["pv"].astype(int)
         out = out.drop(columns=["hist_soiling_loss_pct"]).merge(
             hist, on=["inverter_id", "pv"], how="left",
+        )
+
+    # Kolom BUKTI, bukan koreksi skor: defisit terhadap sibling bisa berasal
+    # dari panel kotor ATAU dari kabel DC yang jauh lebih panjang (as-built
+    # 11-202 m, 0,15-2,79%). Voltage drop tidak diterjemahkan lurus ke arus
+    # terukur di terminal inverter karena MPPT bekerja di level array, jadi
+    # angkanya ditampilkan apa adanya untuk dinilai analis. NA = string itu
+    # tidak punya baris di cable list, bukan "kabelnya pendek".
+    out["cable_vdrop_pct"] = np.nan
+    if (cable_metrics is not None and not cable_metrics.empty
+            and {"inverter_id", "pv", "vdrop_pct"} <= set(cable_metrics.columns)):
+        cm = cable_metrics.drop_duplicates(["inverter_id", "pv"])[
+            ["inverter_id", "pv", "vdrop_pct"]
+        ].rename(columns={"vdrop_pct": "cable_vdrop_pct"})
+        cm["inverter_id"] = cm["inverter_id"].astype(str)
+        cm["pv"] = cm["pv"].astype(int)
+        out = out.drop(columns=["cable_vdrop_pct"]).merge(
+            cm, on=["inverter_id", "pv"], how="left",
         )
 
     out["score"] = (

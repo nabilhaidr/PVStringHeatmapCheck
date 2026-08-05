@@ -1084,6 +1084,74 @@ def test_build_cleaning_recommendation_ranks_dirty_string_first():
     assert (out[out["pv"] != 3]["rank"] > 1).all()
 
 
+def test_build_cleaning_recommendation_carries_cable_vdrop_as_evidence():
+    """Prioritas cleaning harus membawa bukti panjang kabel string itu.
+
+    Defisit terhadap sibling punya dua sebab yang tidak terpisahkan dari
+    energi harian saja: panel kotor, dan rugi resistif kabel DC (as-built
+    11-202 m, 0,15-2,79%). Tanpa kolom ini regu bisa dikirim membersihkan
+    string yang sebenarnya cuma berkabel panjang -- defisitnya tidak akan
+    hilang setelah dicuci. Angkanya disajikan mentah, bukan dipakai
+    mengoreksi skor, karena MPPT bekerja di level array sehingga koreksi
+    butuh model bukan aritmetika.
+    """
+    from pv_pipeline.m2a.soiling import (
+        RECOMMENDATION_COLUMNS, build_cleaning_recommendation,
+    )
+
+    days = pd.date_range("2026-04-01", periods=20, freq="D")
+    insol = pd.Series(5.0, index=days)
+    rows = []
+    for d in days:
+        for pv, e in [(1, 50.0), (2, 50.0), (3, 30.0)]:
+            rows.append({"date": d, "Inverter_ID": "WB03-INV01",
+                         "pv": pv, "energy_kwh": e})
+    sd = pd.DataFrame(rows)
+    metrics = pd.DataFrame([
+        {"inverter_id": "WB03-INV01", "pv": 1, "length_m": 11.0,
+         "vdrop_pct": 0.15},
+        {"inverter_id": "WB03-INV01", "pv": 3, "length_m": 202.0,
+         "vdrop_pct": 2.79},
+    ])
+
+    out = build_cleaning_recommendation(
+        sd, insol, cable_metrics=metrics, window_days=30, min_days=10,
+    )
+
+    assert list(out.columns) == RECOMMENDATION_COLUMNS
+    top = out.iloc[0]
+    assert top["pv"] == 3
+    assert top["cable_vdrop_pct"] == pytest.approx(2.79)
+
+
+def test_build_cleaning_recommendation_leaves_cable_vdrop_na_when_unmapped():
+    """24 string di strings.yaml tidak punya pasangan di as-built cable list.
+
+    Kolomnya harus NA, bukan 0 -- 0 akan terbaca sebagai "kabel pendek,
+    jadi defisitnya pasti soiling", kesimpulan yang tidak didukung data.
+    """
+    from pv_pipeline.m2a.soiling import build_cleaning_recommendation
+
+    days = pd.date_range("2026-04-01", periods=20, freq="D")
+    insol = pd.Series(5.0, index=days)
+    rows = []
+    for d in days:
+        for pv, e in [(1, 50.0), (2, 50.0), (3, 30.0)]:
+            rows.append({"date": d, "Inverter_ID": "WB03-INV01",
+                         "pv": pv, "energy_kwh": e})
+    sd = pd.DataFrame(rows)
+    metrics = pd.DataFrame([
+        {"inverter_id": "WB03-INV01", "pv": 3, "length_m": 202.0,
+         "vdrop_pct": 2.79},
+    ])
+
+    out = build_cleaning_recommendation(
+        sd, insol, cable_metrics=metrics, window_days=30, min_days=10,
+    ).set_index("pv")
+
+    assert pd.isna(out.loc[2, "cable_vdrop_pct"])
+
+
 def test_build_cleaning_recommendation_excludes_dead_string_from_ranking():
     """String mati tidak boleh menggeser string kotor dari puncak ranking.
 

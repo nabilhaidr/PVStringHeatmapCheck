@@ -242,7 +242,10 @@ m2a_soiling:
   cleaning_report_path: ""
   # Mapping nomor String (checklist) -> nomor PV (Huawei) untuk WB03-WB10.
   # Contoh: "raw data input/List of DC Cables 0411.xls"
-  dc_cable_list_path: ""
+  # Kolom I/J file yang sama memberi panjang kabel DC (11-202 m) dan voltage
+  # drop (0,15-2,79%) per string -> kolom BUKTI cable_vdrop_pct di
+  # CleaningRecommendation. Bukan koreksi skor: MPPT bekerja di level array.
+  dc_cable_list_path: "raw data input/List of DC Cables 0411.xls"
   # Mask availability M2e: folder berisi m2_findings_{YYYYMMDD}.jsonl/.xlsx
   # (output daily notebook, mis. Drive "Cek PV String/outputs"). Inverter-day
   # dengan uptime < ambang di-drop dari energi harian DAN kapasitasnya keluar

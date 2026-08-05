@@ -161,11 +161,25 @@ from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
 EMPTY_PV_MAP = load_empty_pv_map({}, base_dir=str(REPO_DIR))
 print(f"empty_pv_map: {len(EMPTY_PV_MAP)} inverter punya slot kosong terdaftar")
 
+# Panjang kabel DC per string berbeda jauh (as-built 11-202 m, vdrop
+# 0,15-2,79%). Rugi resistif memberi defisit RATA sepanjang hari -- bentuk
+# yang sama persis dengan soiling -- jadi kolom vdrop dipakai membaca
+# kategori UNIFORM sebelum regu cuci dikirim.
+CABLE_XLS = REPO_DIR / "raw data input" / "List of DC Cables 0411.xls"
+CABLE_METRICS = None
+if CABLE_XLS.exists():
+    from pv_pipeline.m2a.cleaning_report import build_cable_metrics, load_dc_cable_map
+    CABLE_METRICS = build_cable_metrics(load_dc_cable_map(str(CABLE_XLS)))
+    print(f"cable metrics: {len(CABLE_METRICS)} string punya panjang/vdrop kabel")
+else:
+    print(f"cable metrics: {CABLE_XLS.name} tidak ada -> kolom vdrop kosong")
+
 REPORT = build_intraday_diagnostic(
     CSV_PATHS,
     inverter_ids=INVERTER_IDS or None,
     empty_pv_map=EMPTY_PV_MAP,
     rain_events=RAIN_EVENTS,
+    cable_metrics=CABLE_METRICS,
 )
 print()
 print(REPORT.summary())

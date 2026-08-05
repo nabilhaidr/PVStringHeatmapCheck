@@ -50,15 +50,34 @@ def _ensure_xlrd() -> None:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "xlrd"])
 
 
-def parse_dc_cable_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Parse frame 2 kolom (src, dst) -> DataFrame[wb, inv, st, mppt, pv].
+CABLE_MAP_COLUMNS: List[str] = ["wb", "inv", "st", "mppt", "pv",
+                                "length_m", "vdrop_pct"]
+CABLE_METRIC_COLUMNS: List[str] = ["inverter_id", "pv", "length_m", "vdrop_pct"]
 
-    Baris +/- di-dedupe. Baris dengan WB/inverter sumber != tujuan
-    (cross-inverter, kemungkinan typo desain) di-skip dengan warning.
+
+def parse_dc_cable_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Parse frame src/dst (+ opsional panjang & vdrop) -> DataFrame
+    [wb, inv, st, mppt, pv, length_m, vdrop_pct].
+
+    Kolom 3 dan 4 (panjang meter, voltage drop) opsional: pemanggil yang
+    hanya menyediakan src/dst tetap dapat kedua kolom itu berisi NA.
+    Voltage drop di sumber Excel berformat persen (fraksi 0,0179 = 1,79%)
+    dan hanya terisi di baris polaritas '+', jadi saat baris +/- disatukan
+    diambil nilai pertama yang tidak kosong.
+
+    Baris dengan WB/inverter sumber != tujuan (cross-inverter, kemungkinan
+    typo desain) di-skip dengan warning.
     """
+    n = len(frame)
+    blank = pd.Series([np.nan] * n, index=frame.index)
+    lengths = frame.iloc[:, 2] if frame.shape[1] > 2 else blank
+    vdrops = frame.iloc[:, 3] if frame.shape[1] > 3 else blank
+
     rows: List[dict] = []
     mismatched: List[Tuple[str, str]] = []
-    for src, dst in zip(frame.iloc[:, 0], frame.iloc[:, 1]):
+    for src, dst, length, vdrop in zip(
+        frame.iloc[:, 0], frame.iloc[:, 1], lengths, vdrops
+    ):
         ms = CABLE_SRC_RE.match(str(src).strip())
         if not ms:
             continue
@@ -66,12 +85,19 @@ def parse_dc_cable_frame(frame: pd.DataFrame) -> pd.DataFrame:
         if not md or (ms.group(1), ms.group(2)) != (md.group(1), md.group(2)):
             mismatched.append((str(src).strip(), str(dst).strip()))
             continue
+        ln = pd.to_numeric(length, errors="coerce")
+        vd = pd.to_numeric(vdrop, errors="coerce")
+        # vdrop diturunkan dari panjang (korelasi r=1,0 di file asli), jadi
+        # baris tanpa panjang menulis vdrop 0 yang berarti BELUM DIISI.
+        # Dibiarkan 0 ia akan terbaca sebagai "kabel sempurna".
         rows.append({
             "wb": int(ms.group(1)),
             "inv": int(ms.group(2)),
             "st": int(ms.group(3)),
             "mppt": int(md.group(3)),
             "pv": int(md.group(4)),
+            "length_m": ln,
+            "vdrop_pct": vd * 100.0 if pd.notna(vd) and pd.notna(ln) else np.nan,
         })
     if mismatched:
         warnings.warn(
@@ -79,16 +105,44 @@ def parse_dc_cable_frame(frame: pd.DataFrame) -> pd.DataFrame:
             f"(sumber != tujuan, mis. {mismatched[0]}).",
             stacklevel=2,
         )
-    out = pd.DataFrame(rows, columns=["wb", "inv", "st", "mppt", "pv"])
-    return out.drop_duplicates(ignore_index=True)
+    out = pd.DataFrame(rows, columns=CABLE_MAP_COLUMNS)
+    if out.empty:
+        return out
+    return out.groupby(
+        ["wb", "inv", "st", "mppt", "pv"], as_index=False, sort=False,
+    ).first()
 
 
 def load_dc_cable_map(path: str) -> pd.DataFrame:
-    """Baca List of DC Cables (kolom G=src, H=dst) -> mapping ST->PV."""
+    """Baca List of DC Cables (G=src, H=dst, I=panjang m, J=voltage drop)."""
     if str(path).lower().endswith(".xls"):
         _ensure_xlrd()
-    frame = pd.read_excel(path, sheet_name=0, header=None, usecols=[6, 7])
+    frame = pd.read_excel(path, sheet_name=0, header=None, usecols=[6, 7, 8, 9])
     return parse_dc_cable_frame(frame)
+
+
+def build_cable_metrics(cable_map: pd.DataFrame) -> pd.DataFrame:
+    """Metrik kabel per string dgn kunci konsumen: ``WB03-INV01`` + pv int.
+
+    Dipakai sebagai kolom BUKTI (bukan koreksi): voltage drop DC tidak
+    diterjemahkan lurus ke arus terukur di terminal inverter karena MPPT
+    bekerja di level array, jadi angkanya disajikan apa adanya dan analis
+    yang menilai. PV ganda dalam satu inverter (typo penomoran di as-built)
+    diambil kemunculan pertama supaya kunci join tetap unik.
+    """
+    if cable_map is None or cable_map.empty:
+        return pd.DataFrame(columns=CABLE_METRIC_COLUMNS)
+    wb = cable_map["wb"].astype(int).map("WB{:02d}".format)
+    inv = cable_map["inv"].astype(int).map("-INV{:02d}".format)
+    out = pd.DataFrame({
+        "inverter_id": wb + inv,
+        "pv": cable_map["pv"].astype(int),
+        "length_m": pd.to_numeric(cable_map["length_m"], errors="coerce"),
+        "vdrop_pct": pd.to_numeric(cable_map["vdrop_pct"], errors="coerce"),
+    })
+    return out.drop_duplicates(
+        subset=["inverter_id", "pv"], ignore_index=True,
+    )[CABLE_METRIC_COLUMNS]
 
 
 def build_st_to_pv(cable_map: pd.DataFrame) -> Dict[Tuple[int, int, int], Tuple[int, Optional[int]]]:

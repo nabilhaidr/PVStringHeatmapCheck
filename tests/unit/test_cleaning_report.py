@@ -17,6 +17,7 @@ import pandas as pd
 import pytest
 
 from pv_pipeline.m2a.cleaning_report import (
+    build_cable_metrics,
     build_st_to_pv,
     classify_cleaning_intervals,
     daily_cleaning_counts,
@@ -39,6 +40,83 @@ def test_parse_dc_cable_frame_dedupes_polarity_and_extracts_mapping():
     assert len(m) == 2  # +/- jadi satu
     assert m.set_index(["wb", "inv", "st"]).loc[(3, 1, 1), "pv"] == 10
     assert m.set_index(["wb", "inv", "st"]).loc[(5, 19, 27), "mppt"] == 6
+
+
+def test_parse_dc_cable_frame_extracts_length_and_vdrop_from_plus_row():
+    """Panjang kabel + voltage drop = bukti rugi resistif permanen per string.
+
+    Rentangnya 11-202 m / 0,15-2,79% di as-built, jadi selisih ~2,6 poin
+    persen antar-sibling. Tanpa kolom ini, defisit datar sepanjang hari
+    (kategori UNIFORM) tidak bisa dibedakan dari soiling sebelum regu
+    dikirim ke lapangan. Nilai vdrop di sumber Excel berformat persen
+    (fraksi 0,0179 = 1,79%) dan hanya terisi di baris polaritas '+'.
+    """
+    frame = pd.DataFrame({
+        "src": ["WB03INV01ST01+", "WB03INV01ST01-"],
+        "dst": ["WB03INV01M3PV10", "WB03INV01M3PV10"],
+        "len": [130, 130],
+        "vdrop": [0.017951935, None],
+    })
+
+    m = parse_dc_cable_frame(frame)
+
+    assert len(m) == 1, "baris +/- harus tetap menyatu jadi satu string"
+    assert m.iloc[0]["length_m"] == pytest.approx(130.0)
+    assert m.iloc[0]["vdrop_pct"] == pytest.approx(1.7952, abs=1e-4)
+
+
+def test_parse_dc_cable_frame_without_metric_columns_emits_na():
+    """Pemanggil lama (2 kolom src/dst) tidak boleh pecah -- metrik jadi NA."""
+    frame = pd.DataFrame({
+        "src": ["WB03INV01ST01+"],
+        "dst": ["WB03INV01M3PV10"],
+    })
+
+    m = parse_dc_cable_frame(frame)
+
+    assert m.iloc[0]["pv"] == 10
+    assert pd.isna(m.iloc[0]["length_m"])
+    assert pd.isna(m.iloc[0]["vdrop_pct"])
+
+
+def test_parse_dc_cable_frame_treats_zero_vdrop_without_length_as_unknown():
+    """Baris as-built berpanjang kosong menulis vdrop 0 -- artinya BELUM
+    DIISI, bukan "tanpa rugi".
+
+    Ada 4 string WB03/WB04 seperti ini di file asli. Nilai 0 akan terbaca
+    sebagai kabel sempurna dan menyingkirkan rugi resistif dari daftar
+    kandidat penyebab, padahal justru datanya yang tidak ada. Panjang dan
+    vdrop berkorelasi sempurna (r = 1,0) karena vdrop memang diturunkan
+    dari panjang, jadi tanpa panjang vdrop tidak punya arti.
+    """
+    frame = pd.DataFrame({
+        "src": ["WB03INV04ST09+"],
+        "dst": ["WB03INV04M2PV6"],
+        "len": [None],
+        "vdrop": [0.0],
+    })
+
+    m = parse_dc_cable_frame(frame)
+
+    assert pd.isna(m.iloc[0]["length_m"])
+    assert pd.isna(m.iloc[0]["vdrop_pct"])
+
+
+def test_build_cable_metrics_keys_on_inverter_id_and_pv():
+    """Konsumen (rekomendasi cleaning, diagnostik intraday) memakai kunci
+    ``Inverter_ID`` bergaya ``WB03-INV01`` + ``pv`` int, bukan wb/inv int.
+    """
+    cable = pd.DataFrame({
+        "wb": [3, 10], "inv": [1, 3], "st": [1, 2], "mppt": [3, 1],
+        "pv": [10, 2], "length_m": [130.0, 40.0], "vdrop_pct": [1.80, 0.55],
+    })
+
+    out = build_cable_metrics(cable)
+
+    assert list(out.columns) == ["inverter_id", "pv", "length_m", "vdrop_pct"]
+    idx = out.set_index(["inverter_id", "pv"])
+    assert idx.loc[("WB03-INV01", 10), "vdrop_pct"] == pytest.approx(1.80)
+    assert idx.loc[("WB10-INV03", 2), "length_m"] == pytest.approx(40.0)
 
 
 def test_parse_dc_cable_frame_skips_cross_inverter_rows_with_warning():

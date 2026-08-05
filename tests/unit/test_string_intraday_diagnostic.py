@@ -87,6 +87,68 @@ def test_uniformly_soiled_string_is_labelled_uniform(tmp_path):
     assert row["ratio_max_hourly"] < 1.02   # tak pernah melampaui tetangga
 
 
+def test_uniform_string_carries_cable_vdrop_evidence(tmp_path):
+    """UNIFORM punya dua sebab; bentuk kurva tidak bisa memisahkannya.
+
+    Defisit rata sepanjang hari adalah tanda tangan soiling DAN tanda
+    tangan rugi resistif kabel DC. Kolom vdrop dibandingkan terhadap
+    median se-inverter -- pembanding yang sama dengan yang dipakai
+    ``ratio`` -- supaya terlihat apakah string ini memang lebih rugi
+    secara permanen daripada tetangganya sebelum regu cuci dikirim.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    dirty = [1.6, 3.2, 4.8, 6.4, 7.2, 8.0, 7.2, 6.4, 4.8, 3.2, 1.6]  # 80% rata
+    paths = [_make_day(tmp_path, d, dirty)
+             for d in ("2026-06-01", "2026-06-02", "2026-06-03")]
+    metrics = pd.DataFrame([
+        {"inverter_id": "WB01-INV01", "pv": 1, "length_m": 20.0,
+         "vdrop_pct": 0.30},
+        {"inverter_id": "WB01-INV01", "pv": 2, "length_m": 22.0,
+         "vdrop_pct": 0.30},
+        {"inverter_id": "WB01-INV01", "pv": 3, "length_m": 24.0,
+         "vdrop_pct": 0.40},
+        {"inverter_id": "WB01-INV01", "pv": 4, "length_m": 190.0,
+         "vdrop_pct": 2.60},
+    ])
+
+    rep = build_intraday_diagnostic(
+        paths, inverter_ids=["WB01-INV01"], cable_metrics=metrics,
+    )
+    row = rep.classification.set_index("pv_string").loc["WB01-INV01-PV4"]
+
+    assert row["kategori"] == "UNIFORM"
+    assert row["vdrop_pct"] == pytest.approx(2.60)
+    # median se-inverter dari [0,30 0,30 0,40 2,60] = 0,35 -> selisih 2,25 pp
+    assert row["vdrop_minus_inv_median"] == pytest.approx(2.25)
+
+
+def test_string_without_cable_row_gets_na_vdrop(tmp_path):
+    """String tanpa pasangan di as-built cable list harus NA, bukan 0.
+
+    Nilai 0 akan terbaca sebagai "kabelnya pendek", padahal yang benar
+    adalah "tidak diketahui" -- 24 string WB03-10 memang tidak punya baris
+    kabel karena strings.yaml dan as-built berbeda di 21 inverter.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    dirty = [1.6, 3.2, 4.8, 6.4, 7.2, 8.0, 7.2, 6.4, 4.8, 3.2, 1.6]
+    paths = [_make_day(tmp_path, d, dirty)
+             for d in ("2026-06-01", "2026-06-02", "2026-06-03")]
+    metrics = pd.DataFrame([
+        {"inverter_id": "WB01-INV01", "pv": 1, "length_m": 20.0,
+         "vdrop_pct": 0.30},
+    ])
+
+    rep = build_intraday_diagnostic(
+        paths, inverter_ids=["WB01-INV01"], cable_metrics=metrics,
+    )
+    row = rep.classification.set_index("pv_string").loc["WB01-INV01-PV4"]
+
+    assert pd.isna(row["vdrop_pct"])
+    assert pd.isna(row["vdrop_minus_inv_median"])
+
+
 def test_late_dropout_counts_as_afternoon_shading(tmp_path):
     """String yang mati dini tiap sore = shading sore, bukan string rusak.
 

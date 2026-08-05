@@ -16,11 +16,23 @@ import pytest
 from pv_pipeline.m2a.soiling import _load_precipitation
 from run_soiling_analysis import (
     RAINFALL_SHEET,
+    _load_cable_metrics,
     filter_combined_by_wb,
     load_baseline_for_soiling,
     load_daily_rainfall,
     write_precipitation_csv,
 )
+
+
+def test_load_cable_metrics_is_non_fatal_when_file_absent(tmp_path):
+    """Metrik kabel hanya konteks tambahan -- tidak boleh menggagalkan run.
+
+    Analisis soiling tetap harus menghasilkan ranking cleaning walau file
+    DC cable list tidak tersedia (mis. run di mesin lain tanpa folder raw
+    data input). Kolom cable_vdrop_pct cukup kosong.
+    """
+    assert _load_cable_metrics("") is None
+    assert _load_cable_metrics(str(tmp_path / "tidak-ada.xls")) is None
 
 
 def _write_rainfall_xlsx(path, day_ws_ramps):

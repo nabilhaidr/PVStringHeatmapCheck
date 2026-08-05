@@ -64,6 +64,7 @@ from typing import List, Optional, Tuple
 import pandas as pd
 
 from pv_pipeline.m2_config import load_m2_config
+from pv_pipeline.m2a.cleaning_report import build_cable_metrics, load_dc_cable_map
 from pv_pipeline.m2a.soiling import (
     ACTIVE_POWER_COL_CANDIDATES,
     DEFAULT_SAMPLE_FREQ_HOURS,
@@ -89,6 +90,25 @@ RAINFALL_WS_COL_RE = re.compile(r"^Daily Rainfall \(mm\) WS \d+$")
 TIMESTAMP_COL = "Start Time"
 INVERTER_COL = "Inverter_ID"
 PV_POWER_COLS = [f"PV{n} Power(kW)" for n in range(1, 29)]
+
+
+def _load_cable_metrics(path: str) -> Optional[pd.DataFrame]:
+    """Panjang kabel DC + voltage drop per string (kolom bukti). Non-fatal.
+
+    Gagal baca tidak boleh menggagalkan seluruh run soiling: kolomnya
+    sekadar konteks tambahan untuk membaca ranking cleaning.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        return build_cable_metrics(load_dc_cable_map(path))
+    except Exception as exc:  # noqa: BLE001 -- non-fatal, sama seperti presipitasi
+        warnings.warn(
+            f"[soiling-run] gagal baca metrik DC cable ({path}): {exc}. "
+            f"Kolom cable_vdrop_pct akan kosong.",
+            stacklevel=2,
+        )
+        return None
 
 
 def load_daily_rainfall(xlsx_paths: List[str]) -> pd.Series:
@@ -279,6 +299,9 @@ def _run_and_save(
                 per_inverter_srr=detector.artifacts.get("PerInverterSRR"),
                 direct_per_string=detector.artifacts.get(
                     "DirectCleaningImpactPerString"
+                ),
+                cable_metrics=_load_cable_metrics(
+                    str(soil.get("dc_cable_list_path", "") or "")
                 ),
             )
             if not rec.empty:
