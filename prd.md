@@ -422,6 +422,70 @@ Acceptance criteria:
 
 ---
 
+### 8.14 Design and Monitoring Benchmarks
+
+Requirement:
+- Give every loss detector an external reference so its output can be judged as
+  high or low against something other than its own history.
+
+Sources (all under `raw data input/`, none committed):
+
+| Source | What it is |
+| --- | --- |
+| `IKN 50 MW limit.pdf` | PVsyst V7.4.8, variant `71.5MWp - bifacial - actual`, simulated 2025-04-21. Despite the filename this is a full simulation report, not a limit document. |
+| `Solar OS/*.csv` | Monitoring platform export: measured per-inverter loss decomposition plus a daily loss time series. WB03-WB10 only. |
+| `IKN Generation.xlsx` | Sheet `Setpoint` (per busbar, 10-minute, from 2024-12-28) and sheet `Summary (PV)` (daily per-WB generation, proportional setpoint, deemed dispatch, curtailment flag). |
+
+This PVsyst report supersedes the earlier `...VCE-Report.pdf`, which models a
+54 MWp / 134-inverter variant that was never built. Use the 71.5 MWp one: it
+covers all 194 inverters including WB01-WB02.
+
+Design configuration (as-built):
+
+```text
+114,420 modules / 71.51 MWp     194 inverters (144 x 300 kVA + 50 x 200 kVA)
+PR 81.95 %                      Specific production 1299 kWh/kWp/year
+Grid export limit 53.20 MW      Bifacial modelled (factor 0.80, ground albedo 0.13)
+```
+
+Design loss budget, for comparison against detector output:
+
+| Loss | Design | Detector that should see it |
+| --- | --- | --- |
+| Soiling | -1.50 % | 8.11 M2a Soiling |
+| Near shadings (irradiance) | -2.07 % | 8.9 M2a Shading |
+| Far shadings / horizon | -0.38 % | 8.9 M2a Shading |
+| Temperature | -4.97 % | physics / cell temp |
+| Mismatch, modules and strings | -2.05 % | 8.5 M2b Peer Z-score |
+| DC ohmic wiring | -0.48 % | cable metrics, see 8.11 |
+| System unavailability | -0.98 % | 8.4 M2e Availability |
+| Unused energy (grid limitation) | -2.38 % | 8.12 PR and Curtailment |
+
+Measured reference (Solar OS, per inverter):
+
+```text
+Shading loss   max 1.47 %   (WB04INV17)
+Soiling loss   max 2.25 %   (WB07INV04)
+PR             min 45.4 %   (WB04INV18, WB09INV09)
+```
+
+Curtailment:
+- The -2.38 % above is the *design* figure at a 53.20 MW export limit.
+- Actual curtailment must come from the setpoint history in
+  `IKN Generation.xlsx`, not from this number. Observed setpoints run about
+  21.1 MW per busbar (~42.3 MW total), well below the design limit, so the
+  design figure understates real curtailment.
+- Busbar 1 covers WB01-WB05 and busbar 2 covers WB06-WB10, a different grouping
+  from the MV station split used elsewhere.
+
+Acceptance criteria:
+- Detector outputs are reported alongside the corresponding design figure.
+- Curtailment analysis uses the setpoint history; the PVsyst figure appears only
+  as a design reference.
+- Solar OS values are treated as an independent measurement to agree or disagree
+  with, never as ground truth: it covers WB03-WB10 only and its attribution
+  method is not documented to us.
+
 ## 9. Tools and Tech Stack
 
 ### Runtime and Workflow
