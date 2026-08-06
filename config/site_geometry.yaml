@@ -25,6 +25,19 @@ site:
 panels:
   tilt_deg: 10
   azimuth_deg: 0                          # 0 = North (pvlib convention)
+  # Tilt piranometer per WS (user, 2026-08). Modul WB03-WB10 dipasang 10 derajat
+  # menghadap utara, jadi POA terukur dan POA model berada di bidang yang sama:
+  # tilt_deg=10 di atas BENAR dan tidak perlu dioverride per WB.
+  # WS-1 dan WS-4 selisih 1 derajat dari modul -> < 0,2% pada POA di lintang -1.
+  # Angka 13,2 derajat di PVsyst BUKAN tilt kolektor melainkan kemiringan
+  # menyamping mengikuti kontur; cross-slope terukur per petak ada di
+  # config/site_layout.yaml -> blocks.*.segments[].terrain.
+  pyranometer_tilt_deg_per_ws:            # informational, belum dipakai kode
+    WS-1: 9
+    WS-2: 10
+    WS-3: 10
+    WS-4: 9
+    WS-5: 10
   # Tinggi panel dari tanah (informational, belum dipakai aktif).
   # Format: angka tunggal (cm) untuk panel rata, atau {min_cm, max_cm} untuk range.
   height_above_ground_per_wb:
