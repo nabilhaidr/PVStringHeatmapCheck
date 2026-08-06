@@ -291,7 +291,7 @@ def test_fit_plane_aspect_two_seventy_when_ground_falls_towards_west():
 
 
 def test_fit_plane_rms_exposes_a_surface_that_is_not_a_plane():
-    """dsm.tif adalah SURFACE model -- memuat vegetasi dan berpotensi meja PV.
+    """dsm.tif adalah SURFACE model -- memuat vegetasi dan kekasaran tanah.
 
     RMS residual adalah satu-satunya rem terhadap pelaporan kemiringan meja
     sebagai kemiringan tanah. Tanpa angka ini, petak berisi struktur akan

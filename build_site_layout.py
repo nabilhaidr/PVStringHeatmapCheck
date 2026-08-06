@@ -8,8 +8,16 @@ UTM zone 50S (EPSG:32750).
 BUKAN koordinat per string. Titik-titik ini adalah patok setting-out blok
 array (74-141 titik per WB, sementara WB03 saja punya 366 string), jadi
 hasilnya cukup untuk peta ikhtisar dan pin per petak -- bukan pin per
-string. Elevasi (mdpl) TIDAK ikut: angka spot level dan garis kontur pada
-gambar sudah di-outline jadi geometri, tidak ada di lapisan teks PDF.
+string.
+
+Elevasi diambil dari ``dsm.tif`` survei meteorologi/hidrologi (Float32,
+0,1187 m/piksel, EPSG:32750), bukan dari gambar -- spot level dan kontur
+pada PDF sudah di-outline jadi geometri.
+
+DSM itu direkam Okt 2024, sebelum meja didirikan. Di WB03-WB10 meja PV
+MENGIKUTI kontur berbukit (foto lapangan 2026-08-06 dan foto drone), jadi
+``segments[].terrain`` adalah proksi yang wajar untuk orientasi bidang
+modul di sana. PHASE_ONE (WB01-WB02) sebaliknya berada di lahan datar.
 
 Jalankan: python build_site_layout.py
 """
@@ -246,9 +254,9 @@ def fit_plane(samples: Sequence[Tuple[float, float, float]]) -> Optional[Dict]:
 
     ``aspect_deg`` = arah TURUN paling curam, konvensi GIS (0=U, 90=T,
     180=S, 270=B). ``rms_m`` adalah rem kejujurannya: dsm.tif itu SURFACE
-    model, jadi petak yang masih berisi meja PV atau vegetasi akan punya
-    residual besar dan kemiringannya tidak boleh dibaca sebagai kemiringan
-    tanah.
+    model, jadi petak berisi vegetasi atau tanah kasar punya residual besar
+    dan kemiringannya tidak boleh dibaca sebagai bidang. (Meja PV TIDAK ada
+    di DSM ini -- survei mendahului ereksi; lihat meta.peringatan_dsm.)
 
     None bila titiknya < 3 atau segaris -- bidang tidak tertentukan, dan
     menebaknya lebih buruk daripada mengaku tidak tahu.
@@ -550,9 +558,25 @@ def main() -> None:
                 f"{PLANE_STEP_M:.0f} m. aspect_deg = arah TURUN (0=U, 90=T)."
                 if os.path.exists(DSM_PATH) else "tidak tersedia (dsm.tif tak ada)."
             ),
-            "peringatan_dsm": "dsm.tif adalah SURFACE model -- memuat vegetasi "
-                              "dan berpotensi meja PV. Baca slope/aspect hanya "
-                              "bila rms_m kecil; rms besar = permukaan berstruktur.",
+            "peringatan_dsm":
+                "terrain di sini adalah tanah SEBELUM konstruksi (survei Okt "
+                "2024, mendahului ereksi). Di WB03-WB10 meja PV MENGIKUTI "
+                "kontur berbukit -- dipastikan dari foto lapangan 2026-08-06 "
+                "dan foto drone (raw data input/'Foto PLTS IKN 06-08-2026', "
+                "'1 - PV site view'): baris modul naik ke puncak bukit dan "
+                "turun ke lembah, tanpa bench datar. Karena itu "
+                "slope_deg/aspect_deg di sini adalah proksi yang WAJAR untuk "
+                "orientasi bidang modul, dengan catatan pekerjaan tanah lokal "
+                "(jalan, drainase, perataan setempat) tidak terekam DSM ini. "
+                "PHASE_ONE (WB01-WB02) sebaliknya berada di lahan datar teratur.",
+            "peringatan_dsm_bukti":
+                "dsm.tif tidak memuat meja PV: autokorelasi profil utara-selatan "
+                "meluruh monoton tanpa puncak lokal di 7,12 m (pitch baris), "
+                "sigma permukaan 0,49 m. Jadi rms_m besar menandakan vegetasi "
+                "atau kekasaran tanah, BUKAN struktur. Ortofoto tampak-atas "
+                "TIDAK bisa dipakai menilai apakah meja rata atau miring -- "
+                "proyeksi tegak lurus tidak menunjukkan relief; hanya foto "
+                "oblique/lapangan yang bisa.",
             "parcel": PARCEL_KKPR,
             "parcel_catatan": PARCEL_NOTE,
         },
