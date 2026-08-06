@@ -243,3 +243,92 @@ def test_report_writes_four_sheets(tmp_path):
     assert pd.ExcelFile(out).sheet_names == [
         "Klasifikasi", "Profil_Jam", "Uji_Hujan", "Metadata",
     ]
+
+
+# --- pembeda musiman: geometri vs obstruksi ------------------------------------
+
+
+def _klas(rows):
+    """DataFrame klasifikasi minimal: pv_string + pagi + sore."""
+    return pd.DataFrame(
+        [{"pv_string": k, "pagi": a, "sore": b} for k, a, b in rows]
+    )
+
+
+def test_seasonal_calls_stable_asymmetry_geometric():
+    """Asimetri dari kemiringan tanah bertanda TETAP dan besarnya hanya
+    bergeser ~22,5% dari nilainya sendiri antar solstis.
+
+    Angka 22,5% itu turunan geometri surya, bukan hasil penyetelan: untuk
+    cross-slope 2,5 sampai 18,3 derajat rentang relatifnya 22,4-22,7%.
+    """
+    from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+    out = seasonal_discriminator({
+        "jun": _klas([("WB05-INV03-PV1", 0.70, 1.15)]),   # asimetri -0,45
+        "des": _klas([("WB05-INV03-PV1", 0.68, 1.18)]),   # asimetri -0,50
+    }).set_index("pv_string")
+
+    assert out.loc["WB05-INV03-PV1", "verdikt"] == "GEOMETRI"
+
+
+def test_seasonal_calls_sign_flip_obstruction():
+    """Kemiringan tanah tidak pernah membalik tanda sepanjang tahun.
+
+    Bayangan pohon bisa: yang menaungi pagi di Juni bisa menaungi sore di
+    Desember karena deklinasi bergeser. Pembalikan tanda karena itu bukti
+    kuat obstruksi, bukan geometri.
+    """
+    from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+    out = seasonal_discriminator({
+        "jun": _klas([("WB09-INV20-PV1", 0.70, 1.10)]),   # -0,40
+        "des": _klas([("WB09-INV20-PV1", 1.12, 0.72)]),   # +0,40
+    }).set_index("pv_string")
+
+    assert out.loc["WB09-INV20-PV1", "verdikt"] == "OBSTRUKSI"
+
+
+def test_seasonal_calls_large_magnitude_swing_obstruction():
+    """Tanda tetap tapi besarnya melonjak jauh di atas 22,5% -> bukan geometri."""
+    from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+    out = seasonal_discriminator({
+        "jun": _klas([("WB03-INV09-PV7", 0.95, 1.05)]),   # -0,10
+        "des": _klas([("WB03-INV09-PV7", 0.45, 1.15)]),   # -0,70
+    }).set_index("pv_string")
+
+    assert out.loc["WB03-INV09-PV7", "verdikt"] == "OBSTRUKSI"
+
+
+def test_seasonal_ignores_strings_without_asymmetry():
+    """String simetris tidak punya apa pun untuk dibedakan."""
+    from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+    out = seasonal_discriminator({
+        "jun": _klas([("WB07-INV04-PV20", 0.86, 0.88)]),
+        "des": _klas([("WB07-INV04-PV20", 0.87, 0.86)]),
+    }).set_index("pv_string")
+
+    assert out.loc["WB07-INV04-PV20", "verdikt"] == "TANPA_ASIMETRI"
+
+
+def test_seasonal_needs_two_seasons_per_string():
+    """Satu musim tidak bisa membedakan apa pun -- jangan menebak."""
+    from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+    out = seasonal_discriminator({
+        "jun": _klas([("WB08-INV15-PV20", 0.70, 1.15)]),
+        "des": _klas([("WB10-INV03-PV24", 0.70, 1.15)]),
+    }).set_index("pv_string")
+
+    assert out.loc["WB08-INV15-PV20", "verdikt"] == "DATA_KURANG"
+    assert out.loc["WB10-INV03-PV24", "verdikt"] == "DATA_KURANG"
+
+
+def test_seasonal_threshold_clears_the_geometric_drift_it_must_tolerate():
+    """Ambang harus di ATAS 22,5% supaya geometri tidak salah dicap obstruksi,
+    dan tidak jauh di atasnya supaya obstruksi ringan tetap tertangkap."""
+    from pv_pipeline.string_intraday_diagnostic import SEASONAL_REL_RANGE_MAX
+
+    assert 0.225 < SEASONAL_REL_RANGE_MAX <= 0.40

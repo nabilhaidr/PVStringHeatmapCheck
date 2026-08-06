@@ -56,6 +56,30 @@ RAIN_COLUMNS: List[str] = [
     "pv_string", "event", "ratio_before", "ratio_after", "delta_pp",
 ]
 
+# Asimetri pagi-sore akibat kemiringan tanah bervariasi ~22,5% dari nilainya
+# sendiri antar solstis, dan angka itu KONSTAN terhadap besar cross-slope
+# (2,5 / 5,0 / 9,2 / 13,2 / 18,3 derajat -> 22,6 / 22,7 / 22,6 / 22,5 / 22,4%).
+# Tandanya juga tidak pernah berbalik. Ambang 0,30 memberi margin derau di atas
+# 22,5% tanpa melewatkan obstruksi ringan. Diturunkan dari geometri surya
+# (pvlib clear-sky pada lintang site), bukan disetel ke data.
+SEASONAL_REL_RANGE_MAX: float = 0.30
+
+SEASONAL_COLUMNS: List[str] = [
+    "pv_string", "n_musim", "asym_mean", "asym_rel_range", "verdikt",
+]
+
+# Kolom yang harus diisi surveyor. Dua yang pertama adalah satu-satunya cara
+# menutup pertanyaan yang tidak terjawab dari gambar mana pun: apakah meja
+# diratakan (tanah digrading) atau mengikuti kemiringan menyamping. Satu foto
+# yang membidik memanjang sepanjang baris meja sudah cukup menjawabnya.
+FIELD_OBSERVATION_COLUMNS: List[str] = [
+    "meja_rata_atau_ikut_kontur",   # rata (digrading) | ikut kontur | tidak jelas
+    "foto_memanjang_baris",         # bidik sepanjang baris, bukan tegak lurus
+    "arah_kemiringan_tanah",        # timur | barat | utara | selatan | datar
+    "objek_penghalang",             # vegetasi | tiang | bangunan | tidak ada
+    "jam_pengamatan",
+]
+
 
 def _pv_indices(columns: Iterable[str], pv_max: int) -> List[int]:
     """Indeks PV yang punya kolom daya ATAU pasangan V/I di ``columns``."""
@@ -347,6 +371,70 @@ def rain_recovery(
     return pd.DataFrame(rows, columns=RAIN_COLUMNS)
 
 
+def seasonal_discriminator(
+    by_season: Dict[str, pd.DataFrame],
+    *,
+    ampm_gap: float = DEFAULT_AMPM_GAP,
+    rel_range_max: float = SEASONAL_REL_RANGE_MAX,
+) -> pd.DataFrame:
+    """Pisahkan asimetri pagi-sore GEOMETRI dari OBSTRUKSI lewat perilaku musiman.
+
+    ``by_season``: {label musim -> DataFrame klasifikasi} dari rentang tanggal
+    berbeda (idealnya dekat dua solstis). Butuh kolom ``pv_string``, ``pagi``,
+    ``sore``.
+
+    Dasarnya: kemiringan tanah menghasilkan asimetri yang bertanda TETAP
+    sepanjang tahun dan besarnya hanya bergeser ~22,5% dari nilainya sendiri.
+    Bayangan objek bergeser jamnya mengikuti deklinasi matahari, sehingga
+    tandanya bisa berbalik atau besarnya melonjak.
+
+    Verdikt: DATA_KURANG (< 2 musim), TANPA_ASIMETRI, OBSTRUKSI, GEOMETRI.
+    """
+    per: Dict[str, Dict[str, float]] = {}
+    for label, frame in by_season.items():
+        if frame is None or frame.empty:
+            continue
+        for row in frame.itertuples(index=False):
+            am, pm = getattr(row, "pagi", np.nan), getattr(row, "sore", np.nan)
+            if pd.notna(am) and pd.notna(pm):
+                per.setdefault(row.pv_string, {})[label] = float(am) - float(pm)
+
+    labels = list(by_season)
+    rows: List[dict] = []
+    for key, seasons in per.items():
+        amps = list(seasons.values())
+        mean_abs = float(np.mean([abs(a) for a in amps]))
+        spread = (max(amps) - min(amps)) if len(amps) > 1 else np.nan
+        rel = spread / mean_abs if len(amps) > 1 and mean_abs > 0 else np.nan
+
+        if len(amps) < 2:
+            verdikt = "DATA_KURANG"
+        elif max(abs(a) for a in amps) < ampm_gap:
+            verdikt = "TANPA_ASIMETRI"
+        elif min(amps) < 0 < max(amps):
+            verdikt = "OBSTRUKSI"          # tanda berbalik -- tak mungkin geometri
+        elif rel > rel_range_max:
+            verdikt = "OBSTRUKSI"          # bergeser jauh di atas drift geometris
+        else:
+            verdikt = "GEOMETRI"
+
+        entry = {
+            "pv_string": key,
+            "n_musim": len(amps),
+            "asym_mean": round(float(np.mean(amps)), 4),
+            "asym_rel_range": None if pd.isna(rel) else round(float(rel), 3),
+            "verdikt": verdikt,
+        }
+        for label in labels:
+            entry[f"asym_{label}"] = (round(seasons[label], 4)
+                                      if label in seasons else None)
+        rows.append(entry)
+
+    columns = SEASONAL_COLUMNS + [f"asym_{lb}" for lb in labels]
+    out = pd.DataFrame(rows, columns=columns)
+    return out.sort_values(["verdikt", "pv_string"], ignore_index=True)
+
+
 @dataclass
 class IntradayDiagnosticReport:
     """Hasil diagnostik siap tulis ke Excel."""
@@ -411,5 +499,15 @@ def build_intraday_diagnostic(
         ("ambang_dropout_share", DEFAULT_DROPOUT_SHARE),
         ("catatan",
          "M2aShading level inverter buta thd shading 1-2 string; modul ini menutupnya"),
+        ("uji_musiman",
+         "SHADING_PAGI/SORE punya dua sebab. Jalankan lagi pada rentang "
+         "tanggal dekat solstis yang lain, lalu seasonal_discriminator() atas "
+         "kedua klasifikasi: geometri bertanda tetap dan bergeser <=30%, "
+         "obstruksi berbalik tanda atau melonjak."),
+        ("form_lapangan", " | ".join(FIELD_OBSERVATION_COLUMNS)),
+        ("form_lapangan_kenapa",
+         "Apakah meja diratakan (tanah digrading) atau mengikuti kemiringan "
+         "menyamping tidak terjawab oleh gambar mana pun; satu foto membidik "
+         "memanjang sepanjang baris meja menutupnya."),
     ], columns=["key", "value"])
     return IntradayDiagnosticReport(classification, profile, rain, meta)
