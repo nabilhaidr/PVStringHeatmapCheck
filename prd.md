@@ -561,8 +561,7 @@ These columns are **evidence, not correction**. `ratio`, `deficit_pct` and
 POA model, not arithmetic - the same reason the cable voltage-drop columns in
 8.11 are presented as evidence rather than applied as a correction.
 
-`config/string_geometry.csv` (3,570 rows, 140 inverters, WB03-WB10 only;
-WB01-WB02 sit on flat ground and are not mapped):
+`config/string_geometry.csv` (4,470 rows, 190 inverters, all ten WB blocks):
 
 | Field | Meaning |
 | --- | --- |
@@ -580,6 +579,38 @@ Known data limits, deliberately left NULL rather than guessed:
   than silently taking the first match.
 - Against the June 2026 diagnostic workbook, 92.1 % of classified strings
   receive a trusted cross-slope.
+
+Phase One (WB01-WB02) comes from a different drawing and a different labelling
+convention. Its 900 strings sit on the `_TEXT_STRING` layer of the AC cable
+tray drawing as `S<block><inverter>-<string>`; block 1 is WB01, block 2 is
+WB02. Two facts make it simpler than WB03-WB10: the field string number *is*
+the Huawei PV channel, so no DC cable list lookup is needed, and no label
+appears twice. `mppt` comes from `config/strings.yaml`, whose `mppt_map`
+already carries the SUN2000-215KTL layout keyed by inverter model (9 MPPTs of
+two sequential strings: PV1+PV2 through PV17+PV18); the builder reads that
+table rather than restating it, so the pairing has one home. Phase One is
+therefore the only part of the site whose channel mapping is fully known
+without the as-built cable list. One label, `S226`, is a leftover from a
+superseded revision that renamed it `S125` = WB01-INV25; read literally it
+would produce a WB02-INV26 that does not exist in telemetry while leaving
+WB01-INV25 without coordinates.
+
+The layout reconciles independently on three counts: 50 groups of exactly 18
+strings matches the 50 Phase One inverters whose `strings.yaml` entries mark
+PV19-PV28 empty; 50 x 18 x 24 modules plus 3,570 x 26 for WB03-WB10 equals the
+114,420 modules of the as-built PVsyst report in 8.14; and the two blocks
+separate spatially with a 99 m empty band in easting.
+
+**Phase One is flat, and that is now measured rather than assumed.** Sampling
+the DSM at all 900 positions gives a within-inverter cross-slope spread with a
+median of 1.4 degrees, against 21.7 degrees for WB03-WB10 - roughly fifteen
+times more uniform. At that spread `expected_ampm_asym` stays far below the
+0.12 gap that raises a directional label, so ground geometry effectively never
+explains a morning or afternoon deficit in WB01-WB02. Four inverters are the
+exception (WB02-INV01, INV02, INV04, INV06, spreads of 5.6 to 17.0 degrees):
+all sit on the northern edge of Phase One against the WB03/WB04 boundary, where
+the 15 m fit window most likely catches an embankment rather than the module
+plane.
 
 Acceptance criteria:
 - Classification distinguishes soiling-shaped from shading-shaped deficits per
@@ -675,8 +706,10 @@ Acceptance criteria:
 - `config/string_geometry.csv` - per-string coordinates and ground slope (8.15).
   Committed, unlike the raw drawings it is derived from.
 - As-built drawing sources, used offline by the two builder scripts and not
-  needed at pipeline runtime: `raw data input/1129.dxf` (string-number labels
-  with UTM insertion points), `dsm.tif` (topographic survey DSM, 0.1187 m/px),
+  needed at pipeline runtime: `raw data input/1129.dxf` (WB03-WB10 string-number
+  labels with UTM insertion points), `Cable Routing & Tray Layout AC & DC(1).dxf`
+  (AC tray drawing; its `_TEXT_STRING` layer carries the 900 Phase One string
+  labels), `dsm.tif` (topographic survey DSM, 0.1187 m/px),
   `List of DC Cables 0411.xls` (ST-to-PV mapping and cable length / voltage drop),
   and the `IKN-CE-PP-DW-004` / `ISPP-PSC-DWG-1004-001` drawings.
   The builders resolve these by name prefix anywhere under `raw data input/`, so
