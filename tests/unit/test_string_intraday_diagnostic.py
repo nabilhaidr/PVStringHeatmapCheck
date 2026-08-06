@@ -586,3 +586,106 @@ def test_seasonal_threshold_clears_the_geometric_drift_it_must_tolerate():
     from pv_pipeline.string_intraday_diagnostic import SEASONAL_REL_RANGE_MAX
 
     assert 0.225 < SEASONAL_REL_RANGE_MAX <= 0.40
+
+
+# --- pembeda musiman sebagai VALIDATOR prediksi geometris ---------------------
+
+
+def _musim(rows):
+    """Klasifikasi satu musim: pv_string + pagi + sore + ampm_residual."""
+    return pd.DataFrame(
+        [{"pv_string": k, "pagi": a, "sore": b, "ampm_residual": r}
+         for k, a, b, r in rows]
+    )
+
+
+def test_validator_agrees_when_geometry_explains_a_stable_asymmetry():
+    """Dua metode independen sepakat -> prediksi geometrisnya tervalidasi.
+
+    ``seasonal_discriminator`` menilai dari data terukur saja dan buta
+    terhadap cross-slope; ``ampm_residual`` menilai dari prediksi geometri.
+    Kesepakatan keduanya bukan tautologi -- model k(hari)*sin(cross_slope)
+    diturunkan dari pvlib clear-sky, tidak pernah dipaskan ke telemetri.
+
+    ``residual_drift`` menguji bagian yang paling mudah salah dalam model:
+    penskalaan musimannya. Asimetri mentah string ini bergeser 0,05 antar
+    musim; kalau k(hari) benar, residualnya bergeser jauh lebih kecil.
+    """
+    from pv_pipeline.string_intraday_diagnostic import validate_geometry_seasonally
+
+    out = validate_geometry_seasonally({
+        "jun": _musim([("WB05-INV03-PV1", 0.70, 1.15, -0.02)]),   # asym -0,45
+        "des": _musim([("WB05-INV03-PV1", 0.68, 1.18, -0.03)]),   # asym -0,50
+    }).set_index("pv_string")
+    row = out.loc["WB05-INV03-PV1"]
+
+    assert row["verdikt_musiman"] == "GEOMETRI"
+    assert row["verdikt_geometris"] == "GEOMETRI"
+    assert row["hasil"] == "SEPAKAT"
+    assert row["residual_drift"] == pytest.approx(0.01, abs=1e-9)
+    assert row["residual_drift"] < 0.05      # < drift asimetri mentahnya
+
+
+def test_validator_catches_the_obstruction_the_seasonal_test_calls_geometry():
+    """Inti nilai validator ini: menangkap kesalahan yang dulu tak terlihat.
+
+    Bangunan permanen di sisi timur menghasilkan asimetri bertanda TETAP
+    yang bergeser pelan sepanjang tahun -- persis tanda tangan yang dipakai
+    ``seasonal_discriminator`` untuk menyimpulkan GEOMETRI. Sebelum ada
+    koordinat per string, tidak ada cara membedakannya.
+
+    String ini duduk di tanah DATAR, jadi geometri tidak menjelaskan apa pun
+    dan residualnya sama besar dengan asimetri mentahnya. Regu lapangan
+    harus tetap dikirim.
+    """
+    from pv_pipeline.string_intraday_diagnostic import validate_geometry_seasonally
+
+    out = validate_geometry_seasonally({
+        "jun": _musim([("WB09-INV11-PV3", 0.70, 1.15, -0.45)]),
+        "des": _musim([("WB09-INV11-PV3", 0.68, 1.18, -0.50)]),
+    }).set_index("pv_string")
+    row = out.loc["WB09-INV11-PV3"]
+
+    assert row["verdikt_musiman"] == "GEOMETRI"      # metode lama tertipu
+    assert row["verdikt_geometris"] == "OBSTRUKSI"   # residual membongkarnya
+    assert row["hasil"] == "MUSIMAN_TERLALU_LONGGAR"
+
+
+def test_validator_agrees_when_the_sign_flips():
+    """Tanda yang berbalik tidak mungkin geometri, dan residual sepakat.
+
+    Kemiringan tanah tidak pernah membalik arah sepanjang tahun. Kedua
+    metode harus menyebut ini obstruksi tanpa saling bergantung.
+    """
+    from pv_pipeline.string_intraday_diagnostic import validate_geometry_seasonally
+
+    out = validate_geometry_seasonally({
+        "jun": _musim([("WB04-INV17-PV5", 1.10, 0.80, 0.28)]),    # asym +0,30
+        "des": _musim([("WB04-INV17-PV5", 0.80, 1.15, -0.37)]),   # asym -0,35
+    }).set_index("pv_string")
+    row = out.loc["WB04-INV17-PV5"]
+
+    assert row["verdikt_musiman"] == "OBSTRUKSI"
+    assert row["verdikt_geometris"] == "OBSTRUKSI"
+    assert row["hasil"] == "SEPAKAT"
+
+
+def test_validator_reports_a_seasonal_call_it_cannot_check():
+    """Tanpa cross-slope tepercaya, validator harus DIAM -- bukan menyetujui.
+
+    Kesepakatan palsu di sini akan terbaca seolah prediksi geometris sudah
+    diuji untuk string ini, padahal tidak ada prediksi sama sekali.
+    """
+    from pv_pipeline.string_intraday_diagnostic import validate_geometry_seasonally
+
+    nan = float("nan")
+    out = validate_geometry_seasonally({
+        "jun": _musim([("WB04-INV17-PV1", 0.70, 1.15, nan)]),
+        "des": _musim([("WB04-INV17-PV1", 0.68, 1.18, nan)]),
+    }).set_index("pv_string")
+    row = out.loc["WB04-INV17-PV1"]
+
+    assert row["verdikt_musiman"] == "GEOMETRI"
+    assert row["verdikt_geometris"] == "DATA_GEOMETRI_TIDAK_ADA"
+    assert row["hasil"] == "TIDAK_BERLAKU"
+    assert pd.isna(row["residual_drift"])

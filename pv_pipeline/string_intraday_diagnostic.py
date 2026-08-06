@@ -81,6 +81,10 @@ AMPM_ASYM_K: tuple = (2.9775, 2.6104, 2.9039, 3.2693)
 SEASONAL_COLUMNS: List[str] = [
     "pv_string", "n_musim", "asym_mean", "asym_rel_range", "verdikt",
 ]
+VALIDATION_COLUMNS: List[str] = [
+    "pv_string", "n_musim", "verdikt_musiman", "verdikt_geometris",
+    "residual_drift", "hasil",
+]
 
 # Kolom yang harus diisi surveyor. Dua yang pertama adalah satu-satunya cara
 # menutup pertanyaan yang tidak terjawab dari gambar mana pun: apakah meja
@@ -525,6 +529,84 @@ def seasonal_discriminator(
     columns = SEASONAL_COLUMNS + [f"asym_{lb}" for lb in labels]
     out = pd.DataFrame(rows, columns=columns)
     return out.sort_values(["verdikt", "pv_string"], ignore_index=True)
+
+
+def _bandingkan_verdikt(musiman: str, geometris: str) -> str:
+    """Adu dua verdikt. Hanya GEOMETRI/OBSTRUKSI yang bisa diadu."""
+    bisa = {"GEOMETRI", "OBSTRUKSI"}
+    if musiman not in bisa or geometris not in bisa:
+        return "TIDAK_BERLAKU"
+    if musiman == geometris:
+        return "SEPAKAT"
+    return ("MUSIMAN_TERLALU_LONGGAR" if musiman == "GEOMETRI"
+            else "MUSIMAN_TERLALU_KETAT")
+
+
+def validate_geometry_seasonally(
+    by_season: Dict[str, pd.DataFrame],
+    *,
+    ampm_gap: float = DEFAULT_AMPM_GAP,
+    rel_range_max: float = SEASONAL_REL_RANGE_MAX,
+) -> pd.DataFrame:
+    """Uji silang prediksi geometris terhadap perilaku terukur antar musim.
+
+    ``by_season``: {label musim -> klasifikasi yang SUDAH dipasangi bukti
+    geometris pada day-of-year musim itu masing-masing}; lihat
+    ``attach_geometry_evidence``.
+
+    Dua penilai yang saling BEBAS diadu di sini:
+
+    * ``seasonal_discriminator`` hanya membaca ``pagi``/``sore`` terukur dan
+      buta terhadap cross-slope;
+    * ``ampm_residual`` datang dari model geometri yang diturunkan dari pvlib
+      clear-sky dan tidak pernah dipaskan ke telemetri.
+
+    Karena itu kesepakatan keduanya adalah validasi, bukan tautologi -- dan
+    ketidaksepakatannya justru yang informatif. ``MUSIMAN_TERLALU_LONGGAR``
+    adalah temuan paling berharga: obstruksi permanen menghasilkan asimetri
+    bertanda tetap yang bergeser pelan sepanjang tahun, tanda tangan yang
+    sebelum ada koordinat per string otomatis terbaca GEOMETRI.
+
+    ``residual_drift`` menguji bagian model yang paling mudah salah, yaitu
+    penskalaan musimannya: untuk string yang memang geometris, residual harus
+    jauh lebih stabil antar musim daripada asimetri mentahnya.
+    """
+    musiman = seasonal_discriminator(
+        by_season, ampm_gap=ampm_gap, rel_range_max=rel_range_max,
+    )
+    if musiman.empty:
+        return pd.DataFrame(columns=VALIDATION_COLUMNS)
+
+    sisa: Dict[str, List[float]] = {}
+    for frame in by_season.values():
+        if frame is None or frame.empty or "ampm_residual" not in frame.columns:
+            continue
+        for row in frame.itertuples(index=False):
+            sisa.setdefault(row.pv_string, []).append(float(row.ampm_residual))
+
+    rows: List[dict] = []
+    for entry in musiman.itertuples(index=False):
+        nilai = [v for v in sisa.get(entry.pv_string, []) if np.isfinite(v)]
+        if not nilai:
+            # Tanpa cross-slope tepercaya tidak ada prediksi untuk diuji.
+            # Diam di sini, jangan menyetujui: kesepakatan palsu akan terbaca
+            # seolah string ini sudah diperiksa.
+            geometris, drift = "DATA_GEOMETRI_TIDAK_ADA", np.nan
+        else:
+            geometris = ("GEOMETRI" if max(abs(v) for v in nilai) < ampm_gap
+                         else "OBSTRUKSI")
+            drift = max(nilai) - min(nilai)
+        rows.append({
+            "pv_string": entry.pv_string,
+            "n_musim": entry.n_musim,
+            "verdikt_musiman": entry.verdikt,
+            "verdikt_geometris": geometris,
+            "residual_drift": None if pd.isna(drift) else round(drift, 4),
+            "hasil": _bandingkan_verdikt(entry.verdikt, geometris),
+        })
+    return pd.DataFrame(rows, columns=VALIDATION_COLUMNS).sort_values(
+        ["hasil", "pv_string"], ignore_index=True,
+    )
 
 
 @dataclass

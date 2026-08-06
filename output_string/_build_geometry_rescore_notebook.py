@@ -54,7 +54,22 @@ melewati ambang itu, labelnya memang produk geometri.
 **Kolom ini bukti, bukan koreksi.** `ratio`, `deficit_pct`, dan `kategori`
 tidak disentuh. Mengoreksinya butuh model POA per string per timestamp.
 
-Jalankan Cell 1 sampai Cell 5 berurutan. Edit hanya nilai di **Cell 2**.
+## Validasi silang (opsional, Cell 5)
+
+Isi `WORKBOOK_MUSIM_LAIN` dengan workbook diagnostik dari rentang tanggal
+musim lain, lalu Cell 5 mengadu **dua penilai yang saling bebas**:
+
+- `seasonal_discriminator` hanya membaca `pagi`/`sore` terukur, buta terhadap
+  cross-slope;
+- `ampm_residual` datang dari model pvlib clear-sky yang tidak pernah
+  dipaskan ke telemetri.
+
+Kesepakatan keduanya karena itu adalah validasi, bukan tautologi. Yang paling
+berharga justru saat mereka berbeda: asimetri bertanda tetap dengan drift di
+bawah 30% dulu otomatis disebut GEOMETRI -- padahal bangunan permanen di sisi
+timur menghasilkan pola yang sama persis.
+
+Jalankan Cell 1 sampai Cell 6 berurutan. Edit hanya nilai di **Cell 2**.
 '''
 
 CODE_SETUP = '''# Cell 1 - Mount Drive + siapkan repo
@@ -94,6 +109,12 @@ WORKBOOK = "/content/drive/MyDrive/Cek PV String/outputs/" \\
 
 OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
 
+# Workbook dari rentang tanggal musim LAIN, untuk validasi silang di Cell 5.
+# Idealnya dekat solstis seberang: makin jauh jaraknya, makin besar beda
+# musiman yang harus diprediksi model, jadi makin tajam ujinya. Kosongkan
+# ("") untuk melewati validasi.
+WORKBOOK_MUSIM_LAIN = ""
+
 # Daftar string yang jadi subjek laporan yang sudah beredar
 # (Analisis_20String_Underperform_20260729). Kosongkan ([]) untuk menilai
 # ulang SELURUH string di workbook.
@@ -113,18 +134,23 @@ CODE_ATTACH = '''# Cell 3 - Pasang bukti geometris pada klasifikasi lama
 import pandas as pd
 from pv_pipeline.string_intraday_diagnostic import attach_geometry_evidence
 
-XL = pd.ExcelFile(WORKBOOK)
-KLAS_LAMA = XL.parse("Klasifikasi")
-META = XL.parse("Metadata").set_index("key")["value"]
-
-# Asimetri geometris bergeser ~22,5% antar solstis, jadi harapannya dihitung
-# pada pertengahan rentang tanggal yang benar-benar dianalisis workbook itu.
-AWAL, AKHIR = pd.Timestamp(META["tanggal_awal"]), pd.Timestamp(META["tanggal_akhir"])
-DOY = int((AWAL + (AKHIR - AWAL) / 2).dayofyear)
-print(f"Rentang workbook: {AWAL.date()} .. {AKHIR.date()} -> day-of-year {DOY}")
-
 GEOM = pd.read_csv(REPO_DIR / "config" / "string_geometry.csv")
-KLAS = attach_geometry_evidence(KLAS_LAMA, GEOM, DOY)
+
+
+def muat(path):
+    """Workbook diagnostik -> (klasifikasi + bukti geometris, awal, akhir, doy)."""
+    xl = pd.ExcelFile(path)
+    meta = xl.parse("Metadata").set_index("key")["value"]
+    awal = pd.Timestamp(meta["tanggal_awal"])
+    akhir = pd.Timestamp(meta["tanggal_akhir"])
+    # Asimetri geometris bergeser ~22,5% antar solstis, jadi harapannya dihitung
+    # pada pertengahan rentang tanggal yang benar-benar dianalisis workbook itu.
+    doy = int((awal + (akhir - awal) / 2).dayofyear)
+    return attach_geometry_evidence(xl.parse("Klasifikasi"), GEOM, doy), awal, akhir, doy
+
+
+KLAS, AWAL, AKHIR, DOY = muat(WORKBOOK)
+print(f"Rentang workbook: {AWAL.date()} .. {AKHIR.date()} -> day-of-year {DOY}")
 
 ada = KLAS["cross_slope_deg"].notna().sum()
 print(f"{len(KLAS)} string di workbook; cross-slope tepercaya {ada} "
@@ -202,7 +228,54 @@ print("               defisit datar juga tidak bisa dihasilkan cross-slope. "
       "Tetap didatangi.")
 '''
 
-CODE_SAVE = '''# Cell 5 - Simpan hasil penilaian ulang
+CODE_VALIDATE = '''# Cell 5 - Validasi silang: prediksi geometris vs perilaku musiman
+from pv_pipeline.string_intraday_diagnostic import validate_geometry_seasonally
+
+VALIDASI = None
+if not WORKBOOK_MUSIM_LAIN:
+    print("WORKBOOK_MUSIM_LAIN kosong -- validasi musiman dilewati.")
+    print("Isi di Cell 2 dengan workbook diagnostik dari rentang tanggal musim")
+    print("LAIN (idealnya dekat solstis seberang) untuk mengaktifkan sel ini.")
+else:
+    KLAS2, AWAL2, AKHIR2, DOY2 = muat(WORKBOOK_MUSIM_LAIN)
+    print(f"Musim pembanding: {AWAL2.date()} .. {AKHIR2.date()} -> doy {DOY2}")
+
+    VALIDASI = validate_geometry_seasonally({
+        str(AWAL.date()): KLAS,
+        str(AWAL2.date()): KLAS2,
+    })
+    display(VALIDASI.head(40))
+
+    print()
+    for nama, n in VALIDASI["hasil"].value_counts().items():
+        print(f"  {nama:<24} {n}")
+
+    print()
+    print("SEPAKAT                 dua metode yang saling BEBAS memberi putusan")
+    print("                        sama. Uji musiman hanya membaca pagi/sore")
+    print("                        terukur; residual datang dari model pvlib yang")
+    print("                        tidak pernah dipaskan ke telemetri -- jadi ini")
+    print("                        validasi, bukan tautologi.")
+    print("MUSIMAN_TERLALU_LONGGAR uji musiman menyebut GEOMETRI padahal residual")
+    print("                        masih besar. Obstruksi permanen memberi asimetri")
+    print("                        bertanda tetap yang bergeser pelan -- persis")
+    print("                        tanda tangan yang dulu tak bisa dibedakan.")
+    print("                        String di sini TETAP didatangi.")
+    print("MUSIMAN_TERLALU_KETAT   uji musiman menyebut OBSTRUKSI padahal residual")
+    print("                        kecil di kedua musim. Periksa ambang 0,30.")
+    print("TIDAK_BERLAKU           tanpa cross-slope tepercaya, atau asimetrinya")
+    print("                        tidak melewati ambang sama sekali.")
+
+    drift = VALIDASI["residual_drift"].dropna()
+    if len(drift):
+        print(f"\\nresidual_drift  median {drift.median():.3f}  "
+              f"p90 {drift.quantile(0.9):.3f}")
+        print("Ini menguji penskalaan musiman model. Untuk string yang memang")
+        print("geometris, residual harus jauh lebih stabil antar musim daripada")
+        print("asimetri mentahnya; drift besar menandakan k(hari) meleset.")
+'''
+
+CODE_SAVE = '''# Cell 6 - Simpan hasil penilaian ulang
 from pathlib import Path
 
 tag = f"{AWAL.strftime('%Y%m%d')}_{AKHIR.strftime('%Y%m%d')}"
@@ -212,6 +285,8 @@ out_path.parent.mkdir(parents=True, exist_ok=True)
 with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
     TARGET.to_excel(writer, sheet_name="Putusan_Fokus", index=False)
     KLAS.to_excel(writer, sheet_name="Klasifikasi_Dinilai_Ulang", index=False)
+    if VALIDASI is not None:
+        VALIDASI.to_excel(writer, sheet_name="Validasi_Musiman", index=False)
     pd.DataFrame([
         ("workbook_sumber", str(WORKBOOK)),
         ("rentang", f"{AWAL.date()} .. {AKHIR.date()}"),
@@ -232,6 +307,7 @@ CELLS = [
     ("code", CODE_CONFIG),
     ("code", CODE_ATTACH),
     ("code", CODE_VERDICT),
+    ("code", CODE_VALIDATE),
     ("code", CODE_SAVE),
 ]
 

@@ -612,6 +612,33 @@ all sit on the northern edge of Phase One against the WB03/WB04 boundary, where
 the 15 m fit window most likely catches an embankment rather than the module
 plane.
 
+Seasonal cross-check:
+
+`seasonal_discriminator` predates the geometry columns and used to be the only
+way to tell a ground-slope asymmetry from an obstruction: it reads measured
+`pagi`/`sore` across two date ranges and calls a stable-signed, slowly drifting
+asymmetry geometry. With per-string cross-slope available its role changes from
+discriminator to **validator**, and `validate_geometry_seasonally` runs the two
+against each other. They are independent — the seasonal test never sees a
+cross-slope, and the residual comes from a pvlib clear-sky model never fitted to
+telemetry — so agreement is evidence rather than tautology.
+
+Disagreement is the more informative outcome. `MUSIMAN_TERLALU_LONGGAR` marks a
+string the seasonal test calls geometry while the residual still exceeds the
+gap: a permanent structure produces exactly the stable-signed, slowly drifting
+signature the seasonal rule keys on, which is what could not be separated before
+coordinates existed. Those strings still get a site visit. `residual_drift`
+tests the part of the model most likely to be wrong, its seasonal scaling: for a
+genuinely geometric string the residual must be far more stable across seasons
+than the raw asymmetry it replaced. Where no trusted cross-slope exists the
+validator reports `TIDAK_BERLAKU` rather than agreement, so a string that was
+never checked is not read as one that passed.
+
+Running it needs a second diagnostic workbook from a different part of the year;
+`String_Geometry_Rescore.ipynb` activates the check when `WORKBOOK_MUSIM_LAIN`
+is set. The wider the seasonal separation the sharper the test: `k` differs by
+22.5 % between solstices but only 8.8 % between April and June.
+
 Acceptance criteria:
 - Classification distinguishes soiling-shaped from shading-shaped deficits per
   string, and emits the hourly ratio profile behind that call.
