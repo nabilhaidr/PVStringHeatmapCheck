@@ -2,8 +2,8 @@
 
 ## PV Module Performance Analytics Notebook and Pipeline
 
-Status: Draft v0.2  
-Date: 2026-07-10 (v0.1: 2026-05-27)  
+Status: Draft v0.3  
+Date: 2026-08-06 (v0.2: 2026-07-10, v0.1: 2026-05-27)  
 Repository: `SolarYieldPro-main/kodingan pv string`  
 Primary runtime: Google Colab  
 Primary storage: Google Drive  
@@ -486,6 +486,115 @@ Acceptance criteria:
   with, never as ground truth: it covers WB03-WB10 only and its attribution
   method is not documented to us.
 
+### 8.15 String Intraday Diagnostic and Ground Geometry
+
+Requirement:
+- Separate soiling from shading at the level of the individual string. 8.9 M2a
+  Shading cannot reach this: it works on inverter aggregates, and one or two
+  shaded strings among 24-28 healthy ones barely move the aggregate CV.
+
+Core functions/modules:
+- `pv_pipeline.string_intraday_diagnostic`
+- `build_string_geometry.py`, which produces `config/string_geometry.csv`
+- Notebooks `output_string/String_Intraday_Diagnostic.ipynb` (full run from
+  baseline CSVs) and `output_string/String_Geometry_Rescore.ipynb` (re-scores an
+  existing workbook without re-reading the baseline)
+
+Key calculations:
+
+```text
+ratio       = P_string / median(P_siblings on same inverter, same timestamp)
+soiling     -> proportional loss; ratio FLAT from morning to afternoon
+shading     -> loss concentrated in specific hours
+ratio > 1.0 -> panel is HEALTHY; a dirty or damaged panel cannot outperform
+               clean siblings, so the deficit is an obstruction at other hours
+```
+
+Categories, in priority order: `DEAD_OR_OFFLINE`, `SHADING_PULIH` (recovery
+branch, ratio >= 1.02), `SHADING_SORE` (early-death branch, dead at the last
+hour on >= 40 % of days), `SHADING_PAGI` / `SHADING_SORE` (asymmetry branch,
+`|pagi - sore| >= 0.12`), `UNIFORM`, `CAMPURAN`. A directional label can come
+from either the early-death or the asymmetry branch; downstream interpretation
+must respect which one fired.
+
+Ground geometry evidence:
+
+`ratio` compares a string against the median of its inverter siblings. On
+WB03-WB10 those siblings do not face the same direction: the PV tables follow
+the hillside contour rather than sitting on levelled benches (confirmed by field
+and drone photographs, 2026-08-06), so the ground slope at a string's position
+*is* the orientation of its module plane. The spread of `cross_slope_deg`
+*within a single inverter* has a median of 21.7 degrees, and every inverter is
+affected. Part of every morning-afternoon asymmetry is therefore pure geometry.
+
+Three evidence columns quantify that part:
+
+| Column | Meaning |
+| --- | --- |
+| `cross_slope_deg` | East-west component of the ground slope at the string, signed: positive = ground falls east = mornings stronger. NULL where unknown. |
+| `expected_ampm_asym` | Asymmetry the cross-slope alone should produce, referenced to the inverter median. |
+| `ampm_residual` | `(pagi - sore) - expected_ampm_asym`. This is the diagnostic signal. |
+
+The expectation has the form `k(day_of_year) * sin(cross_slope)`, fitted to
+pvlib clear-sky asymmetry derived at the site latitude (-0.9912), 10 degree tilt
+facing north, morning window 07-09 and afternoon window 15-17 - the same windows
+`classify_strings` uses. That form reproduces all twenty derived values to
+within 0.0005; it explains why the seasonal drift is a constant 22.5 % of its
+own value regardless of cross-slope magnitude, since `sin` factors the magnitude
+out (this is what makes `SEASONAL_REL_RANGE_MAX = 0.30` legitimate as a single
+threshold for both gentle and steep strings); and it extrapolates correctly to
+the site's real range of -29.8 to +31.5 degrees, where a linear fit overshoots.
+
+The reference is the **inverter median**, not flat ground, because `ratio` is
+itself relative to the inverter median:
+
+```text
+expected_ampm_asym[i] = asym(cross_slope[i]) - median  asym(cross_slope[j])
+                                                     j on the same inverter
+```
+
+A flat-ground reference would leave a systematic per-inverter offset that no
+downstream reader would notice.
+
+These columns are **evidence, not correction**. `ratio`, `deficit_pct` and
+`kategori` are never adjusted. Correcting them needs a per-string per-timestamp
+POA model, not arithmetic - the same reason the cable voltage-drop columns in
+8.11 are presented as evidence rather than applied as a correction.
+
+`config/string_geometry.csv` (3,570 rows, 140 inverters, WB03-WB10 only;
+WB01-WB02 sit on flat ground and are not mapped):
+
+| Field | Meaning |
+| --- | --- |
+| `inverter_id`, `st`, `pv`, `mppt` | Field string number and its Huawei PV/MPPT channel. Join key to telemetry is `inverter_id` + `pv`; `st` comes from the DXF, `pv` from the as-built DC cable list. |
+| `north`, `east`, `lat`, `lon`, `elev_m` | Position in WGS 84 / UTM zone 50S and in degrees. |
+| `slope_deg`, `aspect_deg`, `cross_slope_deg` | Local ground plane fitted from `dsm.tif` over a 15 m (east-west) by 4 m (north-south) window at the string position. |
+| `plane_rms_m` | Plane fit residual. Slope fields are left empty above 0.5 m (62 strings): the surface is not planar enough to trust. |
+
+Known data limits, deliberately left NULL rather than guessed:
+
+- 56 rows have no `pv`, from the 21 inverters whose as-built cable list
+  disagrees with `strings.yaml`. `strings.yaml` remains authoritative (8.2).
+- 8 inverters carry string labels that appear at two different DXF positions, a
+  median of 308 m apart. Those `(inverter_id, pv)` pairs resolve to NULL rather
+  than silently taking the first match.
+- Against the June 2026 diagnostic workbook, 92.1 % of classified strings
+  receive a trusted cross-slope.
+
+Acceptance criteria:
+- Classification distinguishes soiling-shaped from shading-shaped deficits per
+  string, and emits the hourly ratio profile behind that call.
+- A string with no geometry row reads NULL in all three columns, never 0.
+- `ratio`, `deficit_pct` and `kategori` are identical with and without
+  `string_geometry` supplied.
+- Field-visit ranking for directional labels uses `ampm_residual`, not raw
+  asymmetry: large asymmetry with a near-zero residual is geometry and needs no
+  visit.
+- The residual is interpreted only for labels that came from the asymmetry
+  branch. Labels from the early-death and recovery branches are outside its
+  scope, because a cross-slope can neither stop a string from producing nor
+  make it outperform its siblings.
+
 ## 9. Tools and Tech Stack
 
 ### Runtime and Workflow
@@ -535,6 +644,10 @@ Acceptance criteria:
 | `pv_pipeline/physics.py` | Expected power, Kt, DeltaP, PR, energy integration. |
 | `pv_pipeline/generation/` | Generation Excel loader. |
 | `pv_pipeline/baseline.py` | Healthy baseline accumulator. |
+| `pv_pipeline/string_intraday_diagnostic.py` | Per-string intraday soiling vs shading classifier, plus cable and ground-geometry evidence columns. |
+| `build_site_layout.py` | Setting-out stakes, plot polygons, UTM conversion and DSM plane fitting into `config/site_layout.yaml`. |
+| `build_string_geometry.py` | Per-string coordinates and ground slope into `config/string_geometry.csv`. |
+| `output_string/_build_*_notebook.py` | Builders that regenerate the Colab notebooks (`String_Intraday_Diagnostic`, `String_Geometry_Rescore`). Edit the builder, not the `.ipynb`. |
 | `run_soiling_analysis.py` | CLI runner for soiling SRR analysis from baseline CSVs (site / WB group / per-WB). |
 | `rekap_m2e_allstrings.py` | Cross-date recap of M2e `AllStrings` sheets into one Excel. |
 | `train_lstm_ae.py` | LSTM Autoencoder training script (healthy baseline input). |
@@ -559,6 +672,12 @@ Acceptance criteria:
   - `config/site_geometry.yaml`
   - `config/panel_spec.yaml`
   - `config/baseline.yaml`
+- `config/string_geometry.csv` - per-string coordinates and ground slope (8.15).
+  Committed, unlike the raw drawings it is derived from.
+- As-built drawing sources, used offline by the two builder scripts and not
+  needed at pipeline runtime: `raw data input/1129.dxf` (string-number labels
+  with UTM insertion points), `dsm.tif` (topographic survey DSM, 0.1187 m/px),
+  `List of DC Cables 0411.xls` (ST-to-PV mapping and cable length / voltage drop).
 
 ### Outputs
 
@@ -569,6 +688,10 @@ Acceptance criteria:
 - Availability summary.
 - Soiling SRR workbook (`soiling_srr_*.xlsx`) and sawtooth trend PNG per analysis scope.
 - M2e cross-date recap Excel (`rekap_m2e_allstrings.xlsx`).
+- String intraday diagnostic workbook (`string_intraday_diagnostic_*.xlsx`:
+  `Klasifikasi`, `Profil_Jam`, `Uji_Hujan`, `Metadata`) and hourly profile PNG.
+- Geometry rescore workbook (`geometry_rescore_*.xlsx`), re-judging an existing
+  diagnostic workbook against `config/string_geometry.csv`.
 - Baseline CSV/parquet.
 - Final `df_plot` CSV export.
 
@@ -635,6 +758,9 @@ The product is considered usable for engineering review when:
 | Partial inverter outage depresses PR | SRR reads outage as soiling | M2e availability mask removes affected inverter-days from energy and capacity (enabled via `availability_dir`). |
 | LSTM needs clean baseline | Model may learn faults as normal | Use baseline accumulator and manual review before training. |
 | Curtailment not fully integrated into every detector | False positives during power limitation | Add curtailment-aware detector gating. |
+| Sibling ratio compares strings that face different directions | Morning/afternoon labels partly reflect ground slope rather than obstruction; field crews sent to plots with nothing to prune | Report `ampm_residual` beside the raw asymmetry and rank field visits by it (8.15). |
+| String labels ambiguous in the as-built DXF | A guessed position would be presented to engineers as measured evidence | The 8 affected inverters resolve to NULL cross-slope; NULL is never rendered as "flat". |
+| Geometry explains asymmetry but not deficit level | A string cleared of a directional label may still be read as "nothing wrong" | 8.15 states explicitly that a midday deficit survives the geometry test and still needs investigation. |
 
 ---
 
@@ -651,6 +777,7 @@ The product is considered usable for engineering review when:
 
 - Calibrate Isolation Forest.
 - Mature soiling SRR workflow. (Done 2026-07: temperature correction, M2e availability mask, monthly loss breakdown, per-string cleaning recommendation, sawtooth replotting from workbook.)
+- Separate soiling from shading per string, below inverter-aggregate resolution. (Done 2026-08: `string_intraday_diagnostic` module, cable voltage-drop evidence, and ground-geometry evidence derived from the as-built DXF and the survey DSM. See 8.15.)
 - Add curtailment-aware gating to detector decisions.
 - Add complete loss waterfall.
 
@@ -691,4 +818,5 @@ The product is considered usable for engineering review when:
 4. What cleaning cost and tariff assumptions should be used for soiling economics?
 5. What is the minimum review workflow before data enters healthy baseline?
 6. Should Streamlit dashboard become a required production deliverable or remain optional?
+7. Should a per-string POA model be built? 8.15 quantifies the morning-afternoon asymmetry a cross-slope produces, but deliberately stops short of the level effect, so a midday deficit is never attributed to geometry. Closing that gap would allow correcting `ratio` instead of only annotating it - and would also decide whether the cable voltage-drop columns in 8.11 stay evidence-only.
 
