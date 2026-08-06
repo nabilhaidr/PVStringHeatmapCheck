@@ -677,7 +677,13 @@ Acceptance criteria:
 - As-built drawing sources, used offline by the two builder scripts and not
   needed at pipeline runtime: `raw data input/1129.dxf` (string-number labels
   with UTM insertion points), `dsm.tif` (topographic survey DSM, 0.1187 m/px),
-  `List of DC Cables 0411.xls` (ST-to-PV mapping and cable length / voltage drop).
+  `List of DC Cables 0411.xls` (ST-to-PV mapping and cable length / voltage drop),
+  and the `IKN-CE-PP-DW-004` / `ISPP-PSC-DWG-1004-001` drawings.
+  The builders resolve these by name prefix anywhere under `raw data input/`, so
+  the drawings can be filed into subfolders. The shallowest match wins, and two
+  matches at the same depth raise rather than pick one. Runtime loaders (POA,
+  cell temperature, generation, rainfall, cleaning schedule, cable list) still
+  use flat hardcoded paths and expect their file directly in `raw data input/`.
 
 ### Outputs
 

@@ -35,6 +35,40 @@ RAW_DIR = "raw data input"
 OUT_PATH = os.path.join("config", "site_layout.yaml")
 SITE_GEOMETRY_PATH = os.path.join("config", "site_geometry.yaml")
 
+
+def find_raw(prefix: str, *, root: str = RAW_DIR,
+             required: bool = True) -> Optional[str]:
+    """Cari berkas di bawah ``root`` yang namanya diawali ``prefix``, rekursif.
+
+    Gambar sumber boleh dirapikan ke dalam subfolder ("Drawing/", folder
+    ekspor OneDrive) tanpa membuat builder berhenti menemukannya.
+
+    Yang PALING DANGKAL menang: folder ekspor adalah tempat menumpuk salinan
+    lama, dan salinan terkubur tidak boleh menggeser berkas kerja di akar.
+    Dua kandidat pada kedalaman yang SAMA tidak punya dasar pemilihan sama
+    sekali, jadi itu dilaporkan sebagai galat alih-alih ditebak diam-diam.
+    """
+    cocok: List[Tuple[int, str]] = []
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name.startswith(prefix):
+                path = os.path.join(dirpath, name)
+                cocok.append((os.path.relpath(path, root).count(os.sep), path))
+    if not cocok:
+        if required:
+            raise FileNotFoundError(
+                f"{prefix!r} tidak ada di bawah {root!r} (sudah dicari rekursif)."
+            )
+        return None
+    cocok.sort()
+    dangkal = [path for depth, path in cocok if depth == cocok[0][0]]
+    if len(dangkal) > 1:
+        raise RuntimeError(
+            f"{prefix!r} cocok dengan {len(dangkal)} berkas sederajat di "
+            f"{root!r}; tidak ada dasar memilih:\n  " + "\n  ".join(dangkal)
+        )
+    return dangkal[0]
+
 # Tabel DW-004 memakai 3 desimal, callout ISPP halaman 19 memakai 4.
 NORTHING_RE = re.compile(r"^98\d{5}\.\d{1,4}$")
 EASTING_RE = re.compile(r"^4\d{5}\.\d{1,4}$")
@@ -291,9 +325,20 @@ def fit_plane(samples: Sequence[Tuple[float, float, float]]) -> Optional[Dict]:
 
 # DSM survei topografi (WGS 84 / UTM 50S, 0,1187 m/piksel). 298 MB -- di luar
 # repo, dirujuk lewat path seperti dc_cable_list_path.
-DSM_PATH = os.path.join(
-    RAW_DIR, "Meteorological_and_Hydrological_Survey__Report PLTS IKN", "dsm.tif",
+DSM_NAME = "dsm.tif"
+# Lokasi lazimnya, dipakai hanya untuk pesan bila berkasnya memang tidak ada.
+DSM_FALLBACK = os.path.join(
+    RAW_DIR, "Meteorological_and_Hydrological_Survey__Report PLTS IKN", DSM_NAME,
 )
+
+
+def dsm_path() -> str:
+    """Path ``dsm.tif``, dicari rekursif; lokasi lazimnya bila tidak ketemu.
+
+    Selalu mengembalikan string supaya ``open_dsm`` tetap memegang kontrak
+    lamanya: berkas tidak ada -> ``(None, None)``, bukan galat.
+    """
+    return find_raw(DSM_NAME, required=False) or DSM_FALLBACK
 DSM_NODATA = -9000.0
 # Jendela fit bidang. Meja PV lebar 4,95 m dengan pitch 7,12 m, jadi buffer
 # 10 m per sisi memberi jendela >= 20 m -- cukup untuk merata-ratakan struktur
@@ -467,11 +512,12 @@ def _assert_matches_site_geometry(lat: float, lon: float) -> float:
 def main() -> None:
     import yaml
 
-    pdf_name = next(n for n in os.listdir(RAW_DIR) if n.startswith(PDF_PREFIX))
-    blocks = extract_blocks(os.path.join(RAW_DIR, pdf_name))
-    dsm, dsm_header = open_dsm(DSM_PATH)
+    pdf_path = find_raw(PDF_PREFIX)
+    blocks = extract_blocks(pdf_path)
+    dsm_file = dsm_path()
+    dsm, dsm_header = open_dsm(dsm_file)
     if dsm is None:
-        print(f"[site-layout] DSM tidak ada ({DSM_PATH}) -- elevasi dilewati.")
+        print(f"[site-layout] DSM tidak ada ({dsm_file}) -- elevasi dilewati.")
 
     doc_blocks: Dict[str, Dict] = {}
     all_points: List[Dict] = []
@@ -504,9 +550,9 @@ def main() -> None:
         doc_blocks[wb] = entry
         all_points.extend(points)
 
-    ispp_name = next((n for n in os.listdir(RAW_DIR) if n.startswith(ISPP_PREFIX)), None)
-    if ispp_name:
-        phase_one = extract_phase_one(os.path.join(RAW_DIR, ispp_name))
+    ispp_path = find_raw(ISPP_PREFIX, required=False)
+    if ispp_path:
+        phase_one = extract_phase_one(ispp_path)
         if phase_one:
             entry = summarize_block(phase_one)
             entry["n_segments"] = 0
@@ -536,7 +582,7 @@ def main() -> None:
 
     doc = {
         "meta": {
-            "source": f"{RAW_DIR}/{pdf_name}",
+            "source": pdf_path.replace(os.sep, "/"),
             "generator": "build_site_layout.py",
             "crs": "EPSG:32750 (WGS 84 / UTM zone 50S)",
             "kolom_x_adalah": "northing (DW-004); pada gambar ISPP X = easting",
@@ -552,11 +598,11 @@ def main() -> None:
                         f"kosong histogram jarak (25-30 m), jadi 25 m dan 30 m "
                         f"memberi hasil identik.",
             "elevasi": (
-                f"points[].elev_m disampel dari {DSM_PATH} (WGS 84 / UTM 50S, "
+                f"points[].elev_m disampel dari {dsm_file} (WGS 84 / UTM 50S, "
                 f"0,1187 m/piksel). segments[].terrain = fit bidang least-squares "
                 f"pada footprint petak + buffer {PLANE_BUFFER_M:.0f} m, langkah "
                 f"{PLANE_STEP_M:.0f} m. aspect_deg = arah TURUN (0=U, 90=T)."
-                if os.path.exists(DSM_PATH) else "tidak tersedia (dsm.tif tak ada)."
+                if dsm is not None else "tidak tersedia (dsm.tif tak ada)."
             ),
             "peringatan_dsm":
                 "terrain di sini adalah tanah SEBELUM konstruksi (survei Okt "
@@ -589,7 +635,7 @@ def main() -> None:
         yaml.safe_dump(doc, handle, sort_keys=False, allow_unicode=True,
                        default_flow_style=False, width=100)
 
-    print(f"[site-layout] {pdf_name}")
+    print(f"[site-layout] {pdf_path}")
     for wb, entry in doc_blocks.items():
         print(f"  {wb}: {entry['n_points']:3d} titik  {entry['n_segments']:2d} petak  "
               f"pusat ({entry['center']['lat']:.6f}, {entry['center']['lon']:.6f})  "

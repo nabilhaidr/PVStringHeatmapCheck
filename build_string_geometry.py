@@ -29,7 +29,8 @@ import re
 from typing import Dict, List, Optional
 
 from build_site_layout import (
-    DSM_PATH,
+    dsm_path,
+    find_raw,
     fit_plane,
     open_dsm,
     sample_dsm,
@@ -38,7 +39,7 @@ from build_site_layout import (
 
 RAW_DIR = "raw data input"
 DXF_NAME = "1129.dxf"
-CABLE_LIST = os.path.join(RAW_DIR, "List of DC Cables 0411.xls")
+CABLE_NAME = "List of DC Cables 0411.xls"
 OUT_PATH = os.path.join("config", "string_geometry.csv")
 
 LABEL_RE = re.compile(r"^WB(\d{2})INV(\d{2})ST(\d+)$", re.IGNORECASE)
@@ -136,24 +137,27 @@ def local_plane(image, header, north: float, east: float) -> Optional[Dict]:
 
 def _st_to_pv() -> Dict:
     """(wb, inv, st) -> (pv, mppt) dari as-built DC cable list. {} bila absen."""
-    if not os.path.exists(CABLE_LIST):
-        print(f"[string-geometry] cable list tidak ada ({CABLE_LIST}); "
+    cable_path = find_raw(CABLE_NAME, required=False)
+    if cable_path is None:
+        print(f"[string-geometry] cable list tidak ada ({CABLE_NAME}); "
               f"kolom pv/mppt dikosongkan.")
         return {}
     from pv_pipeline.m2a.cleaning_report import build_st_to_pv, load_dc_cable_map
 
-    return build_st_to_pv(load_dc_cable_map(CABLE_LIST))
+    return build_st_to_pv(load_dc_cable_map(cable_path))
 
 
 def main() -> None:
-    labels = parse_dxf_string_labels(os.path.join(RAW_DIR, DXF_NAME))
+    dxf_path = find_raw(DXF_NAME)
+    labels = parse_dxf_string_labels(dxf_path)
     if not labels:
-        raise SystemExit(f"{DXF_NAME}: tidak ada label string ditemukan.")
-    print(f"[string-geometry] {DXF_NAME}: {len(labels)} label string")
+        raise SystemExit(f"{dxf_path}: tidak ada label string ditemukan.")
+    print(f"[string-geometry] {dxf_path}: {len(labels)} label string")
 
-    image, header = open_dsm(DSM_PATH)
+    dsm_file = dsm_path()
+    image, header = open_dsm(dsm_file)
     if image is None:
-        raise SystemExit(f"DSM tidak ada: {DSM_PATH}")
+        raise SystemExit(f"DSM tidak ada: {dsm_file}")
     st_map = _st_to_pv()
 
     rows: List[Dict] = []

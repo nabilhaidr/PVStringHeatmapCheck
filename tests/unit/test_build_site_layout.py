@@ -17,6 +17,7 @@ import pytest
 from build_site_layout import (
     BLOCK_GAP_M,
     dsm_pixel,
+    find_raw,
     fit_plane,
     parse_callout_pairs,
     parse_coordinate_items,
@@ -24,6 +25,76 @@ from build_site_layout import (
     summarize_block,
     utm50s_to_latlon,
 )
+
+
+# --- pencarian berkas sumber di raw data input --------------------------------
+
+
+def _taruh(root, *parts):
+    """Buat berkas kosong di ``root/parts`` beserta foldernya."""
+    path = root.joinpath(*parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    return path
+
+
+def test_find_raw_locates_a_file_sitting_at_the_top_level(tmp_path):
+    """Tata letak yang berlaku sekarang harus tetap terselesaikan.
+
+    Empat dari lima berkas sumber masih di akar folder. Pencarian rekursif
+    tidak boleh mengubah apa pun bagi mereka.
+    """
+    want = _taruh(tmp_path, "IKN-CE-PP-DW-004 Mounting Foundation Layout.pdf")
+
+    assert find_raw("IKN-CE-PP-DW-004", root=str(tmp_path)) == str(want)
+
+
+def test_find_raw_follows_a_file_moved_into_a_subfolder(tmp_path):
+    """Inti perubahan: gambar boleh dirapikan ke dalam subfolder.
+
+    Pencarian lama memakai os.listdir yang datar, sehingga memindahkan PDF
+    ke folder "Drawing" membuat build_site_layout berhenti menemukannya --
+    dan untuk ISPP kegagalannya diam, bukan berisik.
+    """
+    want = _taruh(tmp_path, "Drawing", "ISPP-PSC-DWG-1004-001 - PV Array.pdf")
+
+    assert find_raw("ISPP-PSC-DWG-1004-001", root=str(tmp_path)) == str(want)
+
+
+def test_find_raw_prefers_the_shallowest_copy(tmp_path):
+    """Salinan arsip yang terkubur tidak boleh menggeser berkas kerja.
+
+    Folder ekspor seperti OneDrive_2026-08-06 memang tempat menumpuk salinan
+    lama. Kalau salinan di dalamnya bisa menang, hasil build berubah diam-diam
+    hanya karena seseorang mengunggah ulang satu berkas.
+    """
+    want = _taruh(tmp_path, "1129.dxf")
+    _taruh(tmp_path, "OneDrive_2026-08-06", "ekspor lama", "1129.dxf")
+
+    assert find_raw("1129.dxf", root=str(tmp_path)) == str(want)
+
+
+def test_find_raw_refuses_to_choose_between_copies_at_the_same_depth(tmp_path):
+    """Dua kandidat sederajat = tidak ada dasar memilih. Harus berisik.
+
+    Memilih diam-diam adalah kesalahan yang sudah dibayar sekali di proyek
+    ini: label DXF yang muncul di dua posisi dulu diambil yang pertama.
+    """
+    _taruh(tmp_path, "Drawing", "1129.dxf")
+    _taruh(tmp_path, "Layout", "1129.dxf")
+
+    with pytest.raises(RuntimeError) as err:
+        find_raw("1129.dxf", root=str(tmp_path))
+    pesan = str(err.value)
+    assert "Drawing" in pesan and "Layout" in pesan
+
+
+def test_find_raw_separates_missing_optional_from_missing_required(tmp_path):
+    """DSM boleh tidak ada -- elevasi tinggal dilewati. Gambar sumber tidak."""
+    assert find_raw("dsm.tif", root=str(tmp_path), required=False) is None
+
+    with pytest.raises(FileNotFoundError):
+        find_raw("IKN-CE-PP-DW-004", root=str(tmp_path))
 
 
 # --- parsing tabel koordinat --------------------------------------------------
