@@ -142,6 +142,11 @@ empty_pv_map:
   WB06-INV09: [5, 19, 24]
   WB06-INV10: [5, 19, 24]                  # edited 14 to 19
   WB06-INV11: [5, 14, 19, 24]
+  # Telemetri 2026-08: PV13 nol, PV14 normal -- koreksi "14 to 13" TERVERIFIKASI.
+  # As-built DC Cable List justru menyebut PV14 yang kosong; as-built yang keliru,
+  # bukan file ini. Tiga sumber desain (General Layout, DW-009, file ini) sama-sama
+  # memberi 3.570 string WB03-10; hanya as-built yang 3.562. Berlaku juga untuk 20
+  # baris "edited" lain: jangan diselaraskan ke as-built tanpa bukti telemetri.
   WB06-INV12: [5, 13, 19, 24]              # edited 14 to 13
   WB06-INV13: [5, 19, 24]
   WB06-INV14: [5, 19, 24]
