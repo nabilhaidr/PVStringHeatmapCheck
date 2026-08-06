@@ -10,10 +10,15 @@ Kenapa penting:
 """
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from build_site_layout import (
     BLOCK_GAP_M,
+    dsm_pixel,
+    fit_plane,
+    parse_callout_pairs,
     parse_coordinate_items,
     segment_points,
     summarize_block,
@@ -184,6 +189,134 @@ def test_segment_reports_its_own_center_and_extent():
     lat, lon = utm50s_to_latlon(9890050.0, 459000.0)
     assert segment["center"]["lat"] == pytest.approx(lat, abs=1e-7)
     assert segment["center"]["lon"] == pytest.approx(lon, abs=1e-7)
+
+
+# --- callout koordinat gambar ISPP (WB01/WB02) --------------------------------
+
+
+def test_callout_pairs_reads_easting_above_northing():
+    """Tata letak halaman 1 ISPP-PSC-DWG-1004-001: 'X =' di atas 'Y ='.
+
+    Di keluarga gambar ini X = Easting dan Y = Northing -- KEBALIKAN dari
+    DW-004. Pasangan dipilih berdasarkan BESARAN (98xxxxx vs 4xxxxx), bukan
+    label, supaya salah baca label tidak memindahkan site ribuan kilometer.
+    """
+    items = [(160.0, 139.0, "459453.06"), (160.0, 147.0, "9890258.40")]
+
+    assert parse_callout_pairs(items) == [
+        {"north": 9890258.40, "east": 459453.06},
+    ]
+
+
+def test_callout_pairs_reads_northing_above_easting():
+    """Halaman 19 mencetaknya terbalik. Satu titik hilang kalau hanya satu
+    arah yang ditangani."""
+    items = [(680.0, 408.0, "9890197.9535"), (680.0, 414.0, "459684.9590")]
+
+    assert parse_callout_pairs(items) == [
+        {"north": 9890197.9535, "east": 459684.9590},
+    ]
+
+
+def test_callout_pairs_does_not_join_values_from_different_columns():
+    """Callout berjauhan milik sudut yang berbeda."""
+    items = [(160.0, 139.0, "459453.06"), (900.0, 147.0, "9890258.40")]
+
+    assert parse_callout_pairs(items) == []
+
+
+# --- indeks piksel DSM --------------------------------------------------------
+
+# Header nyata dsm.tif: origin di sudut BARAT-LAUT, baris bertambah ke selatan.
+DSM_HDR = (459211.512, 9891574.022, 0.1187, 0.1187)
+
+
+def test_dsm_pixel_maps_raster_origin_to_first_pixel():
+    """Titik tiepoint = sudut piksel (0, 0). Salah setengah piksel pun
+    tidak apa; salah TANDA pada baris membalik utara-selatan dan menaruh
+    elevasi puncak bukit di lembah."""
+    assert dsm_pixel(DSM_HDR, 9891574.022, 459211.512) == (0, 0)
+
+
+def test_dsm_pixel_row_increases_towards_south():
+    """Northing turun -> baris naik. Ini arah yang gampang terbalik."""
+    col, row = dsm_pixel(DSM_HDR, 9891574.022 - 10 * 0.1187, 459211.512)
+
+    assert (col, row) == (0, 10)
+
+
+def test_dsm_pixel_column_increases_towards_east():
+    col, row = dsm_pixel(DSM_HDR, 9891574.022, 459211.512 + 10 * 0.1187)
+
+    assert (col, row) == (10, 0)
+
+
+# --- fit bidang: slope & aspect -----------------------------------------------
+
+
+def _plane(dz_de, dz_dn, n=5, step=10.0, z0=80.0):
+    """Grid sintetis di atas bidang z = z0 + dz_de*dE + dz_dn*dN."""
+    return [(9890000.0 + j * step, 459000.0 + i * step,
+             z0 + dz_de * (i * step) + dz_dn * (j * step))
+            for i in range(n) for j in range(n)]
+
+
+def test_fit_plane_reports_zero_slope_on_flat_ground():
+    out = fit_plane(_plane(0.0, 0.0))
+
+    assert out["slope_deg"] == pytest.approx(0.0, abs=1e-9)
+    assert out["rms_m"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_fit_plane_aspect_zero_when_ground_falls_towards_north():
+    """Aspect = arah TURUN. Tanah yang menurun ke utara menghadap utara (0)."""
+    out = fit_plane(_plane(0.0, -math.tan(math.radians(10.0))))
+
+    assert out["slope_deg"] == pytest.approx(10.0, abs=1e-6)
+    assert out["aspect_deg"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_fit_plane_aspect_ninety_when_ground_falls_towards_east():
+    """Konvensi GIS: 0=U, 90=T, 180=S, 270=B."""
+    out = fit_plane(_plane(-math.tan(math.radians(5.0)), 0.0))
+
+    assert out["slope_deg"] == pytest.approx(5.0, abs=1e-6)
+    assert out["aspect_deg"] == pytest.approx(90.0, abs=1e-6)
+
+
+def test_fit_plane_aspect_two_seventy_when_ground_falls_towards_west():
+    out = fit_plane(_plane(+math.tan(math.radians(5.0)), 0.0))
+
+    assert out["aspect_deg"] == pytest.approx(270.0, abs=1e-6)
+
+
+def test_fit_plane_rms_exposes_a_surface_that_is_not_a_plane():
+    """dsm.tif adalah SURFACE model -- memuat vegetasi dan berpotensi meja PV.
+
+    RMS residual adalah satu-satunya rem terhadap pelaporan kemiringan meja
+    sebagai kemiringan tanah. Tanpa angka ini, petak berisi struktur akan
+    tampak sama meyakinkannya dengan petak yang bersih.
+    """
+    # Papan catur pada grid GENAP: jumlahnya nol dan tidak berkorelasi dengan
+    # E maupun N, jadi bidang terbaiknya tetap datar dan seluruh simpangan
+    # +/-2 m jatuh ke residual.
+    bumpy = []
+    for north, east, z in _plane(0.0, 0.0, n=4):
+        i = round((east - 459000.0) / 10.0)
+        j = round((north - 9890000.0) / 10.0)
+        bumpy.append((north, east, z + (2.0 if (i + j) % 2 == 0 else -2.0)))
+
+    out = fit_plane(bumpy)
+
+    assert out["slope_deg"] == pytest.approx(0.0, abs=1e-9)
+    assert out["rms_m"] == pytest.approx(2.0, abs=1e-6)
+
+
+def test_fit_plane_needs_three_points_to_define_a_plane():
+    """Banyak petak berupa rantai patok segaris; bidang tak bisa ditentukan
+    dari situ, dan menebaknya lebih buruk daripada mengaku tidak tahu."""
+    assert fit_plane([(9890000.0, 459000.0, 70.0),
+                      (9890010.0, 459000.0, 71.0)]) is None
 
 
 # --- ringkasan blok -----------------------------------------------------------
