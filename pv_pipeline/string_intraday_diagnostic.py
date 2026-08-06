@@ -46,11 +46,14 @@ DEFAULT_DROPOUT_SHARE: float = 0.40   # >= ini bagian hari mati dini -> shading 
 DEFAULT_AMPM_GAP: float = 0.12        # selisih pagi vs sore -> shading berarah
 
 LONG_COLUMNS: List[str] = ["ts", "inverter_id", "pv", "power_kw"]
+GEOMETRY_COLUMNS: List[str] = [
+    "cross_slope_deg", "expected_ampm_asym", "ampm_residual",
+]
 CLASSIFICATION_COLUMNS: List[str] = [
     "pv_string", "inverter_id", "pv", "n_days", "ratio_median",
     "deficit_pct", "ratio_range", "ratio_max_hourly", "jam_terburuk",
     "jam_terbaik", "pagi", "sore", "dropout_share_pct",
-    "vdrop_pct", "vdrop_minus_inv_median", "kategori",
+    "vdrop_pct", "vdrop_minus_inv_median", *GEOMETRY_COLUMNS, "kategori",
 ]
 RAIN_COLUMNS: List[str] = [
     "pv_string", "event", "ratio_before", "ratio_after", "delta_pp",
@@ -63,6 +66,17 @@ RAIN_COLUMNS: List[str] = [
 # 22,5% tanpa melewatkan obstruksi ringan. Diturunkan dari geometri surya
 # (pvlib clear-sky pada lintang site), bukan disetel ke data.
 SEASONAL_REL_RANGE_MAX: float = 0.30
+
+# Asimetri itu berbentuk ``k(hari) * sin(cross_slope)``. Bentuk sinus bukan
+# pilihan gaya: ia mereproduksi kedua puluh nilai pvlib clear-sky yang sudah
+# diturunkan (cross-slope 2,5-18,3 derajat x empat tanggal) dengan galat
+# maksimum 0,0005, dan ia yang menjelaskan kenapa drift musiman 22,5% KONSTAN
+# terhadap besar cross-slope -- sin memfaktorkan besarannya keluar. Bentuk itu
+# juga yang benar untuk mengekstrapolasi ke rentang nyata site (-29,8 sampai
+# +31,5 derajat), di luar jangkar tabel; pendekatan linear akan melebihkan.
+# ``k`` di 21 Mar / 21 Jun / 21 Sep / 22 Des, interpolasi siklis antar tanggal.
+AMPM_ASYM_DOY: tuple = (80, 172, 264, 356)
+AMPM_ASYM_K: tuple = (2.9775, 2.6104, 2.9039, 3.2693)
 
 SEASONAL_COLUMNS: List[str] = [
     "pv_string", "n_musim", "asym_mean", "asym_rel_range", "verdikt",
@@ -252,11 +266,83 @@ def _attach_cable_metrics(
     return work[CLASSIFICATION_COLUMNS]
 
 
+def expected_ampm_asymmetry(cross_slope_deg, day_of_year):
+    """Asimetri pagi-sore yang HARUS muncul dari cross-slope, relatif meja datar.
+
+    Positif = tanah turun ke timur = pagi lebih kuat. Nilainya dipakai sebagai
+    beda terhadap median se-inverter (lihat ``_attach_geometry_metrics``),
+    bukan langsung, karena ``ratio`` juga relatif median se-inverter.
+    """
+    k = np.interp(day_of_year, AMPM_ASYM_DOY, AMPM_ASYM_K, period=365.25)
+    return k * np.sin(np.radians(cross_slope_deg))
+
+
+def attach_geometry_evidence(
+    classification: pd.DataFrame,
+    string_geometry: Optional[pd.DataFrame],
+    day_of_year: int,
+) -> pd.DataFrame:
+    """Isi kolom bukti kemiringan tanah pada tabel klasifikasi.
+
+    Setiap inverter membandingkan string yang menghadap arah berbeda: sebaran
+    cross-slope DALAM SATU inverter bermedian 21,7 derajat. Sebagian
+    SHADING_PAGI/SHADING_SORE karena itu geometri murni, bukan halangan yang
+    perlu didatangi. ``ampm_residual`` memisahkannya: asimetri besar dengan
+    residual ~0 adalah geometri; residual besar barulah obstruksi.
+
+    Acuannya median se-inverter, sama seperti ``ratio`` dan
+    ``vdrop_minus_inv_median``. Memakai meja datar sebagai acuan akan
+    meninggalkan offset sistematis per inverter -- cross-slope median site
+    -0,7 derajat, tapi per inverter jauh berbeda-beda.
+
+    Kolom ini BUKTI, bukan koreksi: ``ratio`` tidak disentuh. Mengoreksinya
+    butuh model POA per string per timestamp, bukan aritmetika.
+
+    Menerima tabel klasifikasi apa pun yang punya ``inverter_id``, ``pv``,
+    ``pagi``, ``sore`` -- termasuk workbook yang dibuat sebelum kolom ini ada,
+    supaya laporan lama bisa dinilai ulang tanpa membaca ulang CSV baseline.
+    """
+    work = classification.copy()
+    for col in GEOMETRY_COLUMNS:
+        if col not in work.columns:
+            work[col] = np.nan
+    if (work.empty or string_geometry is None or string_geometry.empty
+            or not {"inverter_id", "pv", "cross_slope_deg"}
+            <= set(string_geometry.columns)):
+        return work
+    geo = string_geometry[["inverter_id", "pv", "cross_slope_deg"]].copy()
+    geo["inverter_id"] = geo["inverter_id"].astype(str)
+    geo["_pv_idx"] = pd.to_numeric(geo["pv"], errors="coerce")
+    # Delapan inverter punya label string yang muncul di DUA posisi DXF, median
+    # 308 m terpisah. Label seperti itu tidak menunjuk satu petak, jadi NA --
+    # memilih yang pertama berarti menebak lokasi lalu menyajikannya sebagai bukti.
+    grp = geo.groupby(["inverter_id", "_pv_idx"])["cross_slope_deg"]
+    tegas = grp.first()[grp.nunique(dropna=False) == 1].rename("_cs").reset_index()
+
+    # Kolom ``pv`` di tabel ini berbentuk label ("PV4"), geometri memakai int.
+    work["_pv_idx"] = pd.to_numeric(
+        work["pv"].astype(str).str.extract(r"(\d+)")[0], errors="coerce",
+    )
+    work["inverter_id"] = work["inverter_id"].astype(str)
+    work = work.merge(tegas, on=["inverter_id", "_pv_idx"], how="left")
+    work["cross_slope_deg"] = work.pop("_cs")   # kolom sudah ada -> urutan tetap
+
+    datar = expected_ampm_asymmetry(work["cross_slope_deg"], day_of_year)
+    work["expected_ampm_asym"] = (
+        datar - datar.groupby(work["inverter_id"]).transform("median")
+    ).round(4)
+    work["ampm_residual"] = (
+        work["pagi"] - work["sore"] - work["expected_ampm_asym"]
+    ).round(4)
+    return work.drop(columns=["_pv_idx"])
+
+
 def classify_strings(
     ratio_df: pd.DataFrame,
     profile: pd.DataFrame,
     *,
     cable_metrics: Optional[pd.DataFrame] = None,
+    string_geometry: Optional[pd.DataFrame] = None,
     dead_ratio: float = DEFAULT_DEAD_RATIO,
     recovery_ratio: float = DEFAULT_RECOVERY_RATIO,
     flat_range: float = DEFAULT_FLAT_RANGE,
@@ -322,6 +408,12 @@ def classify_strings(
         })
     out = _attach_cable_metrics(
         pd.DataFrame(rows, columns=CLASSIFICATION_COLUMNS), cable_metrics,
+    )
+    # Asimetri geometris bergeser ~22,5% antar solstis, jadi harapannya dihitung
+    # pada pertengahan rentang tanggal yang benar-benar dianalisis.
+    out = attach_geometry_evidence(
+        out, string_geometry,
+        int(pd.Timestamp(ratio_df["ts"].median()).dayofyear),
     )
     return out.sort_values("ratio_median", ignore_index=True)
 
@@ -470,6 +562,7 @@ def build_intraday_diagnostic(
     empty_pv_map: Optional[Dict[str, List[int]]] = None,
     rain_events: Sequence[dict] = (),
     cable_metrics: Optional[pd.DataFrame] = None,
+    string_geometry: Optional[pd.DataFrame] = None,
     pv_max: int = DEFAULT_PV_MAX,
 ) -> IntradayDiagnosticReport:
     """Orkestrasi penuh: CSV baseline -> klasifikasi + profil + uji hujan."""
@@ -482,6 +575,7 @@ def build_intraday_diagnostic(
     profile = build_hourly_profile(ratio_df)
     classification = classify_strings(
         ratio_df, profile, cable_metrics=cable_metrics,
+        string_geometry=string_geometry,
     )
     rain = rain_recovery(ratio_df, rain_events)
     dates = sorted(ratio_df["ts"].dt.date.unique()) if not ratio_df.empty else []
@@ -504,6 +598,12 @@ def build_intraday_diagnostic(
          "tanggal dekat solstis yang lain, lalu seasonal_discriminator() atas "
          "kedua klasifikasi: geometri bertanda tetap dan bergeser <=30%, "
          "obstruksi berbalik tanda atau melonjak."),
+        ("bukti_geometris",
+         "cross_slope_deg + expected_ampm_asym + ampm_residual. Acuan harapan "
+         "adalah MEDIAN SE-INVERTER, sama seperti ratio -- bukan meja datar. "
+         "Asimetri besar dengan residual ~0 adalah geometri dan tidak perlu "
+         "dikunjungi; residual besar barulah obstruksi. Ini bukti, BUKAN "
+         "koreksi: ratio tidak disentuh."),
         ("form_lapangan", " | ".join(FIELD_OBSERVATION_COLUMNS)),
         ("form_lapangan_kenapa",
          "Apakah meja diratakan (tanah digrading) atau mengikuti kemiringan "

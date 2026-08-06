@@ -245,6 +245,260 @@ def test_report_writes_four_sheets(tmp_path):
     ]
 
 
+# --- kolom bukti geometris: cross-slope, asimetri harapan, residual ------------
+
+# Asimetri pagi-sore (rasio pagi - rasio sore) yang ditimbulkan MURNI oleh
+# kemiringan tanah menyamping, relatif meja datar. Diturunkan dari pvlib
+# clear-sky pada lintang site (-0,9912), tilt 10 derajat menghadap utara,
+# jendela pagi 7-9 dan sore 15-17 -- jendela yang sama dengan classify_strings.
+# Angka ini fisika, bukan penyetelan: tes di bawah menguncinya.
+DERIVED_AMPM_ASYM = {
+    80:  {2.5: 0.130, 5.0: 0.259, 9.2: 0.476, 13.2: 0.680, 18.3: 0.935},
+    172: {2.5: 0.114, 5.0: 0.227, 9.2: 0.417, 13.2: 0.596, 18.3: 0.820},
+    264: {2.5: 0.127, 5.0: 0.253, 9.2: 0.464, 13.2: 0.663, 18.3: 0.912},
+    356: {2.5: 0.143, 5.0: 0.285, 9.2: 0.523, 13.2: 0.747, 18.3: 1.026},
+}
+
+
+def _geom(rows):
+    """DataFrame geometri minimal: inverter_id + pv + cross_slope_deg."""
+    return pd.DataFrame(
+        [{"inverter_id": i, "pv": p, "cross_slope_deg": c} for i, p, c in rows]
+    )
+
+
+def _equinox_days(tmp_path):
+    """Tiga hari mengapit 21 Maret -> timestamp median jatuh di doy 80."""
+    return [_make_day(tmp_path, d, HEALTHY)
+            for d in ("2026-03-20", "2026-03-21", "2026-03-22")]
+
+
+def test_expected_asymmetry_reproduces_derived_clear_sky_physics():
+    """Nilai harapan harus cocok dengan geometri surya yang sudah diturunkan.
+
+    Kalau bentuk fungsinya diganti (linear, tan, polinom), 20 angka ini
+    adalah yang pertama meleset -- dan begitu meleset, ``ampm_residual``
+    ikut bergeser sehingga string geometris murni tampak seperti obstruksi
+    dan regu lapangan dikirim ke petak yang tidak perlu dikunjungi.
+    """
+    from pv_pipeline.string_intraday_diagnostic import expected_ampm_asymmetry
+
+    for doy, per_slope in DERIVED_AMPM_ASYM.items():
+        for cs, want in per_slope.items():
+            got = expected_ampm_asymmetry(cs, doy)
+            assert got == pytest.approx(want, abs=0.005), (doy, cs)
+
+
+def test_expected_asymmetry_follows_slope_direction():
+    """Tanah turun ke TIMUR -> pagi lebih kuat; ke BARAT -> sore lebih kuat.
+
+    Tanda inilah yang membedakan SHADING_PAGI geometris dari SHADING_SORE
+    geometris. Nilai mutlak tanpa tanda akan menukar keduanya.
+    """
+    from pv_pipeline.string_intraday_diagnostic import expected_ampm_asymmetry
+
+    assert expected_ampm_asymmetry(12.0, 80) > 0
+    assert expected_ampm_asymmetry(-12.0, 80) < 0
+    assert expected_ampm_asymmetry(12.0, 80) == pytest.approx(
+        -expected_ampm_asymmetry(-12.0, 80)
+    )
+    assert expected_ampm_asymmetry(0.0, 80) == pytest.approx(0.0)
+
+
+def test_seasonal_drift_is_the_same_fraction_at_every_cross_slope():
+    """Drift musiman harus ~22,5% dari nilainya sendiri, apa pun cross-slope-nya.
+
+    Ini bukan sekadar sifat menarik: ``SEASONAL_REL_RANGE_MAX = 0,30`` sah
+    sebagai ambang tunggal HANYA kalau angkanya tidak bergantung pada besar
+    cross-slope. Bentuk yang membuatnya bergantung (misal linear murni)
+    membuat satu ambang tidak bisa melayani string landai dan curam sekaligus.
+    """
+    from pv_pipeline.string_intraday_diagnostic import (
+        SEASONAL_REL_RANGE_MAX, expected_ampm_asymmetry,
+    )
+
+    fractions = []
+    for cs in (2.5, 9.2, 18.3, 31.5):
+        vals = [expected_ampm_asymmetry(cs, doy) for doy in DERIVED_AMPM_ASYM]
+        fractions.append((max(vals) - min(vals)) / (sum(vals) / len(vals)))
+
+    assert max(fractions) - min(fractions) < 0.001   # praktis identik
+    assert max(fractions) == pytest.approx(0.225, abs=0.005)
+    assert max(fractions) < SEASONAL_REL_RANGE_MAX   # ambang menampung drift
+
+
+def test_expected_asymmetry_is_referenced_to_inverter_median_not_flat_ground(tmp_path):
+    """Pembandingnya median se-inverter, sama seperti ``ratio`` -- bukan meja datar.
+
+    ``ratio`` lahir dari pembagian terhadap median tetangga se-inverter.
+    Kalau SEMUA string satu inverter miring 10 derajat ke timur yang sama,
+    tidak satu pun yang tampak asimetris terhadap tetangganya, jadi harapan
+    yang benar adalah NOL. Memakai meja datar sebagai acuan akan memberi
+    +0,52 untuk keempatnya -- offset sistematis per inverter yang diam-diam
+    menggeser seluruh peringkat kerja lapangan.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    geom = _geom([("WB01-INV01", pv, 10.0) for pv in (1, 2, 3, 4)])
+
+    rep = build_intraday_diagnostic(
+        _equinox_days(tmp_path), inverter_ids=["WB01-INV01"], string_geometry=geom,
+    )
+    out = rep.classification.set_index("pv_string")
+
+    assert out["cross_slope_deg"].tolist() == [10.0] * 4
+    assert out["expected_ampm_asym"].abs().max() == pytest.approx(0.0, abs=0.001)
+
+
+def test_residual_subtracts_geometry_from_measured_asymmetry(tmp_path):
+    """``ampm_residual`` = asimetri terukur - asimetri yang dijelaskan geometri.
+
+    Residual inilah sinyal diagnostiknya. Asimetri besar dengan residual ~0
+    adalah geometri murni dan tidak perlu dikunjungi; residual besar barulah
+    obstruksi nyata.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    # Tiga string datar, satu miring 10 derajat ke timur -> median sin = 0.
+    geom = _geom([("WB01-INV01", 1, 0.0), ("WB01-INV01", 2, 0.0),
+                  ("WB01-INV01", 3, 0.0), ("WB01-INV01", 4, 10.0)])
+
+    rep = build_intraday_diagnostic(
+        _equinox_days(tmp_path), inverter_ids=["WB01-INV01"], string_geometry=geom,
+    )
+    row = rep.classification.set_index("pv_string").loc["WB01-INV01-PV4"]
+
+    # 21 Maret, cross-slope 10 derajat: interpolasi tabel 9,2 -> 13,2 = ~0,517.
+    assert row["expected_ampm_asym"] == pytest.approx(0.517, abs=0.005)
+    # Keempat string identik daya -> asimetri terukur nol; sisanya tak terjelaskan.
+    assert row["pagi"] == pytest.approx(row["sore"])
+    assert row["ampm_residual"] == pytest.approx(-0.517, abs=0.005)
+
+
+def test_string_without_geometry_row_gets_na_not_zero(tmp_path):
+    """Tanpa baris geometri harus NA, bukan 0.
+
+    Nilai 0 terbaca sebagai "tanahnya datar" padahal yang benar "tidak
+    diketahui" -- WB01/WB02 memang tidak ada di string_geometry.csv, dan 62
+    string WB03-10 dikosongkan karena fit bidangnya buruk.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    geom = _geom([("WB01-INV01", 1, 8.0)])
+
+    rep = build_intraday_diagnostic(
+        _equinox_days(tmp_path), inverter_ids=["WB01-INV01"], string_geometry=geom,
+    )
+    row = rep.classification.set_index("pv_string").loc["WB01-INV01-PV4"]
+
+    assert pd.isna(row["cross_slope_deg"])
+    assert pd.isna(row["expected_ampm_asym"])
+    assert pd.isna(row["ampm_residual"])
+
+
+def test_label_found_at_two_positions_yields_na(tmp_path):
+    """Label string yang muncul di dua tempat harus NA, bukan salah satunya.
+
+    Delapan inverter punya label ganda di DXF dengan jarak median 308 m
+    antar kemunculan. Memilih yang pertama berarti menebak lokasi sebuah
+    string dalam radius ratusan meter lalu menyajikannya sebagai bukti.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    geom = _geom([("WB01-INV01", 1, 8.0),
+                  ("WB01-INV01", 4, 17.07), ("WB01-INV01", 4, 9.25)])
+
+    rep = build_intraday_diagnostic(
+        _equinox_days(tmp_path), inverter_ids=["WB01-INV01"], string_geometry=geom,
+    )
+    out = rep.classification.set_index("pv_string")
+
+    assert pd.isna(out.loc["WB01-INV01-PV4", "cross_slope_deg"])
+    assert pd.isna(out.loc["WB01-INV01-PV4", "ampm_residual"])
+    assert out.loc["WB01-INV01-PV1", "cross_slope_deg"] == pytest.approx(8.0)
+
+
+def test_geometry_is_evidence_only_and_never_corrects_the_ratio(tmp_path):
+    """Menambahkan geometri TIDAK boleh menggeser rasio maupun kategori.
+
+    Mengoreksi ``ratio`` memakai cross-slope butuh model POA per string per
+    timestamp, bukan aritmetika -- alasan yang sama dengan penolakan koreksi
+    voltage drop. Kolom geometri disajikan sebagai bukti di samping angka
+    terukur, dan angka terukurnya harus tetap apa adanya.
+    """
+    from pv_pipeline.string_intraday_diagnostic import build_intraday_diagnostic
+
+    paths = _equinox_days(tmp_path)
+    geom = _geom([("WB01-INV01", 1, -20.0), ("WB01-INV01", 2, 0.0),
+                  ("WB01-INV01", 3, 5.0), ("WB01-INV01", 4, 25.0)])
+
+    polos = build_intraday_diagnostic(paths, inverter_ids=["WB01-INV01"])
+    dengan = build_intraday_diagnostic(
+        paths, inverter_ids=["WB01-INV01"], string_geometry=geom,
+    )
+
+    kolom = ["ratio_median", "deficit_pct", "ratio_range", "pagi", "sore",
+             "kategori"]
+    pd.testing.assert_frame_equal(
+        polos.classification.set_index("pv_string")[kolom],
+        dengan.classification.set_index("pv_string")[kolom],
+    )
+
+
+def test_geometry_evidence_attaches_to_a_table_that_predates_the_columns():
+    """Workbook lama harus bisa dinilai ulang tanpa membaca ulang CSV baseline.
+
+    Laporan 20 string yang sudah beredar lahir dari workbook Juni yang dibuat
+    sebelum kolom ini ada. Yang berubah pada penilaian ulang hanyalah bukti
+    geometrisnya -- ``pagi`` dan ``sore`` terukur tidak bergerak sedikit pun --
+    jadi memaksa membaca ulang 700 MB CSV hanya untuk mendapat angka yang sama
+    adalah pemborosan yang menunda koreksi laporan.
+    """
+    from pv_pipeline.string_intraday_diagnostic import attach_geometry_evidence
+
+    lama = pd.DataFrame([   # kolom persis workbook Juni: tanpa vdrop, tanpa geometri
+        {"pv_string": "WB05-INV03-PV1", "inverter_id": "WB05-INV03", "pv": "PV1",
+         "pagi": 1.16, "sore": 0.64, "kategori": "SHADING_SORE"},
+        {"pv_string": "WB05-INV03-PV17", "inverter_id": "WB05-INV03", "pv": "PV17",
+         "pagi": 1.00, "sore": 1.00, "kategori": "UNIFORM"},
+        {"pv_string": "WB05-INV03-PV18", "inverter_id": "WB05-INV03", "pv": "PV18",
+         "pagi": 0.75, "sore": 0.77, "kategori": "UNIFORM"},
+    ])
+    geom = _geom([("WB05-INV03", 1, 12.0), ("WB05-INV03", 17, 0.0),
+                  ("WB05-INV03", 18, 0.0)])
+
+    out = attach_geometry_evidence(lama, geom, 166)   # pertengahan Juni
+
+    # Kolom lama tetap di tempatnya, isinya tidak disentuh.
+    assert list(out.columns)[:6] == list(lama.columns)
+    pd.testing.assert_frame_equal(out[lama.columns], lama)
+
+    row = out.set_index("pv_string").loc["WB05-INV03-PV1"]
+    assert row["cross_slope_deg"] == pytest.approx(12.0)
+    assert row["expected_ampm_asym"] == pytest.approx(0.548, abs=0.005)
+    assert row["ampm_residual"] == pytest.approx(1.16 - 0.64 - 0.548, abs=0.005)
+
+
+def test_geometry_evidence_leaves_columns_present_when_geometry_is_missing():
+    """Tanpa berkas geometri, kolomnya tetap ada berisi NA.
+
+    Sel penilaian di notebook membaca ketiga kolom itu tanpa syarat; hilangnya
+    kolom akan menggagalkan seluruh sel, bukan sekadar mengosongkan satu bukti.
+    """
+    from pv_pipeline.string_intraday_diagnostic import attach_geometry_evidence
+
+    lama = pd.DataFrame([
+        {"pv_string": "WB05-INV03-PV1", "inverter_id": "WB05-INV03", "pv": "PV1",
+         "pagi": 1.16, "sore": 0.64, "kategori": "SHADING_SORE"},
+    ])
+
+    out = attach_geometry_evidence(lama, None, 166)
+
+    assert out["cross_slope_deg"].isna().all()
+    assert out["expected_ampm_asym"].isna().all()
+    assert out["ampm_residual"].isna().all()
+
+
 # --- pembeda musiman: geometri vs obstruksi ------------------------------------
 
 

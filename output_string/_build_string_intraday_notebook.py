@@ -174,12 +174,27 @@ if CABLE_XLS.exists():
 else:
     print(f"cable metrics: {CABLE_XLS.name} tidak ada -> kolom vdrop kosong")
 
+# Setiap inverter membandingkan string yang menghadap arah berbeda: sebaran
+# cross-slope DALAM SATU inverter bermedian 21,7 derajat, dan 100% inverter
+# terdampak. Sebagian SHADING_PAGI/SORE karena itu geometri murni.
+# ``ampm_residual`` memisahkannya -- lihat Cell 5.
+GEOM_CSV = REPO_DIR / "config" / "string_geometry.csv"
+STRING_GEOMETRY = None
+if GEOM_CSV.exists():
+    import pandas as pd
+    STRING_GEOMETRY = pd.read_csv(GEOM_CSV)
+    print(f"geometri: {STRING_GEOMETRY['cross_slope_deg'].notna().sum()} string "
+          f"punya cross-slope terukur")
+else:
+    print(f"geometri: {GEOM_CSV.name} tidak ada -> kolom cross-slope kosong")
+
 REPORT = build_intraday_diagnostic(
     CSV_PATHS,
     inverter_ids=INVERTER_IDS or None,
     empty_pv_map=EMPTY_PV_MAP,
     rain_events=RAIN_EVENTS,
     cable_metrics=CABLE_METRICS,
+    string_geometry=STRING_GEOMETRY,
 )
 print()
 print(REPORT.summary())
@@ -198,8 +213,18 @@ print(f"{len(KANDIDAT)} string dgn defisit >= {MIN_DEFICIT_PCT}% "
 
 display(KANDIDAT[[
     "pv_string", "deficit_pct", "ratio_range", "ratio_max_hourly",
-    "jam_terburuk", "jam_terbaik", "dropout_share_pct", "kategori",
+    "jam_terburuk", "jam_terbaik", "dropout_share_pct",
+    "cross_slope_deg", "expected_ampm_asym", "ampm_residual", "kategori",
 ]].head(40))
+
+print("\\nSebelum mengurutkan kerja lapangan, baca ampm_residual:")
+print("  asimetri besar + residual ~0 -> GEOMETRI. Kemiringan tanahnya sendiri")
+print("                  yang membuat string ini beda dari tetangga se-inverter.")
+print("                  Tidak perlu dikunjungi; tidak ada yang bisa dipangkas.")
+print("  residual besar  -> OBSTRUKSI nyata. Ini yang didatangi lebih dulu.")
+print("  NA              -> string tanpa koordinat (WB01/WB02, fit bidang buruk,")
+print("                  atau label DXF muncul di dua tempat). Bukan 'datar'.")
+print("  Kolom ini BUKTI, bukan koreksi: deficit_pct dan ratio TIDAK diubah.")
 
 print("\\nCara membaca kategori:")
 print("  SHADING_PULIH   rasio >1,0 di jam lain -> panel SEHAT, ada halangan.")
