@@ -312,6 +312,27 @@ def test_fit_plane_rms_exposes_a_surface_that_is_not_a_plane():
     assert out["rms_m"] == pytest.approx(2.0, abs=1e-6)
 
 
+def test_fit_plane_survives_small_window_at_full_utm_magnitude():
+    """Jendela seukuran meja (15 m) pada koordinat UTM penuh harus tetap ter-fit.
+
+    Easting ~459.522 dan northing ~9.890.375 dengan variasi hanya belasan
+    meter membuat matriks desain nyaris singular; tanpa pemusatan koordinat
+    lstsq melaporkan rank < 3 dan fungsi ini menjawab "tidak tahu" padahal
+    datanya rapi. Itu menyamarkan kegagalan numerik sebagai patok segaris.
+    """
+    slope = math.radians(15.0)
+    samples = [(9890375.0 + i * 1.0, 459522.0 + j * 0.5,
+                80.0 - math.tan(slope) * (j * 0.5))          # menurun ke timur
+               for i in range(-2, 3) for j in range(-15, 16)]
+
+    out = fit_plane(samples)
+
+    assert out is not None
+    assert out["slope_deg"] == pytest.approx(15.0, abs=1e-6)
+    assert out["aspect_deg"] == pytest.approx(90.0, abs=1e-6)
+    assert out["rms_m"] == pytest.approx(0.0, abs=1e-6)
+
+
 def test_fit_plane_needs_three_points_to_define_a_plane():
     """Banyak petak berupa rantai patok segaris; bidang tak bisa ditentukan
     dari situ, dan menebaknya lebih buruk daripada mengaku tidak tahu."""

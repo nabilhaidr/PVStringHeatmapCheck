@@ -175,7 +175,11 @@ blocks:
       span_m:
         ns: 208.5
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 10.355
+        aspect_deg: 101.6
+        rms_m: 2.107
+        n_samples: 3762
     - no_start: 41
       no_end: 50
       n_points: 10
@@ -266,7 +270,11 @@ blocks:
       span_m:
         ns: 120.8
         ew: 57.5
-      terrain: null
+      terrain:
+        slope_deg: 8.593
+        aspect_deg: 305.0
+        rms_m: 1.677
+        n_samples: 2730
     points:
     - 'no': 1
       north: 9890374.827
@@ -903,7 +911,11 @@ blocks:
       span_m:
         ns: 96.9
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 4.302
+        aspect_deg: 272.5
+        rms_m: 2.092
+        n_samples: 1914
     - no_start: 17
       no_end: 36
       n_points: 20
@@ -918,7 +930,11 @@ blocks:
       span_m:
         ns: 130.7
         ew: 108.1
-      terrain: null
+      terrain:
+        slope_deg: 1.321
+        aspect_deg: 264.2
+        rms_m: 2.724
+        n_samples: 4800
     - no_start: 37
       no_end: 81
       n_points: 45
@@ -933,7 +949,11 @@ blocks:
       span_m:
         ns: 268.6
         ew: 200.8
-      terrain: null
+      terrain:
+        slope_deg: 0.952
+        aspect_deg: 191.2
+        rms_m: 3.144
+        n_samples: 15840
     - no_start: 82
       no_end: 104
       n_points: 23
@@ -967,7 +987,11 @@ blocks:
       span_m:
         ns: 158.4
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 2.311
+        aspect_deg: 197.6
+        rms_m: 2.287
+        n_samples: 2937
     - no_start: 129
       no_end: 141
       n_points: 13
@@ -982,7 +1006,11 @@ blocks:
       span_m:
         ns: 81.1
         ew: 61.8
-      terrain: null
+      terrain:
+        slope_deg: 3.093
+        aspect_deg: 147.9
+        rms_m: 2.307
+        n_samples: 2091
     points:
     - 'no': 1
       north: 9890303.826
@@ -1859,7 +1887,11 @@ blocks:
       span_m:
         ns: 84.2
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 6.595
+        aspect_deg: 291.0
+        rms_m: 2.078
+        n_samples: 1716
     - no_start: 15
       no_end: 15
       n_points: 1
@@ -1912,7 +1944,11 @@ blocks:
       span_m:
         ns: 37.4
         ew: 59.1
-      terrain: null
+      terrain:
+        slope_deg: 6.234
+        aspect_deg: 162.3
+        rms_m: 1.347
+        n_samples: 1160
     - no_start: 26
       no_end: 32
       n_points: 7
@@ -1946,7 +1982,11 @@ blocks:
       span_m:
         ns: 57.0
         ew: 60.8
-      terrain: null
+      terrain:
+        slope_deg: 4.33
+        aspect_deg: 326.7
+        rms_m: 1.533
+        n_samples: 1599
     - no_start: 43
       no_end: 43
       n_points: 1
@@ -2570,7 +2610,11 @@ blocks:
       span_m:
         ns: 123.1
         ew: 127.4
-      terrain: null
+      terrain:
+        slope_deg: 1.996
+        aspect_deg: 118.7
+        rms_m: 3.763
+        n_samples: 5254
     - no_start: 34
       no_end: 51
       n_points: 18
@@ -2585,7 +2629,11 @@ blocks:
       span_m:
         ns: 108.4
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 6.826
+        aspect_deg: 289.2
+        rms_m: 1.401
+        n_samples: 2112
     - no_start: 52
       no_end: 56
       n_points: 5
@@ -2619,7 +2667,11 @@ blocks:
       span_m:
         ns: 99.8
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 6.811
+        aspect_deg: 289.8
+        rms_m: 1.563
+        n_samples: 1980
     - no_start: 74
       no_end: 74
       n_points: 1
@@ -3113,7 +3165,11 @@ blocks:
       span_m:
         ns: 91.5
         ew: 61.8
-      terrain: null
+      terrain:
+        slope_deg: 1.489
+        aspect_deg: 58.1
+        rms_m: 2.807
+        n_samples: 2296
     - no_start: 16
       no_end: 22
       n_points: 7
@@ -3185,7 +3241,11 @@ blocks:
       span_m:
         ns: 36.7
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 10.581
+        aspect_deg: 276.9
+        rms_m: 1.955
+        n_samples: 957
     - no_start: 44
       no_end: 58
       n_points: 15
@@ -3200,7 +3260,11 @@ blocks:
       span_m:
         ns: 108.1
         ew: 61.8
-      terrain: null
+      terrain:
+        slope_deg: 6.24
+        aspect_deg: 273.1
+        rms_m: 2.894
+        n_samples: 2624
     - no_start: 59
       no_end: 63
       n_points: 5
@@ -3234,7 +3298,11 @@ blocks:
       span_m:
         ns: 98.5
         ew: 46.3
-      terrain: null
+      terrain:
+        slope_deg: 10.771
+        aspect_deg: 267.7
+        rms_m: 3.633
+        n_samples: 1947
     points:
     - 'no': 1
       north: 9890790.493
@@ -3765,7 +3833,11 @@ blocks:
       span_m:
         ns: 133.3
         ew: 62.7
-      terrain: null
+      terrain:
+        slope_deg: 4.502
+        aspect_deg: 228.7
+        rms_m: 2.238
+        n_samples: 3234
     - no_start: 25
       no_end: 31
       n_points: 7
@@ -3780,7 +3852,11 @@ blocks:
       span_m:
         ns: 52.1
         ew: 92.7
-      terrain: null
+      terrain:
+        slope_deg: 3.052
+        aspect_deg: 276.8
+        rms_m: 4.048
+        n_samples: 2016
     - no_start: 32
       no_end: 33
       n_points: 2

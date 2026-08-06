@@ -260,6 +260,12 @@ def fit_plane(samples: Sequence[Tuple[float, float, float]]) -> Optional[Dict]:
     north = np.array([s[0] for s in samples], dtype=float)
     east = np.array([s[1] for s in samples], dtype=float)
     z = np.array([s[2] for s in samples], dtype=float)
+    # Koordinat UTM (E ~4,6e5, N ~9,9e6) dengan variasi belasan meter membuat
+    # matriks desain nyaris singular: lstsq melaporkan rank < 3 dan fungsi ini
+    # menjawab "tidak tahu" padahal datanya rapi. Pemusatan menghilangkan itu;
+    # kemiringan tidak berubah karena hanya translasi.
+    north = north - north.mean()
+    east = east - east.mean()
     design = np.column_stack([east, north, np.ones_like(z)])
     coef, _, rank, _ = np.linalg.lstsq(design, z, rcond=None)
     if rank < 3:
