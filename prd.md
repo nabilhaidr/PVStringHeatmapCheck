@@ -690,6 +690,50 @@ Running it needs a second diagnostic workbook from a different part of the year;
 is set. The wider the seasonal separation the sharper the test: `k` differs by
 22.5 % between solstices but only 8.8 % between April and June.
 
+Validation result, 2026-08-07:
+
+The check was first run for real over June 2026 (day-of-year 166, 23 days)
+against November-December 2025 (day-of-year 335, 49 days), the same 431 strings
+on both sides. It validated one half of the model and refuted the other.
+
+| What was tested | Result |
+| --- | --- |
+| Does cross-slope drive the asymmetry, in the stated direction? | **Yes.** r = +0.748 (June), +0.690 (Dec); R² 0.56 and 0.48 |
+| Is the predicted magnitude right? | **No.** Regression slope 0.48 (June) and 0.23 (Dec) against 1.0 if correct |
+| Is the seasonal scaling `k(doy)` right? | **No.** Predicted drift correlates −0.638 with the drift actually observed |
+
+One cause probably explains both failures: the coefficients come from a pvlib
+*clear-sky* derivation, which assumes radiation is mostly beam. IKN is cloudy
+and December is peak monsoon, so the diffuse fraction is high, and diffuse light
+is nearly isotropic — it damps the directional asymmetry of a tilted plane. That
+over-predicts the magnitude everywhere, and it reverses the seasonal direction,
+because `k(doy)` tracks solar geometry while the cloud cycle at this site moves
+the opposite way. The same mechanism appears independently in the
+classifications: re-running the same 431 strings in November-December moved
+**30 % of them into a different category**, almost all toward `UNIFORM` (49 from
+`SHADING_PULIH`, 19 from `SHADING_SORE`, 13 from `SHADING_PAGI`) — diffuse light
+flattening the hourly profile, not the strings changing. A category is therefore
+a statement about one month, not a permanent property.
+
+**This does not invalidate the two-season test, and that is the point.**
+`residual_drift` compares one string against itself across seasons, so a stable
+multiplicative bias cancels out of it. On the real pair it separates cleanly:
+median 0.027 where both methods say geometry against 0.190 where both say
+obstruction — a factor of seven, achieved without correcting the magnitude at
+all.
+
+What it does invalidate is the single-season verdict. `WB08-INV15-PV20` was
+cleared from the field-visit list on a June residual of −0.048; the second
+season showed its asymmetry **shrinking 33 %** where geometry demands it **grow
+21 %**, and both methods then agreed on obstruction. The ground slope does not
+change between seasons; an obstruction's shadow path does.
+
+`provisional_direction_verdict` therefore never returns `GEOMETRI`. A small
+single-season residual yields `CALON_GEOMETRI`, a candidate, and only
+`validate_geometry_seasonally` over two seasons may clear a string. `OBSTRUKSI`
+is still allowed from one season, deliberately: the burden of proof falls on the
+claim that *removes* a safety action, not on the one that adds it.
+
 Acceptance criteria:
 - Classification distinguishes soiling-shaped from shading-shaped deficits per
   string, and emits the hourly ratio profile behind that call.
@@ -697,8 +741,10 @@ Acceptance criteria:
 - `ratio`, `deficit_pct` and `kategori` are identical with and without
   `string_geometry` supplied.
 - Field-visit ranking for directional labels uses `ampm_residual`, not raw
-  asymmetry: large asymmetry with a near-zero residual is geometry and needs no
-  visit.
+  asymmetry.
+- **No string is ever removed from the field-visit list on one season's data.**
+  A single season yields `CALON_GEOMETRI` at most; clearing requires two
+  seasons agreeing through `validate_geometry_seasonally`.
 - The residual is interpreted only for labels that came from the asymmetry
   branch. Labels from the early-death and recovery branches are outside its
   scope, because a cross-slope can neither stop a string from producing nor
@@ -935,5 +981,5 @@ The product is considered usable for engineering review when:
 4. What cleaning cost and tariff assumptions should be used for soiling economics?
 5. What is the minimum review workflow before data enters healthy baseline?
 6. Should Streamlit dashboard become a required production deliverable or remain optional?
-7. Should a per-string POA model be built? 8.15 quantifies the morning-afternoon asymmetry a cross-slope produces, but deliberately stops short of the level effect, so a midday deficit is never attributed to geometry. Closing that gap would allow correcting `ratio` instead of only annotating it - and would also decide whether the cable voltage-drop columns in 8.11 stay evidence-only.
+7. Should a per-string POA model be built? 8.15 quantifies the morning-afternoon asymmetry a cross-slope produces, but deliberately stops short of the level effect, so a midday deficit is never attributed to geometry. Closing that gap would allow correcting `ratio` instead of only annotating it - and would also decide whether the cable voltage-drop columns in 8.11 stay evidence-only. **Deferred, and the 2026-08-07 validation lowered rather than raised its urgency:** the diffuse fraction it would model is the identified cause of the magnitude error, but `residual_drift` already discriminates seven-to-one without it, because a stable multiplicative bias cancels when a string is compared against itself across seasons. It becomes worth building if single-season verdicts must be trusted - a new site with under half a year of data - or if the goal moves from annotating `ratio` to correcting it.
 

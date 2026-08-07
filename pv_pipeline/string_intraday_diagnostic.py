@@ -531,6 +531,43 @@ def seasonal_discriminator(
     return out.sort_values(["verdikt", "pv_string"], ignore_index=True)
 
 
+DIRECTION_CATEGORIES: tuple = ("SHADING_PAGI", "SHADING_SORE")
+
+
+def provisional_direction_verdict(
+    row,
+    *,
+    ampm_gap: float = DEFAULT_AMPM_GAP,
+    dropout_share: float = DEFAULT_DROPOUT_SHARE,
+) -> str:
+    """Putusan SEMENTARA atas satu label arah, dari SATU musim saja.
+
+    Sengaja tidak pernah mengembalikan "GEOMETRI". Residual kecil di satu musim
+    hanya melahirkan ``CALON_GEOMETRI``; pembebasan sesungguhnya hanya boleh
+    datang dari ``validate_geometry_seasonally`` atas dua musim.
+
+    Alasannya sudah terbayar mahal sekali: WB08-INV15-PV20 dicoret dari daftar
+    kunjungan karena residual -0,048 di Juni, lalu pengukuran November-Desember
+    membantahnya -- asimetrinya MENYUSUT 33% padahal geometri menuntut TUMBUH
+    21%. Satu musim tidak bisa memisahkan kemiringan tanah dari objek yang
+    kebetulan berbayang ke arah yang sama pada bulan itu.
+
+    ``OBSTRUKSI`` sebaliknya boleh berdiri dari satu musim: ia mengirim orang
+    untuk melihat. Beban pembuktian jatuh pada klaim yang MENGHAPUS tindakan
+    pengaman, bukan pada yang menambahkannya.
+
+    Urutan pemeriksaan mengikuti prioritas cabang di ``classify_strings``.
+    """
+    if row["kategori"] not in DIRECTION_CATEGORIES:
+        return "TIDAK_BERLAKU"
+    if row["dropout_share_pct"] >= dropout_share * 100:
+        return "MATI_DINI"
+    if not np.isfinite(row["cross_slope_deg"]):
+        return "DATA_GEOMETRI_TIDAK_ADA"
+    return ("CALON_GEOMETRI" if abs(row["ampm_residual"]) < ampm_gap
+            else "OBSTRUKSI")
+
+
 def _bandingkan_verdikt(musiman: str, geometris: str) -> str:
     """Adu dua verdikt. Hanya GEOMETRI/OBSTRUKSI yang bisa diadu."""
     bisa = {"GEOMETRI", "OBSTRUKSI"}

@@ -41,20 +41,29 @@ Acuan meja datar akan meninggalkan offset sistematis per inverter.
 
 ## Cara membacanya
 
-| Residual | Artinya | Tindakan |
-|---|---|---|
-| di bawah 0,12 | asimetrinya dijelaskan kemiringan tanah | **tidak perlu dikunjungi** |
-| 0,12 ke atas | masih ada asimetri tak terjelaskan | obstruksi nyata, datangi |
-| `NA` | string tanpa koordinat tepercaya | perlu cek lapangan biasa |
+**Satu musim tidak membebaskan string mana pun.** Cell 4 hanya memberi
+peringkat sementara; pembebasan hanya sah dari Cell 5, setelah dua musim
+sepakat.
 
-Ambang yang dipakai adalah `DEFAULT_AMPM_GAP` yang sama -- ambang yang
-memunculkan labelnya. Kalau sisa setelah geometri dikeluarkan tidak lagi
-melewati ambang itu, labelnya memang produk geometri.
+| Residual satu musim | Artinya | Tindakan |
+|---|---|---|
+| di bawah 0,12 | `CALON_GEOMETRI` -- dugaan, belum terbukti | **tetap dikunjungi** sampai diuji musim kedua |
+| 0,12 ke atas | `OBSTRUKSI` | datangi |
+| `NA` | string tanpa koordinat tepercaya | cek lapangan biasa |
+
+Asimetrinya sendiri **boleh** berukuran meleset: uji dua musim membandingkan
+string yang sama terhadap dirinya, sehingga bias pengali yang stabil saling
+menghapus. Yang tidak boleh adalah membebaskan string dari satu titik waktu.
+
+Ini bukan kehati-hatian abstrak. `WB08-INV15-PV20` pernah dicoret dari daftar
+kunjungan karena residualnya -0,048 di Juni. Pengukuran November-Desember
+membantahnya: asimetrinya **menyusut 33%** padahal geometri menuntut **tumbuh
+21%**. Kemiringan tanah tidak berubah antar musim; bayangan objek berubah.
 
 **Kolom ini bukti, bukan koreksi.** `ratio`, `deficit_pct`, dan `kategori`
-tidak disentuh. Mengoreksinya butuh model POA per string per timestamp.
+tidak disentuh.
 
-## Validasi silang (opsional, Cell 5)
+## Validasi silang (Cell 5) -- satu-satunya jalur pembebasan
 
 Isi `WORKBOOK_MUSIM_LAIN` dengan workbook diagnostik dari rentang tanggal
 musim lain, lalu Cell 5 mengadu **dua penilai yang saling bebas**:
@@ -64,10 +73,13 @@ musim lain, lalu Cell 5 mengadu **dua penilai yang saling bebas**:
 - `ampm_residual` datang dari model pvlib clear-sky yang tidak pernah
   dipaskan ke telemetri.
 
-Kesepakatan keduanya karena itu adalah validasi, bukan tautologi. Yang paling
-berharga justru saat mereka berbeda: asimetri bertanda tetap dengan drift di
-bawah 30% dulu otomatis disebut GEOMETRI -- padahal bangunan permanen di sisi
-timur menghasilkan pola yang sama persis.
+Kesepakatan keduanya karena itu adalah validasi, bukan tautologi. Pada
+perbandingan Juni 2026 lawan November-Desember 2025, `residual_drift` memisah
+tajam: median 0,027 untuk yang keduanya sebut geometri, lawan 0,190 untuk yang
+keduanya sebut obstruksi -- tujuh kali lipat.
+
+Makin jauh jarak musimnya makin tajam ujinya: beda `k` 22,5% antar solstis,
+hanya 8,8% antara April dan Juni.
 
 Jalankan Cell 1 sampai Cell 6 berurutan. Edit hanya nilai di **Cell 2**.
 '''
@@ -159,10 +171,9 @@ print("NA berarti: WB01/WB02 (tidak dipetakan), fit bidang buruk, atau label "
       "DXF muncul di dua tempat -- BUKAN 'tanahnya datar'.")
 '''
 
-CODE_VERDICT = '''# Cell 4 - Putusan ulang: geometri atau obstruksi
-import numpy as np
+CODE_VERDICT = '''# Cell 4 - Peringkat SEMENTARA dari satu musim
 from pv_pipeline.string_intraday_diagnostic import (
-    DEFAULT_AMPM_GAP, DEFAULT_DROPOUT_SHARE,
+    DIRECTION_CATEGORIES, provisional_direction_verdict,
 )
 
 try:
@@ -170,37 +181,8 @@ try:
 except ImportError:
     display = print
 
-ARAH_KATEGORI = ("SHADING_PAGI", "SHADING_SORE")
-
-def putusan(row):
-    """Uji geometris hanya berwenang atas label yang LAHIR dari asimetri.
-
-    Dua penjaga di depan, keduanya menutup cara yang sama untuk salah:
-    menyimpulkan "geometri, tidak perlu dikunjungi" dari residual kecil pada
-    string yang labelnya sama sekali bukan produk asimetri pagi-sore.
-
-    1. Kategori non-arah. SHADING_PULIH lahir dari rasio >1,02 dan UNIFORM
-       dari profil datar. Cross-slope tidak bisa membuat sebuah string
-       MELAMPAUI tetangganya, jadi residual tidak menjelaskan label itu.
-    2. Cabang mati dini. SHADING_SORE lahir dari DUA cabang dan cabang mati
-       dini (dropout >= 40%) menyala lebih dulu. Cross-slope menggeser bagi
-       hasil pagi vs sore; ia tidak bisa membuat sebuah string berhenti
-       produksi sementara tetangganya masih jalan.
-
-    Sisanya -- label arah yang memang lahir dari |pagi - sore| >= ambang --
-    barulah dinilai residualnya, dengan ambang yang sama yang memunculkannya.
-    """
-    if row["kategori"] not in ARAH_KATEGORI:
-        return "TIDAK_BERLAKU"
-    if row["dropout_share_pct"] >= DEFAULT_DROPOUT_SHARE * 100:
-        return "MATI_DINI"
-    if not np.isfinite(row["cross_slope_deg"]):
-        return "DATA_GEOMETRI_TIDAK_ADA"
-    return ("GEOMETRI" if abs(row["ampm_residual"]) < DEFAULT_AMPM_GAP
-            else "OBSTRUKSI")
-
 KLAS["asym_terukur"] = (KLAS["pagi"] - KLAS["sore"]).round(4)
-KLAS["putusan_geometris"] = KLAS.apply(putusan, axis=1)
+KLAS["putusan_geometris"] = KLAS.apply(provisional_direction_verdict, axis=1)
 
 TARGET = KLAS[KLAS["pv_string"].isin(FOKUS)] if FOKUS else KLAS
 TARGET = TARGET.sort_values("ampm_residual", key=abs, ascending=False)
@@ -214,18 +196,23 @@ print()
 for nama, n in TARGET["putusan_geometris"].value_counts().items():
     print(f"  {nama:<24} {n}")
 
-turun = int((TARGET["putusan_geometris"] == "GEOMETRI").sum())
-arah = int(TARGET["kategori"].isin(ARAH_KATEGORI).sum())
-print(f"\\n{turun} dari {arah} label arah dijelaskan kemiringan tanah -> turun "
-      f"dari daftar kunjungan lapangan.")
+calon = int((TARGET["putusan_geometris"] == "CALON_GEOMETRI").sum())
+arah = int(TARGET["kategori"].isin(DIRECTION_CATEGORIES).sum())
+print("\\nSATU MUSIM TIDAK MEMBEBASKAN STRING MANA PUN.")
+print(f"{calon} dari {arah} label arah menjadi CALON_GEOMETRI -- baru dugaan.")
+print("Pembebasan hanya sah lewat Cell 5, setelah DUA MUSIM sepakat.")
+print()
+print("CALON_GEOMETRI residual kecil di musim ini saja. WB08-INV15-PV20 pernah")
+print("               dicoret atas dasar seperti ini (-0,048 di Juni), lalu")
+print("               musim kedua membantahnya. Sampai diuji, TETAP didatangi.")
+print("OBSTRUKSI      residual besar. Boleh berdiri dari satu musim karena ia")
+print("               mengirim orang melihat, bukan mencoret.")
 print("MATI_DINI      labelnya dari cabang mati dini, bukan asimetri. "
       "Cross-slope tidak")
-print("               bisa membuat produksi NOL sementara tetangga jalan. "
-      "Tetap didatangi.")
+print("               bisa membuat produksi NOL sementara tetangga jalan.")
 print("TIDAK_BERLAKU  label non-arah (SHADING_PULIH/UNIFORM/CAMPURAN). "
       "Rasio >1,0 dan")
-print("               defisit datar juga tidak bisa dihasilkan cross-slope. "
-      "Tetap didatangi.")
+print("               defisit datar juga tidak bisa dihasilkan cross-slope.")
 '''
 
 CODE_VALIDATE = '''# Cell 5 - Validasi silang: prediksi geometris vs perilaku musiman

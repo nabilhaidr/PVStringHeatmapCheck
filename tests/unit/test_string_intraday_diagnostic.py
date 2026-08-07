@@ -588,6 +588,56 @@ def test_seasonal_threshold_clears_the_geometric_drift_it_must_tolerate():
     assert 0.225 < SEASONAL_REL_RANGE_MAX <= 0.40
 
 
+# --- vonis satu musim tidak boleh membebaskan string --------------------------
+
+
+def _baris(kategori="SHADING_PAGI", dropout=0.0, cs=-15.7, residual=-0.048):
+    return {"kategori": kategori, "dropout_share_pct": dropout,
+            "cross_slope_deg": cs, "ampm_residual": residual}
+
+
+def test_one_season_never_clears_a_string():
+    """Residual kecil pada SATU musim hanya melahirkan CALON, bukan vonis.
+
+    Ini bukan kehati-hatian abstrak: WB08-INV15-PV20 pernah dicoret dari daftar
+    kunjungan atas dasar residual satu musim (-0,048 di Juni), lalu pengukuran
+    November-Desember membantahnya -- asimetrinya MENYUSUT 33% padahal geometri
+    menuntut TUMBUH 21%. Satu musim tidak bisa membedakan kemiringan tanah dari
+    objek yang kebetulan berbayang ke arah yang sama pada bulan itu.
+
+    Beban pembuktian jatuh pada klaim yang MENGHAPUS tindakan pengaman. Karena
+    itu 'geometri' harus lolos dua musim, sementara 'obstruksi' -- yang justru
+    mengirim orang untuk melihat -- boleh berdiri dari satu musim.
+    """
+    from pv_pipeline.string_intraday_diagnostic import provisional_direction_verdict
+
+    assert provisional_direction_verdict(_baris(residual=-0.048)) == "CALON_GEOMETRI"
+    assert provisional_direction_verdict(_baris(residual=-0.400)) == "OBSTRUKSI"
+
+
+def test_verdict_follows_the_branch_that_produced_the_label():
+    """Urutannya mengikuti prioritas cabang di classify_strings.
+
+    Cross-slope tidak bisa membuat string berhenti produksi, dan tidak bisa
+    membuatnya melampaui tetangga. Label yang lahir dari kedua cabang itu
+    berada di luar wewenang uji geometris, berapa pun residualnya.
+    """
+    from pv_pipeline.string_intraday_diagnostic import provisional_direction_verdict
+
+    assert provisional_direction_verdict(
+        _baris(kategori="SHADING_PULIH", residual=-0.001)) == "TIDAK_BERLAKU"
+    assert provisional_direction_verdict(
+        _baris(dropout=86.0, residual=-0.001)) == "MATI_DINI"
+
+
+def test_missing_cross_slope_is_reported_not_assumed_flat():
+    """Tanpa cross-slope tepercaya tidak ada prediksi untuk diuji."""
+    from pv_pipeline.string_intraday_diagnostic import provisional_direction_verdict
+
+    assert provisional_direction_verdict(
+        _baris(cs=float("nan"))) == "DATA_GEOMETRI_TIDAK_ADA"
+
+
 # --- pembeda musiman sebagai VALIDATOR prediksi geometris ---------------------
 
 
