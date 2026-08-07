@@ -561,7 +561,7 @@ These columns are **evidence, not correction**. `ratio`, `deficit_pct` and
 POA model, not arithmetic - the same reason the cable voltage-drop columns in
 8.11 are presented as evidence rather than applied as a correction.
 
-`config/string_geometry.csv` (4,470 rows, 190 inverters, all ten WB blocks):
+`config/string_geometry.csv` (4,470 rows, all 194 inverters, all ten WB blocks):
 
 | Field | Meaning |
 | --- | --- |
@@ -572,13 +572,37 @@ POA model, not arithmetic - the same reason the cable voltage-drop columns in
 
 Known data limits, deliberately left NULL rather than guessed:
 
-- 56 rows have no `pv`, from the 21 inverters whose as-built cable list
-  disagrees with `strings.yaml`. `strings.yaml` remains authoritative (8.2).
-- 8 inverters carry string labels that appear at two different DXF positions, a
-  median of 308 m apart. Those `(inverter_id, pv)` pairs resolve to NULL rather
+- 2 rows have no `pv`. Before the relabelling below this was 56, and almost all
+  of it turned out to be a symptom of that fault rather than a genuine
+  disagreement between the as-built list and `strings.yaml`.
+- 11 inverters still carry a few string labels that appear at two DXF
+  positions — 26 rows. Those `(inverter_id, pv)` pairs resolve to NULL rather
   than silently taking the first match.
-- Against the June 2026 diagnostic workbook, 92.1 % of classified strings
+- Against the June 2026 diagnostic workbook, 98.4 % of classified strings
   receive a trusted cross-slope.
+
+`1129.dxf` numbers two blocks wrongly, and the builder corrects it in
+`resolve_dxf_relabels`. WB04 skips INV17 and shifts everything above it up by
+one, so its labels INV18/INV19/INV20 are really INV17/INV18/INV19. WB05 reuses
+its INV15-INV19 labels a second time for the WB06 arrays a few hundred metres
+east, and its INV20 label belongs to WB06 outright — WB05 stops at INV19 in
+both the as-built list and the General Layout.
+
+The correction rests on evidence that does not depend on coordinates at all:
+per-inverter string counts matched against the as-built DC cable list. WB04's
+label INV18 carries 27 strings where as-built INV18 has 24 and INV17 has 27,
+and all three shifted counts line up in sequence (27, 24, 23). For the reused
+WB05 labels each split reproduces the as-built counts on both sides exactly —
+`47+2 = 24+25`, `50 = 25+25`, `49 = 24+25`, `51 = 26+25`, `51 = 26+25`,
+`25 = 25` — so the rule verifies itself. The column arrangement in the General
+Layout drawing agrees independently: the orphan clusters form a lone array, a
+pair and a triple, in the same west-to-east order as INV15, INV16-17 and
+INV18-20 on the sheet. Splitting uses the largest easting gap and accepts it
+only above `BLOCK_GAP_M`; the real gaps run 71-334 m against an inverter
+footprint of about 50 m.
+
+Before this, six inverters had no coordinates at all and two labels pointed at
+inverters that do not exist. All 194 now carry geometry.
 
 Phase One (WB01-WB02) comes from a different drawing and a different labelling
 convention. Its 900 strings sit on the `_TEXT_STRING` layer of the AC cable

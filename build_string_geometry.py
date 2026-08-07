@@ -29,6 +29,7 @@ import re
 from typing import Dict, List, Optional
 
 from build_site_layout import (
+    BLOCK_GAP_M,
     dsm_path,
     find_raw,
     fit_plane,
@@ -66,6 +67,26 @@ PHASE_ONE_REVISED = {(2, 26): (1, 25)}
 # Tabel pasangannya TIDAK ditulis ulang di sini -- lihat phase_one_mppt_map().
 PHASE_ONE_MODEL = "SUN2000-215KTL-H0"
 STRINGS_YAML = os.path.join("config", "strings.yaml")
+
+# --- koreksi penomoran inverter di 1129.dxf -----------------------------------
+# Dua blok salah dinomori. Ditemukan lewat JUMLAH STRING per inverter yang
+# dicocokkan ke as-built DC cable list -- bukti yang tidak bergantung koordinat
+# sama sekali -- lalu dikuatkan susunan kolom pada General Layout DW-001.
+#
+# WB04 melewatkan INV17 lalu menggeser sisanya naik satu: label INV18 membawa
+# 27 string sementara as-built INV18 punya 24 dan INV17 punya 27; ketiga
+# pergeserannya cocok berurutan (27, 24, 23).
+DXF_RELABEL = {
+    (4, 18): (4, 17), (4, 19): (4, 18), (4, 20): (4, 19),
+    # WB05 berhenti di INV19 baik menurut as-built maupun General Layout, jadi
+    # label INV20 sepenuhnya milik WB06.
+    (5, 20): (6, 20),
+}
+# Label INV15-INV19 di WB05 dipakai DUA KALI: sekali untuk array WB05, sekali
+# untuk array WB06 ratusan meter di timurnya. Gugus TIMUR adalah WB06 dengan
+# nomor inverter yang sama. Jumlah kedua sisi cocok persis dengan as-built pada
+# keenam label, jadi pemisahannya memverifikasi dirinya sendiri.
+DXF_SPLIT_EAST = {(5, i): (6, i) for i in range(15, 20)}
 
 # Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)
 # x 4 m utara-selatan, langkah 0,5 m. Cukup lebar untuk meredam kekasaran
@@ -167,6 +188,39 @@ def parse_phase_one_labels(path: str) -> List[Dict]:
     return rows
 
 
+def resolve_dxf_relabels(labels: List[Dict]) -> List[Dict]:
+    """Perbaiki penomoran inverter yang salah di 1129.dxf.
+
+    Dua cacat berbeda, dua penanganan berbeda:
+
+    * ``DXF_RELABEL`` -- seluruh label memang milik inverter lain (WB04 yang
+      penomorannya bergeser, dan WB05-INV20 yang tidak pernah ada).
+    * ``DXF_SPLIT_EAST`` -- satu label dipakai dua array berbeda. Gugus TIMUR
+      pindah blok; gugus barat tetap. Pemisahnya celah easting terbesar,
+      dan hanya diterima bila celah itu melebihi ``BLOCK_GAP_M`` -- ambang
+      pemisah petak yang sudah diturunkan dari histogram jarak patok. Celah
+      nyatanya 71-334 m, jauh di atas lebar satu inverter (~50 m).
+    """
+    keluar = [dict(row) for row in labels]
+    for row in keluar:
+        baru = DXF_RELABEL.get((row["wb"], row["inv"]))
+        if baru:
+            row["wb"], row["inv"] = baru
+
+    for kunci, baru in DXF_SPLIT_EAST.items():
+        grup = [r for r in keluar if (r["wb"], r["inv"]) == kunci]
+        if len(grup) < 2:
+            continue
+        grup.sort(key=lambda r: r["east"])
+        jarak = [grup[i + 1]["east"] - grup[i]["east"] for i in range(len(grup) - 1)]
+        lebar = max(jarak)
+        if lebar <= BLOCK_GAP_M:
+            continue
+        for row in grup[jarak.index(lebar) + 1:]:
+            row["wb"], row["inv"] = baru
+    return keluar
+
+
 def phase_one_mppt_map(path: str = STRINGS_YAML) -> Dict[int, int]:
     """PV -> MPPT untuk WB01/WB02, dibaca dari ``config/strings.yaml``.
 
@@ -247,7 +301,7 @@ def _geom_row(item: Dict, image, header, pv, mppt) -> Dict:
 
 def main() -> None:
     dxf_path = find_raw(DXF_NAME)
-    labels = parse_dxf_string_labels(dxf_path)
+    labels = resolve_dxf_relabels(parse_dxf_string_labels(dxf_path))
     if not labels:
         raise SystemExit(f"{dxf_path}: tidak ada label string ditemukan.")
     print(f"[string-geometry] {dxf_path}: {len(labels)} label string")

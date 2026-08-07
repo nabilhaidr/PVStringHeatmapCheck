@@ -19,6 +19,7 @@ from build_string_geometry import (
     parse_dxf_string_labels,
     parse_phase_one_labels,
     phase_one_mppt_map,
+    resolve_dxf_relabels,
 )
 
 
@@ -68,6 +69,80 @@ def test_parse_skips_label_without_coordinates(tmp_path):
     path = _dxf(tmp_path, [[("0", "TEXT"), ("1", "WB05INV01ST01")]])
 
     assert parse_dxf_string_labels(path) == []
+
+
+# --- koreksi penomoran inverter di 1129.dxf -----------------------------------
+
+
+def _lbl(wb, inv, st, east):
+    """Satu label hasil parse, pada easting tertentu."""
+    return {"label": f"WB{wb:02d}INV{inv:02d}ST{st:02d}", "wb": wb, "inv": inv,
+            "st": st, "east": east, "north": 9890600.0}
+
+
+def test_wb04_numbering_shifts_by_one_from_inverter_17():
+    """1129.dxf melewatkan WB04-INV17 lalu menggeser sisanya naik satu.
+
+    Ketahuan lewat jumlah string per inverter yang dicocokkan ke as-built DC
+    cable list -- bukti yang sama sekali tidak bergantung koordinat: label
+    INV18 membawa 27 string sedangkan as-built INV18 punya 24 dan INV17 punya
+    27. Ketiga pergeserannya cocok berurutan (27, 24, 23).
+
+    Tanpa koreksi ini WB04-INV17 tidak punya koordinat sama sekali -- dan ia
+    memiliki dua dari 20 string pada laporan yang sudah beredar.
+    """
+    keluar = resolve_dxf_relabels([
+        _lbl(4, 16, 1, 459793.0),
+        _lbl(4, 18, 1, 459887.0),
+        _lbl(4, 19, 1, 459941.0),
+        _lbl(4, 20, 1, 459930.0),
+    ])
+
+    assert [(r["wb"], r["inv"]) for r in keluar] == [(4, 16), (4, 17), (4, 18), (4, 19)]
+
+
+def test_wb05_label_used_only_for_wb06_moves_wholesale():
+    """WB05 berhenti di INV19; label INV20 di DXF sepenuhnya milik WB06.
+
+    Baik as-built maupun General Layout menyatakan WB05 hanya punya 19
+    inverter, jadi tidak ada gugus WB05 yang bisa mengklaim label ini.
+    """
+    keluar = resolve_dxf_relabels([_lbl(5, 20, 1, 459907.0),
+                                   _lbl(5, 20, 2, 459909.0)])
+
+    assert {(r["wb"], r["inv"]) for r in keluar} == {(6, 20)}
+
+
+def test_wb05_label_reused_by_wb06_splits_on_the_spatial_gap():
+    """Label INV15-INV19 dipakai DUA KALI: sekali di WB05, sekali di WB06.
+
+    Gugus timur adalah array WB06. Pemisahnya celah easting 71-334 m --
+    jauh di atas lebar satu inverter (~50 m), jadi tidak ambigu. Aturannya
+    memverifikasi diri sendiri: jumlah kedua sisi harus sama persis dengan
+    hitungan as-built WB05 dan WB06, dan untuk keenam label memang begitu.
+
+    Memindahkan seluruh label ke WB06 akan MENGHAPUS inverter WB05 yang sah;
+    membiarkannya utuh membuat satu label mengaku dua array berjarak ratusan
+    meter -- persis keadaan yang dulu memaksa cross-slope-nya dikosongkan.
+    """
+    keluar = resolve_dxf_relabels([
+        _lbl(5, 17, 1, 459480.0), _lbl(5, 17, 2, 459500.0),   # gugus barat: WB05
+        _lbl(5, 17, 3, 459810.0), _lbl(5, 17, 4, 459820.0),   # gugus timur: WB06
+    ])
+    oleh_st = {r["st"]: (r["wb"], r["inv"]) for r in keluar}
+
+    assert oleh_st[1] == (5, 17) and oleh_st[2] == (5, 17)
+    assert oleh_st[3] == (6, 17) and oleh_st[4] == (6, 17)
+
+
+def test_labels_outside_the_two_broken_blocks_are_untouched():
+    """Koreksi ini bedah, bukan sapu rata: hanya WB04 dan WB05 yang cacat."""
+    masuk = [_lbl(3, 11, 1, 459500.0), _lbl(6, 14, 1, 459800.0),
+             _lbl(10, 3, 1, 459700.0), _lbl(4, 16, 1, 459793.0)]
+
+    keluar = resolve_dxf_relabels(masuk)
+
+    assert [(r["wb"], r["inv"]) for r in keluar] == [(3, 11), (6, 14), (10, 3), (4, 16)]
 
 
 # --- parsing DXF Phase One (WB01/WB02) ----------------------------------------
