@@ -253,6 +253,32 @@ def _tetangga_tunggal(rows: List[Dict], wb: int, inv: int, st: int) -> Optional[
     return None
 
 
+def empty_pv_channels(path: str = STRINGS_YAML) -> Dict[str, set]:
+    """``inverter_id`` -> kanal PV yang KOSONG by design, dari strings.yaml."""
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        peta = yaml.safe_load(handle)["empty_pv_map"]
+    return {inv: set(kanal) for inv, kanal in peta.items()}
+
+
+def disprove_empty_channel(inverter_id: str, pv, mppt, kosong: Dict[str, set]):
+    """Gugurkan pemetaan as-built yang mendarat di kanal kosong by design.
+
+    Telemetri 13 Mei 2026 memutuskan perselisihan ini: delapan kanal semacam
+    itu membaca 0,00 kW di tengah hari sementara kanal terpakai pada inverter
+    yang sama berjalan 3,1-3,8 kW, dan seluruh kanal lain yang ditandai kosong
+    di sana juga nol. strings.yaml benar; as-built keliru di titik ini.
+
+    Menyimpan ``pv`` yang sudah terbantah lebih buruk daripada mengosongkannya:
+    ia membuat artefak geometri menunjuk kanal yang tidak pernah menghasilkan
+    apa pun, dan pembacanya tidak punya cara tahu itu sudah diuji dan gugur.
+    """
+    if pv is not None and pv in kosong.get(inverter_id, ()):
+        return None, None
+    return pv, mppt
+
+
 def phase_one_mppt_map(path: str = STRINGS_YAML) -> Dict[int, int]:
     """PV -> MPPT untuk WB01/WB02, dibaca dari ``config/strings.yaml``.
 
@@ -344,12 +370,16 @@ def main() -> None:
         raise SystemExit(f"DSM tidak ada: {dsm_file}")
     st_map = _st_to_pv()
 
-    rows: List[Dict] = [
-        _geom_row(item, image, header,
-                  *st_map.get((item["wb"], item["inv"], item["st"]),
-                              (None, None)))
-        for item in labels
-    ]
+    kosong = empty_pv_channels()
+
+    def _kanal(item: Dict):
+        pv, mppt = st_map.get((item["wb"], item["inv"], item["st"]), (None, None))
+        return disprove_empty_channel(
+            f"WB{item['wb']:02d}-INV{item['inv']:02d}", pv, mppt, kosong,
+        )
+
+    rows: List[Dict] = [_geom_row(item, image, header, *_kanal(item))
+                        for item in labels]
 
     # Phase One (WB01/WB02) datang dari gambar tray AC: pv = st, dan MPPT dari
     # strings.yaml. Blok ini karena itu tidak menyentuh as-built cable list

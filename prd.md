@@ -572,9 +572,18 @@ POA model, not arithmetic - the same reason the cable voltage-drop columns in
 
 Known data limits, deliberately left NULL rather than guessed:
 
-- 2 rows have no `pv`. Before the relabelling below this was 56, and almost all
-  of it turned out to be a symptom of that fault rather than a genuine
-  disagreement between the as-built list and `strings.yaml`.
+- 11 rows have no `pv`. Before the relabelling below this was 56, and almost
+  all of that turned out to be a symptom of the fault rather than a genuine
+  disagreement between the as-built list and `strings.yaml`. Nine of the
+  eleven are channels the as-built list assigns but `strings.yaml` marks empty
+  by design, and telemetry settles it: at midday on 2026-05-13 those channels
+  read 0.00 kW while the used channels on the same inverter ran 3.1-3.8 kW,
+  and every other channel marked empty on those inverters read zero as well.
+  The builder therefore drops any as-built mapping that lands on an empty
+  channel (`disprove_empty_channel`), because a `pv` that has been tested and
+  disproven is worse than none — nothing downstream could tell it had failed.
+  One of the nine, WB05-INV05 PV9, falls under the same rule but was not
+  confirmed directly: that inverter did not report on the day tested.
 - 9 inverters still carry a string label that resolves to two rows — 18 in
   total. Those `(inverter_id, pv)` pairs stay NULL rather than silently taking
   the first match. Sixteen of them are not a drawing fault at all: the as-built

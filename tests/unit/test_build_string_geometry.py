@@ -16,6 +16,8 @@ import pytest
 
 from build_string_geometry import (
     cross_slope_deg,
+    disprove_empty_channel,
+    empty_pv_channels,
     parse_dxf_string_labels,
     parse_phase_one_labels,
     phase_one_mppt_map,
@@ -201,6 +203,47 @@ def test_labels_outside_the_two_broken_blocks_are_untouched():
     keluar = resolve_dxf_relabels(masuk)
 
     assert [(r["wb"], r["inv"]) for r in keluar] == [(3, 11), (6, 14), (10, 3), (4, 16)]
+
+
+# --- pemetaan kanal yang terbantah telemetri ----------------------------------
+
+
+def test_as_built_channel_is_dropped_when_strings_yaml_calls_it_empty():
+    """Pemetaan as-built yang mendarat di kanal kosong GUGUR, bukan dipakai.
+
+    Telemetri 13 Mei 2026 memutuskannya: delapan kanal semacam ini membaca
+    0,00 kW di tengah hari sementara kanal terpakai di inverter yang sama
+    berjalan 3,1-3,8 kW. Seluruh kanal lain yang ditandai kosong di inverter
+    itu juga nol, jadi yang terukur memang beda terpasang vs tidak.
+
+    strings.yaml adalah acuan yang tervalidasi telemetri; as-built terbukti
+    keliru di titik ini. Menyimpan pv yang terbantah membuat artefak geometri
+    menunjuk kanal yang tidak pernah menghasilkan apa pun.
+    """
+    assert disprove_empty_channel(
+        "WB06-INV12", 13, 3, {"WB06-INV12": {5, 13, 19, 24}}) == (None, None)
+
+
+def test_channel_backed_by_telemetry_survives():
+    """Kanal yang tidak ditandai kosong tidak boleh ikut digugurkan.
+
+    Aturan ini bedah: hanya 9 baris dari 4.470 yang tersentuh. Menyapu lebih
+    luas akan membuang pemetaan pv yang justru benar untuk 4.459 string.
+    """
+    assert disprove_empty_channel(
+        "WB06-INV12", 14, 3, {"WB06-INV12": {5, 13, 19, 24}}) == (14, 3)
+    assert disprove_empty_channel("WB03-INV01", 13, 3, {"WB06-INV12": {13}}) == (13, 3)
+    assert disprove_empty_channel(
+        "WB06-INV12", None, None, {"WB06-INV12": {13}}) == (None, None)
+
+
+def test_empty_channels_are_read_from_strings_yaml():
+    """Daftar kanal kosong dibaca dari acuannya, tidak disalin ke builder."""
+    peta = empty_pv_channels()
+
+    assert len(peta) == 194
+    assert 13 in peta["WB06-INV12"]
+    assert peta["WB01-INV01"] == set(range(19, 29))
 
 
 # --- parsing DXF Phase One (WB01/WB02) ----------------------------------------
