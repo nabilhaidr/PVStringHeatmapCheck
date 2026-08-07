@@ -74,10 +74,68 @@ def test_parse_skips_label_without_coordinates(tmp_path):
 # --- koreksi penomoran inverter di 1129.dxf -----------------------------------
 
 
-def _lbl(wb, inv, st, east):
-    """Satu label hasil parse, pada easting tertentu."""
+def _lbl(wb, inv, st, east, north=9890600.0):
+    """Satu label hasil parse, pada easting (dan northing) tertentu."""
     return {"label": f"WB{wb:02d}INV{inv:02d}ST{st:02d}", "wb": wb, "inv": inv,
-            "st": st, "east": east, "north": 9890600.0}
+            "st": st, "east": east, "north": north}
+
+
+def _peta(rows):
+    """(easting, northing) -> (wb, inv, st) untuk memeriksa hasil pemindahan."""
+    return {(round(r["east"], 1), round(r["north"], 1)): (r["wb"], r["inv"], r["st"])
+            for r in rows}
+
+
+def test_stray_copy_moves_to_the_inverter_whose_grid_it_continues():
+    """Salinan nyasar dikenali dari grid TUJUAN, bukan jarak ke induknya.
+
+    Array disusun grid: baris berjarak ~7 m, kolom ~15,4 m, dinomori
+    barat-ke-timur lalu turun sebaris. Salinan yang benar melanjutkan grid
+    inverternya sendiri; yang nyasar melanjutkan grid inverter lain -- dan
+    inverter itu memang kekurangan ST yang sama persis menurut as-built.
+
+    Memakai jarak ke pusat inverter INDUK memilih yang terbalik: di
+    WB03-INV11 salinan yang benar berjarak 31 m dari pusatnya sendiri
+    sedangkan yang nyasar hanya 21 m.
+    """
+    keluar = _peta(resolve_dxf_relabels([
+        _lbl(3, 8, 12, 459618.6, 9890394.8),     # tujuan: ujung baris utara
+        _lbl(3, 11, 12, 459649.5, 9890374.1),    # induk: baris selatan
+        _lbl(3, 11, 13, 459664.9, 9890374.1),    # benar -> tetap WB03-INV11
+        _lbl(3, 11, 13, 459634.0, 9890394.8),    # nyasar -> WB03-INV08
+    ]))
+
+    assert keluar[(459664.9, 9890374.1)] == (3, 11, 13)
+    assert keluar[(459634.0, 9890394.8)] == (3, 8, 13)
+
+
+def test_stray_chain_resolves_in_sequence():
+    """ST14 baru bisa diputuskan setelah ST13 pindah -- keduanya ganda.
+
+    Tetangga rujukan di inverter tujuan harus tunggal. Selama ST13 masih
+    ganda, ST14 tidak punya jangkar dan koreksinya berhenti separuh jalan.
+    """
+    keluar = _peta(resolve_dxf_relabels([
+        _lbl(3, 8, 12, 459618.6, 9890394.8),
+        _lbl(3, 11, 13, 459664.9, 9890374.1),
+        _lbl(3, 11, 13, 459634.0, 9890394.8),
+        _lbl(3, 11, 14, 459603.2, 9890367.0),    # benar: awal baris berikutnya
+        _lbl(3, 11, 14, 459649.5, 9890394.8),    # nyasar: lanjut baris INV08
+    ]))
+
+    assert keluar[(459634.0, 9890394.8)] == (3, 8, 13)
+    assert keluar[(459649.5, 9890394.8)] == (3, 8, 14)
+    assert keluar[(459603.2, 9890367.0)] == (3, 11, 14)
+
+
+def test_single_copy_is_never_moved():
+    """Tanpa salinan kedua tidak ada dasar memindahkan -- jangan menebak."""
+    keluar = resolve_dxf_relabels([
+        _lbl(3, 8, 12, 459618.6, 9890394.8),
+        _lbl(3, 11, 13, 459634.0, 9890394.8),
+    ])
+
+    assert [(r["wb"], r["inv"], r["st"]) for r in keluar] == [(3, 8, 12), (3, 11, 13)]
 
 
 def test_wb04_numbering_shifts_by_one_from_inverter_17():

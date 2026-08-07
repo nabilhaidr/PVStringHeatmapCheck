@@ -575,9 +575,17 @@ Known data limits, deliberately left NULL rather than guessed:
 - 2 rows have no `pv`. Before the relabelling below this was 56, and almost all
   of it turned out to be a symptom of that fault rather than a genuine
   disagreement between the as-built list and `strings.yaml`.
-- 11 inverters still carry a few string labels that appear at two DXF
-  positions — 26 rows. Those `(inverter_id, pv)` pairs resolve to NULL rather
-  than silently taking the first match.
+- 9 inverters still carry a string label that resolves to two rows — 18 in
+  total. Those `(inverter_id, pv)` pairs stay NULL rather than silently taking
+  the first match. Sixteen of them are not a drawing fault at all: the as-built
+  cable list maps two different `st` values onto one `pv` channel, and each of
+  those inverters has three or four unused channels, so no unique repair
+  exists. The other two are a stray copy whose position matches no inverter
+  with a gap to fill.
+- Three inverters still differ from the as-built list by one string, and all
+  three sit on the as-built side rather than the drawing's: one carries an `st`
+  value of 203, one repeats an `st`, and one is a stray drawing label for which
+  no inverter is missing a slot.
 - Against the June 2026 diagnostic workbook, 98.4 % of classified strings
   receive a trusted cross-slope.
 
@@ -600,6 +608,16 @@ pair and a triple, in the same west-to-east order as INV15, INV16-17 and
 INV18-20 on the sheet. Splitting uses the largest easting gap and accepts it
 only above `BLOCK_GAP_M`; the real gaps run 71-334 m against an inverter
 footprint of about 50 m.
+
+A second, smaller fault sits inside single inverters: a handful of labels
+appear twice within one inverter, and the stray copy turns out to continue
+*another* inverter's grid — one that the as-built list shows is short by
+exactly that `st`. `DXF_STRAY` moves those four strings. The discriminator is
+the destination's grid, not distance from the label's own inverter: rows sit
+about 7 m apart and columns about 15.4 m, numbered west to east then down, so
+the stray lands one column beyond the target's last labelled string. Judging by
+distance to the parent inverter picks the wrong copy — in WB03-INV11 the
+correct one is 31 m from its own centroid while the stray is only 21 m.
 
 Before this, six inverters had no coordinates at all and two labels pointed at
 inverters that do not exist. All 194 now carry geometry.

@@ -87,6 +87,16 @@ DXF_RELABEL = {
 # nomor inverter yang sama. Jumlah kedua sisi cocok persis dengan as-built pada
 # keenam label, jadi pemisahannya memverifikasi dirinya sendiri.
 DXF_SPLIT_EAST = {(5, i): (6, i) for i in range(15, 20)}
+# Beberapa label muncul dua kali DI DALAM satu inverter. Salinan yang nyasar
+# ternyata melanjutkan grid inverter LAIN -- dan inverter itu kekurangan ST yang
+# sama persis menurut as-built, jadi kedua sisinya saling menutup. Diurutkan
+# menaik karena ST14 baru bisa dijangkar setelah ST13 pindah.
+DXF_STRAY = {
+    (3, 11, 13): (3, 8, 13),
+    (3, 11, 14): (3, 8, 14),
+    (3, 11, 15): (3, 8, 15),
+    (5, 14, 25): (6, 14, 25),
+}
 
 # Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)
 # x 4 m utara-selatan, langkah 0,5 m. Cukup lebar untuk meredam kekasaran
@@ -218,7 +228,29 @@ def resolve_dxf_relabels(labels: List[Dict]) -> List[Dict]:
             continue
         for row in grup[jarak.index(lebar) + 1:]:
             row["wb"], row["inv"] = baru
+
+    for (wb, inv, st), (wb2, inv2, st2) in DXF_STRAY.items():
+        salinan = [r for r in keluar if (r["wb"], r["inv"], r["st"]) == (wb, inv, st)]
+        acuan = _tetangga_tunggal(keluar, wb2, inv2, st2)
+        if len(salinan) != 2 or acuan is None:
+            continue
+        nyasar = min(salinan, key=lambda r: math.hypot(r["east"] - acuan["east"],
+                                                       r["north"] - acuan["north"]))
+        nyasar["wb"], nyasar["inv"], nyasar["st"] = wb2, inv2, st2
     return keluar
+
+
+def _tetangga_tunggal(rows: List[Dict], wb: int, inv: int, st: int) -> Optional[Dict]:
+    """String bernomor bersebelahan pada inverter tujuan, bila tidak ambigu.
+
+    Dipakai sebagai jangkar grid: slot yang ditinggalkan as-built pasti
+    bersebelahan dengan ST sebelum atau sesudahnya.
+    """
+    for tetangga in (st - 1, st + 1):
+        cocok = [r for r in rows if (r["wb"], r["inv"], r["st"]) == (wb, inv, tetangga)]
+        if len(cocok) == 1:
+            return cocok[0]
+    return None
 
 
 def phase_one_mppt_map(path: str = STRINGS_YAML) -> Dict[int, int]:
