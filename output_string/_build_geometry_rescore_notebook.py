@@ -109,6 +109,15 @@ REPO_DIR = find_repo_root(
 os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
+
+# Repo DIBACA dari Drive, tidak di-clone dan tidak di-pull. Salinan Drive yang
+# tertinggal membuat perubahan terbaru diam-diam tidak berlaku sementara
+# hasilnya tetap terlihat wajar -- kegagalan paling mahal di alur ini.
+import subprocess
+_v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
+                    capture_output=True, text=True)
+print("versi repo:", (_v.stdout.strip() or _v.stderr.strip()
+                      or "(bukan git repo -- salinan manual?)"))
 print("REPO_DIR:", REPO_DIR)
 '''
 
@@ -213,6 +222,18 @@ print("               bisa membuat produksi NOL sementara tetangga jalan.")
 print("TIDAK_BERLAKU  label non-arah (SHADING_PULIH/UNIFORM/CAMPURAN). "
       "Rasio >1,0 dan")
 print("               defisit datar juga tidak bisa dihasilkan cross-slope.")
+
+# Penanda versi pada DATA: penempatan keempat inverter tepi utara Phase One
+# dibantah tiga sumber bebas, geometrinya sengaja dikosongkan, sehingga
+# putusannya WAJIB TIDAK_BERLAKU. Kalau ada yang lain, salinan repo di Drive
+# tertinggal dan bukti geometris yang sudah ditolak ikut terpakai lagi.
+_utara = KLAS["inverter_id"].isin(
+    ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"])
+if int(_utara.sum()):
+    _tb = int((KLAS.loc[_utara, "putusan_geometris"] == "TIDAK_BERLAKU").sum())
+    print()
+    print(f"tepi utara Phase One: {_tb}/{int(_utara.sum())} TIDAK_BERLAKU "
+          f"(harus 72/72 -- geometrinya sengaja dikosongkan)")
 '''
 
 CODE_VALIDATE = '''# Cell 5 - Validasi silang: prediksi geometris vs perilaku musiman

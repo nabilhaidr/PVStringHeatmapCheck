@@ -91,6 +91,15 @@ os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 print("REPO_DIR:", REPO_DIR)
+
+# Repo DIBACA dari Drive, tidak di-clone dan tidak di-pull. Kalau salinan di
+# Drive tertinggal, perubahan terbaru diam-diam tidak berlaku dan hasilnya
+# tetap terlihat wajar -- kegagalan paling mahal di alur ini. Cetak versinya.
+import subprocess
+_v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
+                    capture_output=True, text=True)
+print("versi repo:", (_v.stdout.strip() or _v.stderr.strip()
+                      or "(bukan git repo -- salinan manual?)"))
 '''
 
 CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
@@ -203,6 +212,14 @@ if GEOM_CSV.exists():
     STRING_GEOMETRY = pd.read_csv(GEOM_CSV)
     print(f"geometri: {STRING_GEOMETRY['cross_slope_deg'].notna().sum()} string "
           f"punya cross-slope terukur")
+    # Penanda versi kedua, kali ini pada DATA. Penempatan keempat inverter tepi
+    # utara Phase One dibantah tiga sumber bebas, jadi kolom bidangnya sengaja
+    # dikosongkan. Masih terisi = salinan repo di Drive tertinggal.
+    _dibantah = STRING_GEOMETRY["inverter_id"].isin(
+        ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"])
+    _kosong = int(STRING_GEOMETRY.loc[_dibantah, "cross_slope_deg"].isna().sum())
+    print(f"          {_kosong}/{int(_dibantah.sum())} string tepi utara "
+          f"Phase One dikosongkan (harus 72/72)")
 else:
     print(f"geometri: {GEOM_CSV.name} tidak ada -> kolom cross-slope kosong")
 
@@ -216,6 +233,10 @@ REPORT = build_intraday_diagnostic(
 )
 print()
 print(REPORT.summary())
+print()
+print("string per blok -- Phase One (WB01/WB02) dan WB06 harus ada:")
+print(REPORT.classification["inverter_id"].str[:4]
+      .value_counts().sort_index().to_string())
 '''
 
 CODE_PRIORITY = '''# Cell 5 - Daftar prioritas + cara membacanya
