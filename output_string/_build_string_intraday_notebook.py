@@ -123,7 +123,13 @@ TERSANGKA_WB03_10 = [
 ]
 PHASE_ONE = [f"WB{wb:02d}-INV{nomor:02d}"
              for wb in (1, 2) for nomor in range(1, 26)]
-INVERTER_IDS = TERSANGKA_WB03_10 + PHASE_ONE
+# Bukan tersangka, melainkan UJI atas koreksi. Penomoran ST WB06-INV06 baru
+# dibetulkan -- label gambar 1, 3-24 padahal as-built dan survei EL sama-sama
+# bilang 1-23 -- dan koreksi itu belum pernah teruji pada data nyata karena
+# WB06 tidak pernah masuk run mana pun. 23 string; tanpa ini perbaikannya
+# hanya terbukti di tes, tidak di lapangan.
+VERIFIKASI_KOREKSI = ["WB06-INV06"]
+INVERTER_IDS = TERSANGKA_WB03_10 + VERIFIKASI_KOREKSI + PHASE_ONE
 
 # Kejadian hujan untuk uji pemulihan. Ambil tanggalnya dari
 # precipitation_daily_plts_ikn.csv (output run soiling) atau data hujan
