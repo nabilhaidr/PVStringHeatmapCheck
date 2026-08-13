@@ -817,11 +817,47 @@ column describes shape, not severity.
 Phase One's 22 `CALON_GEOMETRI` stay candidates. Clearing any of them still
 requires a second season, which does not yet exist for these blocks.
 
+Verified on live data, 2026-08-14. Re-running both notebooks over the same June
+window with `WB06-INV06` added - 68 inverters, 1,354 strings - closed three
+questions at once.
+
+The regression control held exactly as designed: of the 1,331 strings carried
+over from the previous run, the **only** cells that moved were `cross_slope_deg`,
+`expected_ampm_asym` and `ampm_residual` on the **72** northern-edge strings,
+which now read empty and return `TIDAK_BERLAKU`. Nothing else in 1,331 strings
+shifted by a single value. Nulling changed no verdict, because those 72 were
+already non-directional; what it repaired was the integrity of the evidence, not
+the calls made from it.
+
+Phase One's remaining 827 strings regress at slope -0.196, r -0.075 - the **same
+figures** the non-northern subset produced before the nulling. That coincidence
+is the point: it shows the null removed precisely the group carrying cross-slope
+leverage and left the rest untouched.
+
+And the ST renumbering proved itself where only live telemetry could test it.
+`WB06-INV06`, whose 22 strings had each been receiving a neighbour's `pv`,
+`mppt` and cable metrics, now regresses at **slope +0.427, r +0.554** over its
+23 strings - against +0.450 for its own plant. A misaligned join cannot produce
+that agreement. This is confirmation rather than a controlled comparison: WB06
+had never entered any run, so no "before" measurement exists to set against it.
+
+One caveat on how that was established. The version banner in cell 1 reported
+`a660ec7`, a July commit, while the same folder's `config/string_geometry.csv`
+plainly carried the current nulls - the Drive copy is synced as files while its
+`.git` lags. Git HEAD is not a trustworthy version marker for a repository that
+lives on Drive; the two data-based markers are what confirmed the run.
+
 Acceptance criteria:
 - Classification distinguishes soiling-shaped from shading-shaped deficits per
   string, and emits the hourly ratio profile behind that call.
 - No `(inverter_id, st)` key repeats in `config/string_geometry.csv`, and the ST
   set of every inverter is contiguous from 1 to its as-built string count.
+  *Met since 2026-08-13 and confirmed on live data 2026-08-14:* the file holds
+  no duplicated key at all, and the inverter that had carried one - `WB10-INV03`
+  with `ST25` twice - now runs 1-27 unbroken. The criterion is not merely a
+  schema check: a repeated key silently hands one string its neighbour's `pv`,
+  `mppt` and cable metrics, which is exactly what `WB06-INV06` suffered until it
+  was renumbered and what its +0.427 slope now shows repaired.
 - A string with no geometry row reads NULL in all three columns, never 0.
 - `ratio`, `deficit_pct` and `kategori` are identical with and without
   `string_geometry` supplied.
