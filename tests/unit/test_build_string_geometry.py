@@ -205,6 +205,57 @@ def test_labels_outside_the_two_broken_blocks_are_untouched():
     assert [(r["wb"], r["inv"]) for r in keluar] == [(3, 11), (6, 14), (10, 3), (4, 16)]
 
 
+def test_wb06_inv06_numbering_runs_one_ahead_from_st03():
+    """DXF melompati ST02 lalu berjalan satu di depan; as-built dan EL bilang 1-23.
+
+    Cacatnya DIAM: jumlah barisnya tetap 23, jadi tidak ada yang kentara
+    salah. Yang rusak adalah join ke as-built pada ST -- tiap string menerima
+    pv, mppt, dan metrik kabel milik TETANGGANYA, sementara ST24 yang tidak
+    ada di as-built keluar tanpa pv sama sekali.
+
+    Kebenarannya dari dua sumber bebas yang sepakat: List of DC Cables dan
+    survei EL drone 2025 sama-sama menyebut ST01-23 kontigu. Kontrol pada
+    WB06-INV05/07 menunjukkan ketiga sumber normalnya sepakat persis, jadi
+    inverter ini benar-benar menyimpang.
+    """
+    masuk = [_lbl(6, 6, 1, 459500.0)] + [
+        _lbl(6, 6, st, 459500.0 + 15.6 * (st - 2)) for st in range(3, 25)
+    ]
+
+    keluar = resolve_dxf_relabels(masuk)
+
+    assert sorted(r["st"] for r in keluar) == list(range(1, 24))
+    peta = _peta(keluar)
+    assert peta[(459500.0, 9890600.0)] == (6, 6, 1)
+    assert peta[(round(459500.0 + 15.6, 1), 9890600.0)] == (6, 6, 2)
+    assert peta[(round(459500.0 + 15.6 * 22, 1), 9890600.0)] == (6, 6, 23)
+
+
+def test_wb10_inv03_st_is_renumbered_by_spatial_order():
+    """ST25 muncul dua kali -- kunci ST tidak bisa membetulkannya.
+
+    String fisik ke-5 dilabeli "25", sehingga penomorannya berjalan satu di
+    depan sampai akhir dan ST27 hilang. ``DXF_STRAY`` tidak menjangkau kasus
+    ini: ia memindahkan salah satu salinan ke slot KOSONG, sedangkan di sini
+    slot tujuannya (ST05) sudah terisi.
+
+    Penomoran ulang menurut urutan spasial memulihkan bijeksi 1..27 tanpa
+    bergantung pada nomor lama sama sekali. Sah karena diverifikasi 27/27
+    terhadap posisi survei EL, yang jumlah dan penomorannya cocok as-built.
+    """
+    dxf_st = {1: 1, 2: 2, 3: 3, 4: 4, 5: 25, 26: 25, 27: 26}
+    for benar in range(6, 26):
+        dxf_st[benar] = benar - 1
+    masuk = [_lbl(10, 3, dxf_st[benar], 459700.0, 9890600.0 - 7.3 * (benar - 1))
+             for benar in range(1, 28)]
+
+    keluar = _peta(resolve_dxf_relabels(masuk))
+
+    for benar in range(1, 28):
+        posisi = (459700.0, round(9890600.0 - 7.3 * (benar - 1), 1))
+        assert keluar[posisi] == (10, 3, benar)
+
+
 # --- pemetaan kanal yang terbantah telemetri ----------------------------------
 
 

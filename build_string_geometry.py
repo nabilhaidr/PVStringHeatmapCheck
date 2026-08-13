@@ -97,6 +97,26 @@ DXF_STRAY = {
     (3, 11, 15): (3, 8, 15),
     (5, 14, 25): (6, 14, 25),
 }
+# --- koreksi penomoran ST di dalam satu inverter -------------------------------
+# Dua inverter salah menomori STRING-nya, bukan inverternya. Kebenaran diambil
+# dari dua sumber bebas yang sepakat -- List of DC Cables dan survei EL drone
+# 2025 -- dengan kontrol positif: di WB06-INV05/07 dan WB10-INV02/04 ketiga
+# sumber (DXF, as-built, EL) sepakat persis, jadi kedua inverter di bawah ini
+# benar-benar menyimpang dan bukan derau metode.
+#
+# WB06-INV06 melompati ST02 lalu berjalan satu di depan sampai ST24, sementara
+# as-built dan EL sama-sama berhenti di ST23. Nilai: (ST awal, geseran, jumlah
+# string menurut as-built). Jumlahnya dipakai sebagai pagar: kalau gambar
+# berubah dan cacahnya tak lagi cocok, koreksi tidak dijalankan.
+DXF_ST_SHIFT = {(6, 6): (3, -1, 23)}
+# WB10-INV03: string fisik ke-5 dilabeli "25", sehingga penomorannya berjalan
+# satu di depan dan ST27 hilang -- meninggalkan ST25 GANDA. DXF_STRAY tidak
+# menjangkaunya karena ia memindahkan salinan ke slot kosong, sedangkan slot
+# tujuan di sini (ST05) sudah terisi. Penomoran ulang menurut urutan spasial
+# memulihkan bijeksi tanpa bergantung pada nomor lama; cocok 27/27 dengan
+# posisi EL. Urutan spasial sengaja TIDAK dipakai untuk WB06-INV06 -- di sana
+# ia hanya cocok 4/23, jadi tata letaknya memang bukan raster sederhana.
+DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 
 # Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)
 # x 4 m utara-selatan, langkah 0,5 m. Cukup lebar untuk meredam kekasaran
@@ -210,6 +230,11 @@ def resolve_dxf_relabels(labels: List[Dict]) -> List[Dict]:
       dan hanya diterima bila celah itu melebihi ``BLOCK_GAP_M`` -- ambang
       pemisah petak yang sudah diturunkan dari histogram jarak patok. Celah
       nyatanya 71-334 m, jauh di atas lebar satu inverter (~50 m).
+    * ``DXF_ST_SHIFT`` dan ``DXF_RENUMBER_SPATIAL`` -- inverternya benar,
+      penomoran STRING-nya yang salah. Keduanya dipagari jumlah string
+      menurut as-built: cacah tidak cocok berarti gambarnya berubah, dan
+      koreksi diam-diam pada input yang sudah lain jauh lebih berbahaya
+      daripada membiarkan cacat lama terlihat.
     """
     keluar = [dict(row) for row in labels]
     for row in keluar:
@@ -237,6 +262,22 @@ def resolve_dxf_relabels(labels: List[Dict]) -> List[Dict]:
         nyasar = min(salinan, key=lambda r: math.hypot(r["east"] - acuan["east"],
                                                        r["north"] - acuan["north"]))
         nyasar["wb"], nyasar["inv"], nyasar["st"] = wb2, inv2, st2
+
+    for (wb, inv), (mulai, geser, jumlah) in DXF_ST_SHIFT.items():
+        grup = [r for r in keluar if (r["wb"], r["inv"]) == (wb, inv)]
+        if len(grup) != jumlah:
+            continue
+        for row in grup:
+            if row["st"] >= mulai:
+                row["st"] += geser
+
+    for (wb, inv), jumlah in DXF_RENUMBER_SPATIAL.items():
+        grup = [r for r in keluar if (r["wb"], r["inv"]) == (wb, inv)]
+        if len(grup) != jumlah:
+            continue
+        grup.sort(key=lambda r: (-r["north"], r["east"]))
+        for nomor, row in enumerate(grup, start=1):
+            row["st"] = nomor
     return keluar
 
 
