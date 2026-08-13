@@ -772,6 +772,45 @@ WB10-INV03 carried ST25 twice while missing ST27. Both are corrected in
 by the as-built string count so a changed drawing disables the correction rather
 than silently renumbering a different input.
 
+First Phase One run, 2026-08-13. Widening `INVERTER_IDS` to 67 produced 1,331
+strings over the same June window, and the regression control held: the 431
+strings of the original 17 inverters reproduced identically across all fourteen
+columns the older workbook carried. Phase One was scored for the first time -
+900 strings, 50 inverters - and the asymmetry model failed there completely.
+
+| Group | n | slope | r |
+| --- | --- | --- | --- |
+| WB03-WB10, 17 inverters | 426 | +0.450 ± 0.022 | +0.699 |
+| Phase One, all | 899 | -0.024 ± 0.028 | -0.029 |
+| Phase One, four northern-edge inverters | 72 | -0.002 ± 0.013 | -0.020 |
+
+The last row carries the weight. Those four are the only Phase One inverters
+with real cross-slope leverage - predicted asymmetry reaches 0.718, comparable
+to WB03-WB10 - and the model explains nothing there at all. The rest of Phase
+One is too flat to test: its predicted asymmetry never exceeds 0.096.
+
+The failure is not scattered correlation but an **absent signal**. Measured
+asymmetry spread is 9-30 % of predicted spread at those four inverters, against
+47-69 % in WB03-WB10. That distinction matters, because it rules out a
+within-inverter label permutation: shuffling labels destroys the correlation
+while leaving the measured spread intact. What remains is either a whole-cluster
+displacement of the attached geometry - consistent with the 14-36 m offsets
+measured for *every* string of WB02-INV06, not a subset - or modules that are
+not canted as the terrain says. Until Open Question 8 settles it, the geometric
+evidence columns must not be read as evidence for Phase One's northern edge:
+they are the input to that question, not an answer to it.
+
+No harm reached the field list. **None of the 35 directional verdicts in Phase
+One fall on those four inverters.** All 35 sit where cross-slope is negligible
+(-0.94 to +1.4 degrees, predicted asymmetry near zero), so their residual is
+effectively the raw measured asymmetry and does not lean on the suspect
+geometry. Several carry trivial deficits, one of them -0.7 %, so the set needs
+filtering by `MIN_DEFICIT_PCT` before it becomes a visit plan - the verdict
+column describes shape, not severity.
+
+Phase One's 22 `CALON_GEOMETRI` stay candidates. Clearing any of them still
+requires a second season, which does not yet exist for these blocks.
+
 Acceptance criteria:
 - Classification distinguishes soiling-shaped from shading-shaped deficits per
   string, and emits the hourly ratio profile behind that call.
@@ -1028,5 +1067,5 @@ The product is considered usable for engineering review when:
 5. What is the minimum review workflow before data enters healthy baseline?
 6. Should Streamlit dashboard become a required production deliverable or remain optional?
 7. Should a per-string POA model be built? 8.15 quantifies the morning-afternoon asymmetry a cross-slope produces, but deliberately stops short of the level effect, so a midday deficit is never attributed to geometry. Closing that gap would allow correcting `ratio` instead of only annotating it - and would also decide whether the cable voltage-drop columns in 8.11 stay evidence-only. **Deferred, and the 2026-08-07 validation lowered rather than raised its urgency:** the diffuse fraction it would model is the identified cause of the magnitude error, but `residual_drift` already discriminates seven-to-one without it, because a stable multiplicative bias cancels when a string is compared against itself across seasons. It becomes worth building if single-season verdicts must be trusted - a new site with under half a year of data - or if the goal moves from annotating `ratio` to correcting it.
-8. Which source places a Phase One string correctly when the DXF labels and the EL survey disagree? The two agree closely on most of the site - median offset 1.8-2.1 m in WB01/WB02 - but 215 strings sit more than 20 m apart, concentrated in 21 Phase One inverters including all four on the northern edge. Adjudicating by telemetry (residual-ratio correlation must decay with distance; positive control passes at rho -0.28 to -0.30, permutation test passes) **split 3-1** on 2026-08-13: the survey explains WB02-INV02/04/06 better, the DXF explains WB02-INV01 better and most strongly of all. Margins are 0.06-0.10 from a single day, so nothing in `config/string_geometry.csv` was changed. Settling it needs the same test over several days, chosen **partly cloudy** - a uniformly clear day suppresses the spatial structure the test reads. Until then the terrain analysis stands, because it concerns points on the ground rather than which string occupies them.
+8. Which source places a Phase One string correctly when the DXF labels and the EL survey disagree? The two agree closely on most of the site - median offset 1.8-2.1 m in WB01/WB02 - but 215 strings sit more than 20 m apart, concentrated in 21 Phase One inverters including all four on the northern edge. Adjudicating by telemetry (residual-ratio correlation must decay with distance; positive control passes at rho -0.28 to -0.30, permutation test passes) **split 3-1** on 2026-08-13: the survey explains WB02-INV02/04/06 better, the DXF explains WB02-INV01 better and most strongly of all. Margins are 0.06-0.10 from a single day, so nothing in `config/string_geometry.csv` was changed. Settling it needs the same test over several days, chosen **partly cloudy** - a uniformly clear day suppresses the spatial structure the test reads. Until then the terrain analysis stands, because it concerns points on the ground rather than which string occupies them. **Raised in priority the same day by the first Phase One run** (8.15): over the whole of June, across 72 strings rather than one day's correlation, the asymmetry model has no predictive power whatsoever at those four inverters - r = -0.020 where the identical model reaches +0.699 in WB03-WB10, and measured asymmetry spread collapses to 9-30 % of predicted. A shuffled label set cannot produce that, since shuffling leaves the spread intact; a whole-cluster displacement can, and every string of WB02-INV06 was measured 14-36 m from where the survey puts it. This is now the strongest single piece of evidence on the question and it points away from the DXF placement, which makes the earlier 3-1 split - decided on margins of 0.06-0.10 from one day - too weak to lean on. Until it is settled, treat the geometric evidence columns for WB02-INV01/02/04/06 as unresolved input rather than evidence.
 
