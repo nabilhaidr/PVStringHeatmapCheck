@@ -86,10 +86,12 @@ VALIDATION_COLUMNS: List[str] = [
     "residual_drift", "hasil",
 ]
 
-# Kolom yang harus diisi surveyor. Dua yang pertama adalah satu-satunya cara
-# menutup pertanyaan yang tidak terjawab dari gambar mana pun: apakah meja
-# diratakan (tanah digrading) atau mengikuti kemiringan menyamping. Satu foto
-# yang membidik memanjang sepanjang baris meja sudah cukup menjawabnya.
+# Kolom yang harus diisi surveyor. Dua yang pertama DULU satu-satunya cara
+# menutup pertanyaan apakah meja diratakan atau mengikuti kemiringan
+# menyamping; gambar sipil sudah menjawabnya (lihat "form_lapangan_kenapa").
+# Keduanya tetap diminta sebagai pemeriksaan silang di lapangan, dan karena
+# bidikan memanjang baris memperlihatkan penghalang yang tidak tampak dari
+# arah tegak lurus.
 FIELD_OBSERVATION_COLUMNS: List[str] = [
     "meja_rata_atau_ikut_kontur",   # rata (digrading) | ikut kontur | tidak jelas
     "foto_memanjang_baris",         # bidik sepanjang baris, bukan tegak lurus
@@ -725,8 +727,14 @@ def build_intraday_diagnostic(
          "koreksi: ratio tidak disentuh."),
         ("form_lapangan", " | ".join(FIELD_OBSERVATION_COLUMNS)),
         ("form_lapangan_kenapa",
-         "Apakah meja diratakan (tanah digrading) atau mengikuti kemiringan "
-         "menyamping tidak terjawab oleh gambar mana pun; satu foto membidik "
-         "memanjang sepanjang baris meja menutupnya."),
+         "TERJAWAB gambar sipil, bukan lagi pertanyaan terbuka: meja "
+         "MENGIKUTI kemiringan tanah, tidak diratakan. IKN-CE-PP-DW-004 "
+         "SECTION A-A (timur-barat) memberi jarak pancang 'parallel to "
+         "ground' dengan stick-up 200 mm tetap dan lereng 'variable "
+         "(-30..+30 derajat)' untuk WB03-10; 407-001 memberi pedestal "
+         "precast setinggi 600 mm tetap di atas elevasi tanah setempat "
+         "untuk Phase One. Jadi cross_slope_deg memang kemiringan bidang "
+         "modul. Kolomnya tetap diisi sebagai pemeriksaan silang, dan foto "
+         "memanjang baris tetap dipakai untuk melihat penghalang."),
     ], columns=["key", "value"])
     return IntradayDiagnosticReport(classification, profile, rain, meta)

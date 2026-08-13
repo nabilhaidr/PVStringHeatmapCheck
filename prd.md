@@ -2,8 +2,8 @@
 
 ## PV Module Performance Analytics Notebook and Pipeline
 
-Status: Draft v0.3  
-Date: 2026-08-06 (v0.2: 2026-07-10, v0.1: 2026-05-27)  
+Status: Draft v0.4  
+Date: 2026-08-13 (v0.3: 2026-08-06, v0.2: 2026-07-10, v0.1: 2026-05-27)  
 Repository: `SolarYieldPro-main/kodingan pv string`  
 Primary runtime: Google Colab  
 Primary storage: Google Drive  
@@ -696,6 +696,19 @@ The check was first run for real over June 2026 (day-of-year 166, 23 days)
 against November-December 2025 (day-of-year 335, 49 days), the same 431 strings
 on both sides. It validated one half of the model and refuted the other.
 
+**Those 431 strings are not the site.** Both runs were narrowed by
+`INVERTER_IDS` in `_build_string_intraday_notebook.py` to the same 17 named
+inverters of WB03-WB10, so WB01, WB02 and WB06 never entered either season. The
+numbers below therefore calibrate 17 inverters of one plant and must not be read
+site-wide. Phase One has never been scored at all - not for want of data or of a
+loader, both of which work today, but because the suspect list was carried
+forward from an earlier investigation without being revisited. That list has
+since been widened to 67 inverters - the same 17 plus all 50 of Phase One,
+about 1,331 strings - so the next run supersedes the scope described here. The
+addition is additive by construction, since the sibling ratio is computed
+within an inverter: the 431 original strings must reproduce identically, and
+that is the regression control for the widened run.
+
 | What was tested | Result |
 | --- | --- |
 | Does cross-slope drive the asymmetry, in the stated direction? | **Yes.** r = +0.748 (June), +0.690 (Dec); R² 0.56 and 0.48 |
@@ -734,9 +747,36 @@ single-season residual yields `CALON_GEOMETRI`, a candidate, and only
 is still allowed from one season, deliberately: the burden of proof falls on the
 claim that *removes* a safety action, not on the one that adds it.
 
+Mounting geometry, settled 2026-08-12: the tables **follow the terrain** rather
+than sitting on a levelled bench, so a `cross_slope_deg` fitted to the ground
+plane *is* the module cross-tilt and `expected_ampm_asym` is not inflated by a
+levelling effect. `IKN-CE-PP-DW-004` section A-A (east-west) dimensions pile
+spacing "parallel to ground" with a constant 200 mm stick-up, over a ground
+slope declared `variable (-30..+30 deg)`; the Phase One as-built `407-001` gives
+a precast pedestal of fixed 600 mm above local existing land elevation for 479
+of its 900 tables. This closes the question the field-observation form was
+created to answer, and removes the main competitor to the diffuse-fraction
+explanation of the magnitude error above. The form keeps the column as a
+cross-check only.
+
+Independent inventory check, EL drone survey 2025 (`raw data input/el drone
+2025/all.csv`): it covers all 4,470 strings and 114,420 modules, matching
+`config/string_geometry.csv` row for row, and it is the only source for modules
+per string - 26 in WB03-WB10, 24 in Phase One. It disagreed with the DXF labels
+on exactly two inverters, and `List of DC Cables` sided with the survey in both,
+with four neighbouring inverters as a positive control where all three sources
+agree exactly. WB06-INV06 was labelled 1, 3-24 where the truth is 1-23, which
+silently handed each string its neighbour's PV, MPPT and cable metrics; and
+WB10-INV03 carried ST25 twice while missing ST27. Both are corrected in
+`build_string_geometry.py` (`DXF_ST_SHIFT`, `DXF_RENUMBER_SPATIAL`), each fenced
+by the as-built string count so a changed drawing disables the correction rather
+than silently renumbering a different input.
+
 Acceptance criteria:
 - Classification distinguishes soiling-shaped from shading-shaped deficits per
   string, and emits the hourly ratio profile behind that call.
+- No `(inverter_id, st)` key repeats in `config/string_geometry.csv`, and the ST
+  set of every inverter is contiguous from 1 to its as-built string count.
 - A string with no geometry row reads NULL in all three columns, never 0.
 - `ratio`, `deficit_pct` and `kategori` are identical with and without
   `string_geometry` supplied.
@@ -836,6 +876,12 @@ Acceptance criteria:
   labels), `dsm.tif` (topographic survey DSM, 0.1187 m/px),
   `List of DC Cables 0411.xls` (ST-to-PV mapping and cable length / voltage drop),
   and the `IKN-CE-PP-DW-004` / `ISPP-PSC-DWG-1004-001` drawings.
+- `raw data input/el drone 2025/all.csv` - per-module electroluminescence survey
+  covering all 4,470 strings and 114,420 modules. Independent of both the DXF
+  and the cable list, so it arbitrates string numbering; also the only source
+  for modules per string (8.15). Its header starts at row 33 under a ragged
+  preamble, and it carries two ID conventions in one file (`S101_01` for Phase
+  One, `WB06INV06ST01` elsewhere).
   The builders resolve these by name prefix anywhere under `raw data input/`, so
   the drawings can be filed into subfolders. The shallowest match wins, and two
   matches at the same depth raise rather than pick one. Runtime loaders (POA,
@@ -982,4 +1028,5 @@ The product is considered usable for engineering review when:
 5. What is the minimum review workflow before data enters healthy baseline?
 6. Should Streamlit dashboard become a required production deliverable or remain optional?
 7. Should a per-string POA model be built? 8.15 quantifies the morning-afternoon asymmetry a cross-slope produces, but deliberately stops short of the level effect, so a midday deficit is never attributed to geometry. Closing that gap would allow correcting `ratio` instead of only annotating it - and would also decide whether the cable voltage-drop columns in 8.11 stay evidence-only. **Deferred, and the 2026-08-07 validation lowered rather than raised its urgency:** the diffuse fraction it would model is the identified cause of the magnitude error, but `residual_drift` already discriminates seven-to-one without it, because a stable multiplicative bias cancels when a string is compared against itself across seasons. It becomes worth building if single-season verdicts must be trusted - a new site with under half a year of data - or if the goal moves from annotating `ratio` to correcting it.
+8. Which source places a Phase One string correctly when the DXF labels and the EL survey disagree? The two agree closely on most of the site - median offset 1.8-2.1 m in WB01/WB02 - but 215 strings sit more than 20 m apart, concentrated in 21 Phase One inverters including all four on the northern edge. Adjudicating by telemetry (residual-ratio correlation must decay with distance; positive control passes at rho -0.28 to -0.30, permutation test passes) **split 3-1** on 2026-08-13: the survey explains WB02-INV02/04/06 better, the DXF explains WB02-INV01 better and most strongly of all. Margins are 0.06-0.10 from a single day, so nothing in `config/string_geometry.csv` was changed. Settling it needs the same test over several days, chosen **partly cloudy** - a uniformly clear day suppresses the spatial structure the test reads. Until then the terrain analysis stands, because it concerns points on the ground rather than which string occupies them.
 
