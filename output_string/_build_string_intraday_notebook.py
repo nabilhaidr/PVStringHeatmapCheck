@@ -105,13 +105,25 @@ OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
 
 # Inverter yang dianalisis. Kosongkan ([]) untuk SELURUH inverter --
 # jauh lebih lambat dan boros RAM; isi daftar kalau sudah punya tersangka.
-INVERTER_IDS = [
+#
+# Phase One (WB01/WB02) BELUM PERNAH sekali pun masuk run diagnostik. Sebabnya
+# bukan data dan bukan pemuat -- keduanya bekerja: daftar tersangka di bawah
+# terbawa terus dari investigasi lama tanpa ditinjau ulang, lalu diteruskan
+# sebagai inverter_ids= sehingga 50 inverter Phase One tersaring diam-diam.
+#
+# Rasio saudara dihitung per-inverter, jadi penambahan ini ADITIF: ke-431
+# string dari 17 tersangka wajib tereproduksi IDENTIK. Jadikan itu kontrol --
+# kalau angkanya bergeser, yang salah perubahan ini, bukan hasilnya.
+TERSANGKA_WB03_10 = [
     "WB03-INV06", "WB03-INV09", "WB04-INV02", "WB04-INV17",
     "WB05-INV03", "WB05-INV04", "WB05-INV05", "WB05-INV06",
     "WB05-INV10", "WB05-INV11", "WB07-INV04", "WB07-INV07",
     "WB07-INV08", "WB08-INV15", "WB09-INV08", "WB09-INV20",
     "WB10-INV03",
 ]
+PHASE_ONE = [f"WB{wb:02d}-INV{nomor:02d}"
+             for wb in (1, 2) for nomor in range(1, 26)]
+INVERTER_IDS = TERSANGKA_WB03_10 + PHASE_ONE
 
 # Kejadian hujan untuk uji pemulihan. Ambil tanggalnya dari
 # precipitation_daily_plts_ikn.csv (output run soiling) atau data hujan
