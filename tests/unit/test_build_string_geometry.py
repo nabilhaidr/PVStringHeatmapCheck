@@ -256,6 +256,41 @@ def test_wb10_inv03_st_is_renumbered_by_spatial_order():
         assert keluar[posisi] == (10, 3, benar)
 
 
+def test_geometri_inverter_yang_penempatannya_dibantah_ditulis_null(monkeypatch):
+    """Fit bidang bersih pun DIBUANG bila penempatan stringnya sendiri dibantah.
+
+    Empat inverter tepi utara Phase One membawa cross-slope curam menurut label
+    DXF (sampai -15,4 deg), tetapi tiga sumber bebas menyanggahnya: survei EL
+    menempatkannya di tanah datar (|cs| <= 1,9 deg, sd <= 0,69), telemetri Juni
+    mengukur asimetri yang praktis nol pada 72 string (r = -0,020 di mana model
+    yang sama mencapai +0,699 di WB03-10), dan medan di posisi versi EL memang
+    datar. Kontrol pada tiga inverter WB03-10 yang kedua sumbernya sepakat
+    memberi sd yang sama persis, jadi selisihnya bukan artefak metode.
+
+    Yang terbukti adalah penempatan DXF-nya SALAH -- bukan bahwa posisi EL
+    benar sampai tingkat string. Karena itu kolomnya dikosongkan, bukan diisi
+    tebakan: NULL membuat validator memulangkan TIDAK_BERLAKU, sedangkan angka
+    yang salah akan lolos sebagai bukti dan bisa membebaskan string dari daftar
+    kunjungan.
+    """
+    import build_string_geometry as b
+
+    monkeypatch.setattr(b, "local_plane",
+                        lambda *a: {"slope_deg": 12.0, "aspect_deg": 90.0,
+                                    "rms_m": 0.05})
+    monkeypatch.setattr(b, "sample_dsm", lambda *a: 70.0)
+    titik = {"north": 9890228.489, "east": 459790.538}
+
+    dibantah = b._geom_row({"wb": 2, "inv": 6, "st": 1, **titik}, None, None, 1, 1)
+    tetangga = b._geom_row({"wb": 2, "inv": 5, "st": 1, **titik}, None, None, 1, 1)
+
+    assert dibantah["cross_slope_deg"] is None
+    assert dibantah["slope_deg"] is None
+    assert dibantah["aspect_deg"] is None
+    # Bedah, bukan sapu rata: inverter tetangga dengan fit yang sama tetap terisi.
+    assert tetangga["cross_slope_deg"] is not None
+
+
 # --- pemetaan kanal yang terbantah telemetri ----------------------------------
 
 

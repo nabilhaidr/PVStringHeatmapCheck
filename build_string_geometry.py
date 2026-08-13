@@ -118,6 +118,30 @@ DXF_ST_SHIFT = {(6, 6): (3, -1, 23)}
 # ia hanya cocok 4/23, jadi tata letaknya memang bukan raster sederhana.
 DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 
+# --- penempatan string yang dibantah bukti lain -------------------------------
+# Bukan koreksi melainkan PENOLAKAN. Label DXF menaruh keempat inverter ini di
+# lereng -- cross-slope sampai -15,4 deg -- dan tiga sumber bebas menyanggahnya,
+# tetapi tidak satu pun memberi penempatan pengganti sampai tingkat string. Yang
+# terbukti adalah "DXF salah", BUKAN "EL benar".
+#
+#   survei EL : posisinya di tanah datar, |cs| <= 1,9 deg dan sd <= 0,69 (di
+#               posisi DXF sd 1,24-5,53). Jarak ke titik geometri terdekat cuma
+#               1,9-2,0 m, sementara baris DXF milik string itu sendiri 14-36 m
+#               jauhnya -- seluruh gugus tergeser, bukan sebagian.
+#   telemetri : Juni 2026, 72 string. r = -0,020 padahal model yang sama
+#               mencapai +0,699 di WB03-10, dan sebaran asimetri terukur hanya
+#               9-30% dari yang diprediksi. Sinyalnya TIDAK ADA, bukan teracak;
+#               label yang tertukar di dalam satu inverter tidak bisa
+#               menghasilkan itu.
+#   kontrol   : WB05-INV03, WB07-INV04, WB03-INV06 memberi sd yang sama di
+#               kedua posisi (8,26/8,17, 4,58/4,58, 9,07/9,07), jadi selisih di
+#               atas bukan artefak metode.
+#
+# Kolom bidangnya dikosongkan supaya validator memulangkan TIDAK_BERLAKU. Angka
+# yang salah jauh lebih berbahaya daripada kolom kosong: ia lolos sebagai bukti
+# dan bisa MEMBEBASKAN string dari daftar kunjungan lapangan.
+PLACEMENT_DISPUTED = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"}
+
 # Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)
 # x 4 m utara-selatan, langkah 0,5 m. Cukup lebar untuk meredam kekasaran
 # tanah, cukup sempit untuk tetap mewakili meja itu sendiri.
@@ -375,11 +399,13 @@ def _st_to_pv() -> Dict:
 
 def _geom_row(item: Dict, image, header, pv, mppt) -> Dict:
     """Satu baris string_geometry.csv dari label + DSM."""
+    inverter_id = f"WB{item['wb']:02d}-INV{item['inv']:02d}"
     lat, lon = utm50s_to_latlon(item["north"], item["east"])
     plane = local_plane(image, header, item["north"], item["east"])
-    clean = plane is not None and plane["rms_m"] <= MAX_PLANE_RMS_M
+    clean = (plane is not None and plane["rms_m"] <= MAX_PLANE_RMS_M
+             and inverter_id not in PLACEMENT_DISPUTED)
     return {
-        "inverter_id": f"WB{item['wb']:02d}-INV{item['inv']:02d}",
+        "inverter_id": inverter_id,
         "st": item["st"],
         "pv": pv,
         "mppt": mppt,
