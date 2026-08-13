@@ -265,6 +265,11 @@ else:
 CODE_SAVE = '''# Cell 6 - Simpan hasil penilaian ulang
 from pathlib import Path
 
+# Diimpor DI SINI, bukan menumpang sel sebelumnya: satu-satunya pemakainya
+# adalah baris metadata di bawah, dan sel ini harus tetap jalan sendiri saat
+# dijalankan ulang sendirian.
+from pv_pipeline.string_intraday_diagnostic import DEFAULT_AMPM_GAP
+
 tag = f"{AWAL.strftime('%Y%m%d')}_{AKHIR.strftime('%Y%m%d')}"
 out_path = Path(OUTPUT_DIR) / f"geometry_rescore_{tag}.xlsx"
 out_path.parent.mkdir(parents=True, exist_ok=True)
