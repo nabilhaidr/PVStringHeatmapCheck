@@ -25,6 +25,7 @@ BUILDERS = {
     "_build_geometry_rescore_notebook": "pv_pipeline.string_intraday_diagnostic",
     "_build_string_intraday_notebook": "pv_pipeline.string_intraday_diagnostic",
     "_build_drive_probe_notebook": "pv_pipeline.drive_probe",
+    "_build_spatial_correlation_notebook": "pv_pipeline.spatial_correlation",
 }
 
 
