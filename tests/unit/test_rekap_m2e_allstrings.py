@@ -127,3 +127,108 @@ def test_build_rekap_per_string_stats_and_order(outputs_dir):
     pv3 = rekap[rekap["pv_string"] == "PV3"].iloc[0]
     assert pv3["n_days_empty"] == 2
     assert pd.isna(pv3["uptime_mean"])
+
+
+# ---------------------------------------------------------------------------
+# Kesadaran putus tautan
+# ---------------------------------------------------------------------------
+
+class TestRekapSadarTautan:
+    """``n_days`` yang berbeda antar plant tidak boleh tanpa penjelasan.
+
+    Phase One (WB01/WB02) menumpang fiber IconPlus, WB03-WB10 ethernet lokal.
+    Fiber putus menghapus seluruh Phase One dari ekspor hari itu. Rekap ini
+    mengelompokkan baris yang ADA, jadi tanggal yang hilang cuma mengecilkan
+    ``n_days`` -- tanpa satu pun kolom yang memberi tahu pembacanya kenapa.
+
+    Akibatnya ``uptime_mean`` Phase One dan WB03-WB10 dihitung atas jumlah hari
+    berbeda dan diperbandingkan seolah setara.
+    """
+
+    def _long(self, baris):
+        return pd.DataFrame(baris)
+
+    def _b(self, tanggal, inv, pv="PV1", uptime=100.0):
+        return {"date": pd.Timestamp(tanggal), "inverter_id": inv,
+                "pv_string": pv, "status": "NORMAL", "uptime_pct": uptime,
+                "downtime_minutes": 0.0}
+
+    def test_hari_tanpa_phase_one_sama_sekali_tercatat_putus_tautan(self):
+        """Seluruh kelompok absen sementara kelompok lain hadir = tautan."""
+        from rekap_m2e_allstrings import build_link_audit
+
+        long_df = self._long([
+            self._b("2025-11-13", "WB01-INV01"), self._b("2025-11-13", "WB02-INV01"),
+            self._b("2025-11-13", "WB05-INV01"),
+            # 03 Nov: Phase One hilang seluruhnya, WB05 tetap melapor.
+            self._b("2025-11-03", "WB05-INV01"),
+        ])
+
+        audit = build_link_audit(long_df)
+        baris = audit[(audit["date"] == pd.Timestamp("2025-11-03"))
+                      & (audit["group"] == "phase_one_iconplus_fibre")]
+
+        assert len(baris) == 1
+        assert baris.iloc[0]["verdict"] == "LINK_OUTAGE"
+        assert baris.iloc[0]["present"] == 0
+        assert baris.iloc[0]["expected"] == 2
+
+    def test_hari_lengkap_tidak_masuk_audit(self):
+        """Audit yang memuat setiap hari akan diabaikan orang."""
+        from rekap_m2e_allstrings import build_link_audit
+
+        long_df = self._long([
+            self._b("2025-11-13", "WB01-INV01"), self._b("2025-11-13", "WB05-INV01"),
+            self._b("2025-11-14", "WB01-INV01"), self._b("2025-11-14", "WB05-INV01"),
+        ])
+
+        assert build_link_audit(long_df).empty
+
+    def test_sebagian_inverter_absen_bukan_putus_tautan(self):
+        """Pemadaman inverter sungguhan tidak boleh dimaafkan sebagai tautan.
+
+        Ini arah kegagalan yang paling mahal: label "faktor eksternal" pada
+        inverter yang benar-benar mati membuatnya hilang dari perhatian.
+        """
+        from rekap_m2e_allstrings import build_link_audit
+
+        long_df = self._long([
+            self._b("2025-11-13", "WB01-INV01"), self._b("2025-11-13", "WB01-INV02"),
+            self._b("2025-11-13", "WB05-INV01"),
+            self._b("2025-11-14", "WB01-INV01"),   # INV02 absen, INV01 hadir
+            self._b("2025-11-14", "WB05-INV01"),
+        ])
+
+        audit = build_link_audit(long_df)
+        baris = audit[audit["date"] == pd.Timestamp("2025-11-14")]
+
+        assert list(baris["verdict"]) == ["INVERTER_ABSENCE"]
+
+    def test_rekap_memberi_kolom_hari_tautan_putus(self):
+        """String Phase One harus membawa hitungan itu; WB03-10 tidak.
+
+        Tanpa kolom ini ``n_days`` Phase One yang lebih kecil terbaca sebagai
+        data yang lebih sedikit tanpa sebab, atau lebih buruk lagi sebagai
+        pembangkit yang lebih sering mati.
+        """
+        from rekap_m2e_allstrings import (
+            attach_link_days, build_link_audit, build_rekap_per_string,
+        )
+
+        long_df = self._long([
+            self._b("2025-11-13", "WB01-INV01"), self._b("2025-11-13", "WB05-INV01"),
+            self._b("2025-11-03", "WB05-INV01"),
+        ])
+
+        rekap = attach_link_days(
+            build_rekap_per_string(long_df), build_link_audit(long_df),
+        ).set_index("inverter_id")
+
+        assert rekap.loc["WB01-INV01", "n_days_link_outage"] == 1
+        assert rekap.loc["WB05-INV01", "n_days_link_outage"] == 0
+
+    def test_kolom_baru_terdaftar_di_skema(self):
+        """Kolom yang tidak terdaftar akan hilang saat DataFrame direindeks."""
+        from rekap_m2e_allstrings import REKAP_PER_STRING_COLUMNS
+
+        assert "n_days_link_outage" in REKAP_PER_STRING_COLUMNS

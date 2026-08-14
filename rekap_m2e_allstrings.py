@@ -6,7 +6,13 @@ Output: 1 file excel berisi:
     - RekapUptimePct  : pivot uptime_pct -- baris (inverter_id, pv_string),
                         kolom tanggal.
     - RekapPerString  : ringkasan per string lintas tanggal (n_days, mean/min
-                        uptime, jumlah hari di bawah ambang, total downtime).
+                        uptime, jumlah hari di bawah ambang, total downtime,
+                        dan n_days_link_outage -- hari saat SELURUH kelompok
+                        transport string itu hilang dari ekspor).
+    - Tautan          : tanggal x kelompok transport yang tidak lengkap.
+                        LINK_OUTAGE = faktor eksternal (fiber IconPlus),
+                        BUKAN downtime pembangkit; INVERTER_ABSENCE = memang
+                        inverternya.
     - AllStrings      : gabungan long semua tanggal (kolom date di depan).
                         Bila melebihi batas baris Excel (1.048.576), sheet
                         dilewati dan data ditulis ke CSV pendamping.
@@ -27,6 +33,11 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
+from pv_pipeline.availability import (
+    TELEMETRY_LINK_GROUPS,
+    detect_link_outage,
+)
+
 ALLSTRINGS_SHEET = "M2e_hybrid_AllStrings"
 EXCEL_MAX_ROWS = 1_048_576
 _FINDINGS_XLSX_RE = re.compile(r"^m2_findings_(\d{8})\.xlsx$", re.I)
@@ -35,6 +46,7 @@ REKAP_PER_STRING_COLUMNS: List[str] = [
     "inverter_id", "pv_string", "n_days", "n_days_empty",
     "uptime_mean", "uptime_min", "worst_date",
     "n_days_below_threshold", "downtime_minutes_total",
+    "n_days_link_outage",
 ]
 
 
@@ -136,6 +148,88 @@ def build_rekap_per_string(
     )
 
 
+def build_link_audit(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Tanggal mana yang kehilangan SELURUH satu kelompok transport.
+
+    Situs mengekspor dari dua Fusion Solar di jaringan berbeda: Phase One
+    (WB01/WB02) lewat fiber IconPlus, WB03-WB10 lewat ethernet lokal. Fiber
+    putus menghapus seluruh Phase One dari ekspor hari itu.
+
+    Rekap ini mengelompokkan baris yang ADA, jadi tanggal yang hilang hanya
+    mengecilkan ``n_days`` -- tanpa satu pun kolom yang memberi tahu kenapa.
+    Akibatnya ``uptime_mean`` dua plant dihitung atas jumlah hari berbeda lalu
+    diperbandingkan seolah setara.
+
+    Roster "yang seharusnya ada" disimpulkan dari data itu sendiri: gabungan
+    seluruh inverter yang pernah terlihat pada rentang tanggal ini.
+    Konsekuensinya perlu disadari -- inverter yang TIDAK PERNAH melapor
+    sepanjang rentang tidak ada di roster dan karenanya tidak terdeteksi. Untuk
+    kasus itu pakai temuan ``M2e_link`` dari run harian, yang rosternya diambil
+    dari ``empty_pv_map``.
+
+    Returns
+    -------
+    DataFrame
+        ``date``, ``group``, ``expected``, ``present``, ``missing``,
+        ``verdict``. Hanya kelompok yang TIDAK lengkap; tanggal normal tidak
+        menghasilkan baris supaya penandanya tetap langka dan tetap dibaca.
+    """
+    if long_df.empty or "inverter_id" not in long_df.columns:
+        return pd.DataFrame(
+            columns=["date", "group", "expected", "present", "missing",
+                     "verdict"]
+        )
+
+    roster = sorted(long_df["inverter_id"].dropna().astype(str).unique())
+    baris = []
+    for hari, sub in long_df.groupby("date", sort=True):
+        hadir = sub["inverter_id"].dropna().astype(str).unique()
+        for b in detect_link_outage(hadir, roster):
+            baris.append({
+                "date": hari,
+                "group": b["group"],
+                "expected": b["expected"],
+                "present": b["present"],
+                "missing": b["missing"],
+                "verdict": b["verdict"],
+            })
+    return pd.DataFrame(
+        baris,
+        columns=["date", "group", "expected", "present", "missing", "verdict"],
+    )
+
+
+def attach_link_days(
+    rekap: pd.DataFrame,
+    link_audit: pd.DataFrame,
+) -> pd.DataFrame:
+    """Tambahkan ``n_days_link_outage`` per string ke rekap.
+
+    Dihitung hanya dari vonis ``LINK_OUTAGE``. ``INVERTER_ABSENCE`` sengaja
+    TIDAK dihitung: inverter yang benar-benar mati bukan faktor eksternal, dan
+    memberinya label tautan akan membuatnya hilang dari perhatian -- arah
+    kegagalan yang paling mahal di sini.
+    """
+    out = rekap.copy()
+    if link_audit.empty:
+        out["n_days_link_outage"] = 0
+        return out[REKAP_PER_STRING_COLUMNS]
+
+    putus = link_audit[link_audit["verdict"] == "LINK_OUTAGE"]
+    per_grup = putus.groupby("group")["date"].nunique().to_dict()
+
+    blok_ke_grup = {
+        b: nama for nama, blok in TELEMETRY_LINK_GROUPS.items() for b in blok
+    }
+    out["n_days_link_outage"] = [
+        per_grup.get(
+            blok_ke_grup.get(str(inv).strip().upper().split("-")[0]), 0,
+        )
+        for inv in out["inverter_id"]
+    ]
+    return out[REKAP_PER_STRING_COLUMNS]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Gabung + rekap M2e_hybrid_AllStrings ke 1 file excel.",
@@ -185,11 +279,26 @@ def main() -> None:
           f"{long_df.groupby(['inverter_id', 'pv_string']).ngroups} string")
 
     pivot = build_uptime_pivot(long_df)
-    rekap = build_rekap_per_string(long_df, args.uptime_threshold)
+    link_audit = build_link_audit(long_df)
+    rekap = attach_link_days(
+        build_rekap_per_string(long_df, args.uptime_threshold), link_audit,
+    )
+
+    _putus = link_audit[link_audit["verdict"] == "LINK_OUTAGE"]
+    if len(_putus):
+        print(f"[rekap-m2e] {_putus['date'].nunique()} tanggal kehilangan "
+              f"SELURUH satu kelompok transport -- putus tautan, faktor "
+              f"eksternal, BUKAN downtime. Lihat sheet Tautan; kolom "
+              f"n_days_link_outage menjelaskan kenapa n_days berbeda "
+              f"antar plant.")
+    else:
+        print("[rekap-m2e] tidak ada tanggal dengan kelompok transport hilang "
+              "seluruhnya.")
 
     with pd.ExcelWriter(out_xlsx) as writer:
         pivot.to_excel(writer, sheet_name="RekapUptimePct", index=False)
         rekap.to_excel(writer, sheet_name="RekapPerString", index=False)
+        link_audit.to_excel(writer, sheet_name="Tautan", index=False)
         if len(long_df) + 1 <= EXCEL_MAX_ROWS:
             long_df.to_excel(writer, sheet_name="AllStrings", index=False)
         else:
