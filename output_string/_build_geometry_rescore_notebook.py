@@ -134,7 +134,13 @@ OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
 # Idealnya dekat solstis seberang: makin jauh jaraknya, makin besar beda
 # musiman yang harus diprediksi model, jadi makin tajam ujinya. Kosongkan
 # ("") untuk melewati validasi.
-WORKBOOK_MUSIM_LAIN = ""
+#
+# Terisi sejak run 14 Agustus 21.30: Nov-Des 2025 akhirnya mencakup Phase One
+# dan WB06-INV06, jadi komposisinya sama persis dengan workbook Juni (1.354
+# string) dan pasangannya sah. Pemisahannya doy 166 lawan 335 -- 169 hari,
+# yang paling tajam yang tersedia.
+WORKBOOK_MUSIM_LAIN = "/content/drive/MyDrive/Cek PV String/outputs/" \\
+                      "string_intraday_diagnostic_20251103_20251229.xlsx"
 
 # Daftar string yang jadi subjek laporan yang sudah beredar
 # (Analisis_20String_Underperform_20260729). Kosongkan ([]) untuk menilai
