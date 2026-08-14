@@ -161,6 +161,24 @@ Acceptance criteria:
 - Missing expected files are surfaced clearly.
 - Loaded data contains `ManageObject`, `Start Time`, PV voltage/current columns, and inverter status columns when available.
 
+Two source systems, two networks:
+
+The site exports from two separate Fusion Solar instances, and they do not share
+a transport. Phase One (WB01/WB02) arrives as `1-2.xlsx` over an IconPlus fibre
+internet link; WB03-WB10 arrives as `3-10.xlsx` over local ethernet. When the
+fibre link is disrupted — a cut cable, or a fault in IconPlus equipment — the
+Phase One block is absent from that day's Huawei export entirely. Local ethernet
+rarely fails, so WB03-WB10 is almost always present.
+
+A day with zero Phase One inverters is therefore an external telecoms outage,
+not an old export format and not a plant outage. This is observable: in the
+Nov-Dec 2025 export `2025-11-03.csv` carries 0 Phase One inverters while
+`2025-11-13.csv` carries all 50. The consequence for analysis is that Phase One
+strings systematically receive fewer usable days than WB03-WB10 (about 40 of 48
+in the Nov-Dec 2025 diagnostic run) with nothing wrong at the plant. See 8.4 for
+what this must not be counted as, and `pv_pipeline/drive_probe.py::probe_inverter_coverage`
+for the per-file count that distinguishes the two cases.
+
 ### 8.2 Inverter and PV String Transformation
 
 Requirement:
@@ -217,6 +235,22 @@ Acceptance criteria:
 - Inverter-level findings are emitted when uptime crosses severity thresholds.
 - Empty PV channels are excluded.
 - String proxy events are debounced to reduce false positives.
+- Absent telemetry is not downtime. A day on which Phase One (WB01/WB02) is
+  missing from the export is an IconPlus fibre outage, an external factor on the
+  monitoring path, not a stopped plant (8.1). Counting those days as DOWN makes
+  Phase One availability look poor while the inverters were exporting energy
+  normally, and the resulting findings would send crews to healthy equipment.
+
+  The discriminator is the count, not the presence: **all 50** Phase One
+  inverters vanishing together is the link; a subset vanishing is the inverters.
+  WB03-WB10 riding a different transport gives the control — if WB03-WB10 is
+  present on the same timestamps, the plant was up.
+
+  Not yet implemented in `pv_pipeline.availability`. Until it is, read Phase One
+  uptime for any date with zero Phase One rows as UNKNOWN rather than DOWN, and
+  check the per-file inverter count with
+  `pv_pipeline/drive_probe.py::probe_inverter_coverage` before acting on a
+  Phase One availability finding.
 
 Related tooling:
 - `rekap_m2e_allstrings.py` merges the `M2e_hybrid_AllStrings` sheet across daily `m2_findings_{YYYYMMDD}.xlsx` outputs into one Excel: uptime pivot per date, per-string summary (worst days, days below threshold, total downtime), and the combined long table (CSV fallback beyond the Excel row limit).
@@ -582,8 +616,14 @@ Known data limits, deliberately left NULL rather than guessed:
   The builder therefore drops any as-built mapping that lands on an empty
   channel (`disprove_empty_channel`), because a `pv` that has been tested and
   disproven is worse than none — nothing downstream could tell it had failed.
-  One of the nine, WB05-INV05 PV9, falls under the same rule but was not
-  confirmed directly: that inverter did not report on the day tested.
+  One of the nine, WB05-INV05 PV9, could not be read on 2026-05-13 because that
+  inverter did not report at all that day. It has since been confirmed against
+  the Nov-Dec 2025 export, where the inverter reports normally: at midday on
+  2025-11-03 the channel read 0.000 kW while its 26 live siblings ran a
+  7.351 kW median (`pv_pipeline/drive_probe.py::probe_channel_silence`). All
+  nine are now confirmed directly. The probe returns `TIDAK_MELAPOR` with a
+  null reading rather than 0.00 kW when an inverter is absent, so a repeat of
+  the 2026-05-13 situation cannot be mistaken for a silent channel.
 - 9 inverters still carry a string label that resolves to two rows — 18 in
   total. Those `(inverter_id, pv)` pairs stay NULL rather than silently taking
   the first match. Sixteen of them are not a drawing fault at all: the as-built
@@ -1051,6 +1091,7 @@ The product is considered usable for engineering review when:
 | Sibling ratio compares strings that face different directions | Morning/afternoon labels partly reflect ground slope rather than obstruction; field crews sent to plots with nothing to prune | Report `ampm_residual` beside the raw asymmetry and rank field visits by it (8.15). |
 | String labels ambiguous in the as-built DXF | A guessed position would be presented to engineers as measured evidence | The 8 affected inverters resolve to NULL cross-slope; NULL is never rendered as "flat". |
 | Geometry explains asymmetry but not deficit level | A string cleared of a directional label may still be read as "nothing wrong" | 8.15 states explicitly that a midday deficit survives the geometry test and still needs investigation. |
+| Phase One telemetry rides an IconPlus fibre link, WB03-WB10 rides local ethernet | A fibre outage removes all 900 Phase One strings from the export; read as downtime it depresses availability for a plant that was running, and shortens the day count behind every Phase One statistic | External factor, outside site control. Treat zero-Phase-One dates as UNKNOWN, not DOWN (8.4); confirm with the per-file inverter count — all 50 missing is the link, a subset is the inverters. |
 
 ---
 
