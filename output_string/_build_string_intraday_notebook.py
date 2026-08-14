@@ -107,7 +107,7 @@ CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
 # Folder baseline di Drive: berisi CSV harian {YYYY-MM-DD}.csv per bulan.
 # Data dibaca LANGSUNG dari sini -- tidak diunduh, tidak disalin.
 BASELINE_DIR = "/content/drive/MyDrive/Cek PV String/baseline"
-BULAN = ["2026-06"]          # daftar subfolder bulan yang mau dianalisis
+BULAN = ["2025-11", "2025-12"]   # daftar subfolder bulan yang mau dianalisis
 
 # Folder output di Drive.
 OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
@@ -143,14 +143,34 @@ INVERTER_IDS = TERSANGKA_WB03_10 + VERIFIKASI_KOREKSI + PHASE_ONE
 # Kejadian hujan untuk uji pemulihan. Ambil tanggalnya dari
 # precipitation_daily_plts_ikn.csv (output run soiling) atau data hujan
 # harian. Pilih hari hujan >= 5 mm, lalu 3-4 hari kering sebelum & sesudah.
+#
+# WAJIB bergerak bersama BULAN. Jendela yang tidak beririsan dengan data
+# TIDAK menimbulkan galat -- rain_recovery() mengembalikan tabel kosong dan
+# Cell 6 mencetak "Tidak ada RAIN_EVENTS", seolah-olah tidak ada yang diisi.
+#
+# Set di bawah untuk BULAN = 2025-11/2025-12. Ini PUNCAK MUSIM HUJAN: cuma
+# 45-57% hari di bawah 5 mm dan deret kering terpanjang 6 hari, lawan 87%
+# dan dua deret 6 hari di Juni. Panel tercuci tiap 2-3 hari, jadi nyaris
+# tidak ada debu yang sempat menumpuk untuk dicuci.
+# BACA HASILNYA BEGINI: delta ~0 di sini BUKAN bukti "bukan debu" -- itu
+# bukti tidak ada yang bisa dipulihkan. Uji soiling yang sahih tetap set
+# Juni. Yang ini cuma supaya Cell 6 tidak diam-diam bohong.
 RAIN_EVENTS = [
-    {"nama": "hujan 10-11 Jun",
-     "before": ("2026-06-06", "2026-06-09"),
-     "after":  ("2026-06-12", "2026-06-15")},
-    {"nama": "hujan 16 Jun",
-     "before": ("2026-06-13", "2026-06-15"),
-     "after":  ("2026-06-17", "2026-06-20")},
+    {"nama": "hujan 29-30 Nov (19,6 mm)",
+     "before": ("2025-11-24", "2025-11-28"),
+     "after":  ("2025-12-01", "2025-12-02")},
+    {"nama": "hujan 10 Des (16,6 mm)",
+     "before": ("2025-12-08", "2025-12-09"),
+     "after":  ("2025-12-11", "2025-12-12")},
+    {"nama": "hujan 27 Des (19,9 mm)",
+     "before": ("2025-12-25", "2025-12-26"),
+     "after":  ("2025-12-28", "2025-12-29")},
 ]
+# Set untuk BULAN = 2026-06 (musim kering -- uji soiling yang sahih):
+#     {"nama": "hujan 10-11 Jun", "before": ("2026-06-06", "2026-06-09"),
+#      "after": ("2026-06-12", "2026-06-15")},
+#     {"nama": "hujan 16 Jun",    "before": ("2026-06-13", "2026-06-15"),
+#      "after": ("2026-06-17", "2026-06-20")},
 
 # Hanya string dengan defisit >= ini yang masuk daftar prioritas Cell 5.
 # Klasifikasi tetap dihitung untuk semua string; ambang ini cuma memfilter
