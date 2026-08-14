@@ -43,6 +43,143 @@ def _classify_status(status: Optional[str], keymap: dict) -> str:
     return "UNKNOWN"
 
 
+# Telemetri datang dari DUA Fusion Solar di transport berbeda: Phase One lewat
+# fiber IconPlus, WB03-WB10 lewat ethernet lokal (PRD 8.1). Fiber putus
+# menghapus seluruh blok Phase One dari ekspor hari itu, dan tanpa pemetaan ini
+# ketiadaannya tidak bisa dibedakan dari inverter yang benar-benar mati.
+TELEMETRY_LINK_GROUPS = {
+    "phase_one_iconplus_fibre": ("WB01", "WB02"),
+    "wb03_10_local_ethernet": (
+        "WB03", "WB04", "WB05", "WB06", "WB07", "WB08", "WB09", "WB10",
+    ),
+}
+
+# Blok yang belum terpetakan ke transport mana pun dilaporkan di bawah label
+# ini alih-alih dibuang, supaya pemadaman di sana tidak jadi titik buta.
+UNMAPPED_LINK_GROUP = "tak_terpetakan"
+
+
+def _block_of(inverter_id) -> str:
+    """``WB05-INV12`` -> ``"WB05"``."""
+    return str(inverter_id).strip().upper().split("-")[0]
+
+
+def detect_link_outage(
+    present_inverters,
+    expected_inverters,
+    *,
+    groups: dict = TELEMETRY_LINK_GROUPS,
+) -> list:
+    """Bedakan putus tautan telemetri dari inverter yang benar-benar absen.
+
+    Ketiadaan tidak pernah menjadi DOWN di modul ini -- inverter tanpa baris
+    tidak menghasilkan grup, dan status kosong dipetakan UNKNOWN yang tidak
+    masuk penyebut uptime. Masalahnya bukan salah hitung melainkan SENYAP:
+    tanpa laporan ini, rerata uptime lintas tanggal dihitung atas jumlah hari
+    yang berbeda antar plant dan tidak ada penanda apa pun bagi pembacanya.
+
+    Pembedanya jumlah, bukan kehadiran. SELURUH kelompok hilang serentak
+    berarti jalurnya; sebagian berarti inverternya. Kelompok yang menumpang
+    transport lain adalah kontrolnya -- kalau ia hadir, pembangkitnya jalan.
+
+    Returns
+    -------
+    list of dict
+        Satu baris per kelompok yang TIDAK lengkap; kelompok utuh dilewati
+        supaya penandanya tetap langka dan tetap dibaca orang. Kunci:
+        ``group``, ``blocks``, ``expected``, ``present``, ``missing``,
+        ``missing_inverters``, ``control_present``, ``verdict``.
+
+        ``verdict``: ``LINK_OUTAGE`` (semua hilang, kontrol hadir -- faktor
+        eksternal, BUKAN downtime), ``NO_DATA`` (semua hilang, tidak ada
+        kontrol -- penyebabnya tidak bisa ditimpakan ke satu jalur),
+        ``INVERTER_ABSENCE`` (sebagian hilang -- inverternya, tindak lanjuti).
+    """
+    hadir = {str(i).strip().upper() for i in present_inverters}
+    diharapkan = {str(i).strip().upper() for i in expected_inverters}
+
+    blok_ke_grup = {b: nama for nama, blok in groups.items() for b in blok}
+    per_grup: dict = {}
+    for inv in sorted(diharapkan):
+        nama = blok_ke_grup.get(_block_of(inv), UNMAPPED_LINK_GROUP)
+        per_grup.setdefault(nama, []).append(inv)
+
+    n_hadir = {
+        nama: sum(1 for i in anggota if i in hadir)
+        for nama, anggota in per_grup.items()
+    }
+
+    baris = []
+    for nama, anggota in per_grup.items():
+        ada = n_hadir[nama]
+        if ada == len(anggota):
+            continue
+
+        kontrol = any(n > 0 for lain, n in n_hadir.items() if lain != nama)
+        if ada == 0:
+            verdict = "LINK_OUTAGE" if kontrol else "NO_DATA"
+        else:
+            verdict = "INVERTER_ABSENCE"
+
+        baris.append({
+            "group": nama,
+            "blocks": tuple(groups.get(nama, ())),
+            "expected": len(anggota),
+            "present": ada,
+            "missing": len(anggota) - ada,
+            "missing_inverters": [i for i in anggota if i not in hadir],
+            "control_present": bool(kontrol),
+            "verdict": verdict,
+        })
+    return baris
+
+
+def _link_outage_findings(baris: list, timestamp) -> list:
+    """Baris detect_link_outage -> M2Finding INFO.
+
+    INFO dan bukan lebih tinggi: putus tautan adalah faktor eksternal pada jalur
+    pemantauan, bukan cacat pembangkit. Severity yang lebih tinggi akan mengirim
+    orang ke peralatan yang sehat. ``INVERTER_ABSENCE`` sengaja TIDAK dipancarkan
+    di sini -- inverter yang absen sebagian sudah jadi urusan uptime biasa, dan
+    menduplikasinya cuma menambah bising.
+    """
+    keluar = []
+    for b in baris:
+        if b["verdict"] not in ("LINK_OUTAGE", "NO_DATA"):
+            continue
+        if b["verdict"] == "LINK_OUTAGE":
+            pesan = (
+                f"{b['group']}: seluruh {b['expected']} inverter absen dari "
+                f"ekspor sementara kelompok lain melapor -- putus tautan "
+                f"telemetri (faktor eksternal), BUKAN downtime pembangkit. "
+                f"Jangan hitung sebagai DOWN; baca sebagai UNKNOWN."
+            )
+        else:
+            pesan = (
+                f"{b['group']}: seluruh {b['expected']} inverter absen dan "
+                f"tidak ada kelompok pembanding yang hadir -- tidak ada data "
+                f"hari ini. Bukan downtime maupun putus tautan satu jalur; "
+                f"penyebabnya tidak bisa ditentukan dari berkas ini."
+            )
+        keluar.append(M2Finding(
+            timestamp=timestamp,
+            inverter_id=None,
+            pv_string=None,
+            sub_module="M2e_link",
+            severity=Severity.INFO,
+            value=float(b["present"]),
+            threshold=float(b["expected"]),
+            message=pesan,
+            extra={
+                "verdict": b["verdict"],
+                "blocks": list(b["blocks"]),
+                "missing": b["missing"],
+                "control_present": b["control_present"],
+            },
+        ))
+    return keluar
+
+
 _SENTINEL_NULLS = {"-", "", "nan", "NaN", "None"}
 
 
@@ -583,6 +720,28 @@ class M2eAvailability(SubModule):
             sd_parsed=sd_parsed, st_parsed=st_parsed,
         )
 
+        # Blok yang hilang seluruhnya tidak pernah muncul di groupby di atas --
+        # ia tidak jadi DOWN, tapi juga tidak jadi apa-apa. Laporkan di sini,
+        # kalau tidak ketiadaannya hanya terlihat sebagai n_days yang berbeda
+        # diam-diam antar plant. Roster diambil dari empty_pv_map; tanpa roster
+        # tidak ada yang bisa dibandingkan, jadi pemeriksaannya dilewati dengan
+        # peringatan alih-alih menebak daftar inverter yang seharusnya ada.
+        link_findings = []
+        if empty_pv_map:
+            _ts = df["Start Time"].min()
+            _ts = _ts.to_pydatetime() if hasattr(_ts, "to_pydatetime") else _ts
+            link_findings = _link_outage_findings(
+                detect_link_outage(
+                    df["Inverter_ID"].dropna().unique(), empty_pv_map.keys(),
+                ),
+                _ts if isinstance(_ts, datetime) else datetime.utcnow(),
+            )
+        else:
+            warnings.warn(
+                "[M2e] empty_pv_map kosong; pemeriksaan putus tautan dilewati. "
+                "Blok yang hilang seluruhnya tidak akan terlaporkan."
+            )
+
         self.last_inverter_log_df = _compute_inverter_operation_log(
             df, mode=mode, sd_parsed=sd_parsed, st_parsed=st_parsed,
         )
@@ -602,7 +761,7 @@ class M2eAvailability(SubModule):
                 empty_pv_map=empty_pv_map,
             )
 
-        return inv_findings + str_findings
+        return inv_findings + str_findings + link_findings
 
 
 if __name__ == "__main__":
