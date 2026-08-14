@@ -827,3 +827,103 @@ class TestRainRecoveryVerdict:
         assert hasil["n_pulih"] == 0
         assert hasil["inverter_dominan"] is None
         assert hasil["putusan"] == "TIDAK_PULIH"
+
+
+# ---------------------------------------------------------------------------
+# Musim ketiga -- kenapa dua titik tidak cukup
+# ---------------------------------------------------------------------------
+
+class TestTigaMusim:
+    """Dua musim hanya memberi SATU selisih, dan satu selisih selalu "konsisten".
+
+    ``SEASONAL_REL_RANGE_MAX`` membandingkan rentang asimetri terhadap
+    besarnya. Dengan dua titik, rentang itu hanyalah jarak antar keduanya --
+    dua nilai apa pun yang berdekatan lolos, termasuk milik obstruksi yang
+    kebetulan bergeser pelan antara Juni dan Desember. Titik KETIGA di tengah
+    tahunlah yang bisa membantahnya, karena geometri menuntut asimetri
+    bergerak TERATUR sepanjang tahun, bukan sekadar mirip di dua ujung.
+
+    Dukungan N-musim sudah ada di ``seasonal_discriminator`` sejak awal tapi
+    tidak pernah diuji. Kelas ini menguncinya sebelum run Maret 2026
+    bergantung padanya.
+    """
+
+    def test_musim_tengah_bisa_membatalkan_vonis_geometri_dua_musim(self):
+        """Sepasang ujung yang rapi bisa menyembunyikan obstruksi.
+
+        Juni −0,45 dan Desember −0,50 lolos sebagai GEOMETRI. Tambahkan Maret
+        di −0,30 dan rentang relatifnya melompat ke 0,48: asimetrinya tidak
+        bergerak teratur, jadi bukan kemiringan tanah. Tanpa titik ketiga,
+        string ini akan dibebaskan dari daftar kunjungan secara keliru.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        dua = seasonal_discriminator({
+            "jun": _klas([("X", 0.70, 1.15)]),
+            "des": _klas([("X", 0.68, 1.18)]),
+        }).set_index("pv_string")
+        assert dua.loc["X", "verdikt"] == "GEOMETRI"
+
+        tiga = seasonal_discriminator({
+            "jun": _klas([("X", 0.70, 1.15)]),
+            "mar": _klas([("X", 0.85, 1.15)]),
+            "des": _klas([("X", 0.68, 1.18)]),
+        }).set_index("pv_string")
+
+        assert tiga.loc["X", "n_musim"] == 3
+        assert tiga.loc["X", "verdikt"] == "OBSTRUKSI"
+
+    def test_musim_tengah_yang_menginterpolasi_menegaskan_geometri(self):
+        """Penjaga arah sebaliknya: titik ketiga tidak boleh menolak semuanya.
+
+        Kalau Maret jatuh di antara kedua ekstrem seperti yang dituntut
+        geometri, vonisnya harus tetap GEOMETRI -- kalau tidak, menambah musim
+        cuma akan mengubur setiap string di bawah label OBSTRUKSI.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        tiga = seasonal_discriminator({
+            "jun": _klas([("X", 0.70, 1.15)]),
+            "mar": _klas([("X", 0.6875, 1.1625)]),
+            "des": _klas([("X", 0.68, 1.18)]),
+        }).set_index("pv_string")
+
+        assert tiga.loc["X", "verdikt"] == "GEOMETRI"
+        assert tiga.loc["X", "asym_rel_range"] < 0.30
+
+    def test_tiap_musim_dapat_kolomnya_sendiri(self):
+        """Nilai per musim harus terbaca, bukan hanya ringkasannya.
+
+        Tanpa kolom per musim, pembaca tidak bisa melihat musim MANA yang
+        menyimpang -- dan itu satu-satunya cara menilai apakah vonis OBSTRUKSI
+        masuk akal atau produk satu musim yang datanya buruk.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        out = seasonal_discriminator({
+            "jun": _klas([("X", 0.70, 1.15)]),
+            "mar": _klas([("X", 0.85, 1.15)]),
+            "des": _klas([("X", 0.68, 1.18)]),
+        })
+
+        for label in ("asym_jun", "asym_mar", "asym_des"):
+            assert label in out.columns, label
+
+    def test_string_yang_absen_di_satu_musim_terlihat_dari_n_musim(self):
+        """Komposisi berbeda antar musim tidak boleh lolos tanpa jejak.
+
+        Phase One absen dari sebagian hari karena putus fiber IconPlus, jadi
+        string yang tidak hadir di semua musim itu keadaan nyata, bukan
+        hipotetis. Ia dinilai atas lebih sedikit titik, dan ``n_musim`` adalah
+        satu-satunya tempat hal itu terbaca.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        out = seasonal_discriminator({
+            "jun": _klas([("X", 0.70, 1.15), ("Y", 0.70, 1.15)]),
+            "mar": _klas([("X", 0.69, 1.16)]),
+            "des": _klas([("X", 0.68, 1.18), ("Y", 0.68, 1.18)]),
+        }).set_index("pv_string")
+
+        assert out.loc["X", "n_musim"] == 3
+        assert out.loc["Y", "n_musim"] == 2

@@ -131,16 +131,25 @@ WORKBOOK = "/content/drive/MyDrive/Cek PV String/outputs/" \\
 OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
 
 # Workbook dari rentang tanggal musim LAIN, untuk validasi silang di Cell 5.
-# Idealnya dekat solstis seberang: makin jauh jaraknya, makin besar beda
-# musiman yang harus diprediksi model, jadi makin tajam ujinya. Kosongkan
-# ("") untuk melewati validasi.
+# DAFTAR, bukan satu path: seasonal_discriminator() memang menerima berapa pun
+# musim, dan membatasinya ke satu membuang informasi yang paling menentukan.
+# Kosongkan ([]) untuk melewati validasi.
 #
-# Terisi sejak run 14 Agustus 21.30: Nov-Des 2025 akhirnya mencakup Phase One
-# dan WB06-INV06, jadi komposisinya sama persis dengan workbook Juni (1.354
-# string) dan pasangannya sah. Pemisahannya doy 166 lawan 335 -- 169 hari,
-# yang paling tajam yang tersedia.
-WORKBOOK_MUSIM_LAIN = "/content/drive/MyDrive/Cek PV String/outputs/" \\
-                      "string_intraday_diagnostic_20251103_20251229.xlsx"
+# Dua musim hanya bisa memberi SATU selisih, dan ambang SEASONAL_REL_RANGE_MAX
+# yang disetel pada satu selisih tidak bisa dibedakan dari garis lurus. Musim
+# ketiga di TENGAH-lah yang mengujinya: kalau asimetri sebuah string memang
+# geometris, ia harus jatuh di antara kedua ekstrem secara teratur, bukan
+# sekadar konsisten di dua ujung.
+#
+# doy 166 (Jun) - 76 (Mar) - 335 (Nov-Des). Maret 2026 dipilih karena berjarak
+# 90 dari jendela terdekat dan punya 25 hari; Maret 2025 berjarak 91 tapi
+# hanya 4 hari.
+WORKBOOK_MUSIM_LAIN = [
+    "/content/drive/MyDrive/Cek PV String/outputs/"
+    "string_intraday_diagnostic_20251103_20251229.xlsx",
+    "/content/drive/MyDrive/Cek PV String/outputs/"
+    "string_intraday_diagnostic_20260301_20260331.xlsx",
+]
 
 # Daftar string yang jadi subjek laporan yang sudah beredar
 # (Analisis_20String_Underperform_20260729). Kosongkan ([]) untuk menilai
@@ -251,13 +260,24 @@ if not WORKBOOK_MUSIM_LAIN:
     print("Isi di Cell 2 dengan workbook diagnostik dari rentang tanggal musim")
     print("LAIN (idealnya dekat solstis seberang) untuk mengaktifkan sel ini.")
 else:
-    KLAS2, AWAL2, AKHIR2, DOY2 = muat(WORKBOOK_MUSIM_LAIN)
-    print(f"Musim pembanding: {AWAL2.date()} .. {AKHIR2.date()} -> doy {DOY2}")
+    MUSIM = {str(AWAL.date()): KLAS}
+    print(f"Musim acuan   : {AWAL.date()} .. {AKHIR.date()} -> doy {DOY}")
+    for _path in WORKBOOK_MUSIM_LAIN:
+        _k, _a, _b, _d = muat(_path)
+        MUSIM[str(_a.date())] = _k
+        print(f"Musim pembanding: {_a.date()} .. {_b.date()} -> doy {_d} "
+              f"({len(_k)} string)")
 
-    VALIDASI = validate_geometry_seasonally({
-        str(AWAL.date()): KLAS,
-        str(AWAL2.date()): KLAS2,
-    })
+    # Komposisi yang berbeda antar musim membuat perbandingan timpang: string
+    # yang hanya ada di sebagian musim akan dinilai atas selisih yang lebih
+    # sedikit tanpa hal itu terlihat di kolom mana pun kecuali n_musim.
+    _n = {lb: len(fr) for lb, fr in MUSIM.items()}
+    if len(set(_n.values())) > 1:
+        print(f"\\nPERHATIAN -- jumlah string berbeda antar musim: {_n}")
+        print("Periksa kolom n_musim di hasil; string yang tidak hadir di semua")
+        print("musim dinilai atas lebih sedikit titik.")
+
+    VALIDASI = validate_geometry_seasonally(MUSIM)
     display(VALIDASI.head(40))
 
     print()
