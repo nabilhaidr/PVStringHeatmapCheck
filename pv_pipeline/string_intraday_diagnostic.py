@@ -44,6 +44,12 @@ DEFAULT_RECOVERY_RATIO: float = 1.02  # rasio >= ini di suatu jam -> panel sehat
 DEFAULT_FLAT_RANGE: float = 0.10      # rentang <= ini -> profil datar
 DEFAULT_DROPOUT_SHARE: float = 0.40   # >= ini bagian hari mati dini -> shading sore
 DEFAULT_AMPM_GAP: float = 0.12        # selisih pagi vs sore -> shading berarah
+# Ambang putusan uji hujan. Diturunkan dari sifat sebarannya, bukan dari
+# datanya: pemulihan hujan menjulur ke kanan -- sedikit string bergerak
+# jauh sementara sebagian besar tidak bergerak sama sekali.
+DEFAULT_RAIN_RECOVER_PP: float = 3.0   # string dianggap pulih bila >= ini
+DEFAULT_RAIN_MEDIAN_PP: float = 1.0    # median kandidat >= ini -> menyeluruh
+DEFAULT_RAIN_CONCENTRATION: float = 0.5  # bagian pemulih di satu inverter
 
 LONG_COLUMNS: List[str] = ["ts", "inverter_id", "pv", "power_kw"]
 GEOMETRY_COLUMNS: List[str] = [
@@ -467,6 +473,82 @@ def rain_recovery(
                 "delta_pp": round((a - b) * 100, 2) if ok else np.nan,
             })
     return pd.DataFrame(rows, columns=RAIN_COLUMNS)
+
+
+def rain_recovery_verdict(
+    rain: pd.DataFrame,
+    candidates: Iterable[str],
+    *,
+    recover_pp: float = DEFAULT_RAIN_RECOVER_PP,
+    median_pp: float = DEFAULT_RAIN_MEDIAN_PP,
+    concentration: float = DEFAULT_RAIN_CONCENTRATION,
+) -> dict:
+    """Vonis uji hujan atas MEDIAN kandidat, dan sebut inverter yang mendominasi.
+
+    Rata-rata adalah alat yang salah di sini. Sebaran pemulihan hujan menjulur:
+    sebagian besar string tidak bergerak, beberapa bergerak jauh. Run 14 Agustus
+    mengumumkan "komponen soiling nyata" atas rata-rata +1,21 pp sementara median
+    tiap kelompok negatif -- dan 5 dari 8 string yang pulih ada di SATU inverter.
+    Tindakan yang benar adalah membersihkan satu inverter; yang tercetak
+    mengarahkan ke pembersihan se-situs.
+
+    Median menjawab "apakah kandidat KHAS pulih". Bagian dominan menjawab
+    "apakah yang pulih itu berkerumun di satu tempat", dan dihitung atas
+    PEMULIH, bukan atas seluruh kandidat: 5 dari 8 menggerakkan kerja lapangan,
+    5 dari 42 tidak berarti apa-apa.
+
+    ``concentration`` adalah ambang pelaporan: bagian dominan di atas nilai ini
+    layak disebut sebagai temuan per-inverter, bukan per-situs.
+
+    Returns
+    -------
+    dict
+        ``n_kandidat``, ``median_pp``, ``mean_pp``, ``n_pulih``,
+        ``inverter_dominan``, ``bagian_dominan``, ``terkonsentrasi``,
+        ``putusan``.
+
+        ``putusan`` salah satu dari ``SOILING_MENYELURUH`` (kandidat khas pulih),
+        ``SOILING_LOKAL`` (hanya ekornya yang pulih), ``TIDAK_PULIH`` (tidak ada
+        yang pulih -- defisitnya bukan debu, dan cleaning tidak akan menolong).
+    """
+    delta = rain.groupby("pv_string")["delta_pp"].mean()
+    kand = delta.reindex(pd.Index(list(candidates)).unique()).dropna()
+
+    if kand.empty:
+        return {
+            "n_kandidat": 0, "median_pp": float("nan"), "mean_pp": float("nan"),
+            "n_pulih": 0, "inverter_dominan": None,
+            "bagian_dominan": float("nan"), "terkonsentrasi": False,
+            "putusan": "TIDAK_PULIH",
+        }
+
+    pulih = kand[kand >= recover_pp]
+    dominan, bagian = None, float("nan")
+    if len(pulih):
+        per_inv = (pulih.index.to_series()
+                        .map(lambda s: "-".join(str(s).split("-")[:2]))
+                        .value_counts())
+        dominan = str(per_inv.index[0])
+        bagian = float(per_inv.iloc[0]) / len(pulih)
+
+    med = float(kand.median())
+    if med >= median_pp:
+        putusan = "SOILING_MENYELURUH"
+    elif len(pulih):
+        putusan = "SOILING_LOKAL"
+    else:
+        putusan = "TIDAK_PULIH"
+
+    return {
+        "n_kandidat": int(len(kand)),
+        "median_pp": med,
+        "mean_pp": float(kand.mean()),
+        "n_pulih": int(len(pulih)),
+        "inverter_dominan": dominan,
+        "bagian_dominan": bagian,
+        "terkonsentrasi": bool(len(pulih)) and bagian >= concentration,
+        "putusan": putusan,
+    }
 
 
 def seasonal_discriminator(

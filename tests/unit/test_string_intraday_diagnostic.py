@@ -739,3 +739,91 @@ def test_validator_reports_a_seasonal_call_it_cannot_check():
     assert row["verdikt_geometris"] == "DATA_GEOMETRI_TIDAK_ADA"
     assert row["hasil"] == "TIDAK_BERLAKU"
     assert pd.isna(row["residual_drift"])
+
+
+# ---------------------------------------------------------------------------
+# Putusan uji hujan -- median, bukan rata-rata
+# ---------------------------------------------------------------------------
+
+def _hujan(baris):
+    """DataFrame Uji_Hujan sintetis: (pv_string, delta_pp) -> satu kejadian."""
+    return pd.DataFrame(
+        [{"pv_string": s, "event": "hujan uji",
+          "ratio_before": 0.80, "ratio_after": 0.80 + d / 100.0,
+          "delta_pp": d}
+         for s, d in baris],
+        columns=["pv_string", "event", "ratio_before", "ratio_after", "delta_pp"],
+    )
+
+
+class TestRainRecoveryVerdict:
+    """Sebaran pemulihan hujan menjulur; rata-rata bukan alat yang tepat.
+
+    Run 14 Agustus mengumumkan "komponen soiling nyata" atas rata-rata +1,21 pp
+    padahal median tiap kelompok NEGATIF, dan 5 dari 8 string yang pulih ada di
+    satu inverter. Tindakan yang benar adalah membersihkan satu inverter;
+    kesimpulan yang tercetak mengarahkan ke pembersihan se-situs.
+    """
+
+    def test_ekor_panjang_tidak_boleh_jadi_vonis_se_situs(self):
+        """Median ~0 dengan rata-rata positif = pemulihan LOKAL, bukan menyeluruh.
+
+        Ini bentuk data yang sebenarnya terjadi. Kalau vonisnya masih memakai
+        rata-rata, regresi yang sama kembali tanpa ada yang menyadarinya.
+        """
+        from pv_pipeline.string_intraday_diagnostic import rain_recovery_verdict
+
+        tenang = [(f"WB05-INV{i:02d}-PV1", 0.0) for i in range(1, 21)]
+        pulih = [(f"WB07-INV08-PV{n}", 10.0) for n in (2, 3, 13, 14, 18)]
+        rain = _hujan(tenang + pulih)
+
+        hasil = rain_recovery_verdict(rain, [s for s, _ in tenang + pulih])
+
+        assert hasil["mean_pp"] > 1.0, "rata-ratanya memang tertarik ekor"
+        assert hasil["median_pp"] < 1.0
+        assert hasil["putusan"] == "SOILING_LOKAL"
+
+    def test_inverter_dominan_disebut_namanya(self):
+        """Bagian dominan dihitung atas PEMULIH, bukan atas semua kandidat.
+
+        5 dari 8 pemulih di satu inverter itu angka yang menggerakkan kerja
+        lapangan. 5 dari 42 kandidat tidak berarti apa-apa.
+        """
+        from pv_pipeline.string_intraday_diagnostic import rain_recovery_verdict
+
+        rain = _hujan(
+            [(f"WB05-INV{i:02d}-PV1", 0.0) for i in range(1, 21)]
+            + [(f"WB07-INV08-PV{n}", 10.0) for n in (2, 3, 13, 14, 18)]
+            + [("WB09-INV20-PV1", 9.0), ("WB03-INV06-PV2", 8.0),
+               ("WB04-INV02-PV3", 7.0)]
+        )
+        hasil = rain_recovery_verdict(rain, list(rain["pv_string"]))
+
+        assert hasil["n_pulih"] == 8
+        assert hasil["inverter_dominan"] == "WB07-INV08"
+        assert hasil["bagian_dominan"] == pytest.approx(5 / 8)
+
+    def test_pemulihan_merata_tetap_divonis_menyeluruh(self):
+        """Kalau kandidat KHAS memang pulih, vonis se-situs itu benar.
+
+        Penjaga arah sebaliknya: median yang dipakai tidak boleh membuat
+        soiling sungguhan jadi tak terdeteksi.
+        """
+        from pv_pipeline.string_intraday_diagnostic import rain_recovery_verdict
+
+        rain = _hujan([(f"WB0{i%7+3}-INV{i:02d}-PV1", 5.0) for i in range(1, 21)])
+        hasil = rain_recovery_verdict(rain, list(rain["pv_string"]))
+
+        assert hasil["median_pp"] == pytest.approx(5.0)
+        assert hasil["putusan"] == "SOILING_MENYELURUH"
+
+    def test_tanpa_pemulihan_sama_sekali_bukan_debu(self):
+        """Nol pemulih -> defisitnya bukan debu, dan cleaning tidak menolong."""
+        from pv_pipeline.string_intraday_diagnostic import rain_recovery_verdict
+
+        rain = _hujan([(f"WB05-INV{i:02d}-PV1", -0.2) for i in range(1, 21)])
+        hasil = rain_recovery_verdict(rain, list(rain["pv_string"]))
+
+        assert hasil["n_pulih"] == 0
+        assert hasil["inverter_dominan"] is None
+        assert hasil["putusan"] == "TIDAK_PULIH"

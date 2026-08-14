@@ -297,21 +297,56 @@ print("  DEAD_OR_OFFLINE bukan urusan cleaning -> jalur perbaikan (M2e).")
 '''
 
 CODE_RAIN = '''# Cell 6 - Uji hujan: benarkah ini debu?
+from pv_pipeline.string_intraday_diagnostic import (
+    DEFAULT_RAIN_RECOVER_PP,
+    rain_recovery_verdict,
+)
+
 if REPORT.rain.empty:
     print("Tidak ada RAIN_EVENTS; lewati.")
+    print("Kalau RAIN_EVENTS SUDAH diisi, penyebabnya jendela before/after")
+    print("tidak beririsan dengan BULAN -- keduanya wajib bergerak bersama.")
 else:
+    V = rain_recovery_verdict(REPORT.rain, KANDIDAT["pv_string"])
     delta = REPORT.rain.groupby("pv_string")["delta_pp"].mean()
-    kand = delta.reindex(KANDIDAT["pv_string"]).dropna()
     print("Perubahan rasio siang setelah hujan (poin persen, + = pulih):\\n")
-    print(f"  kandidat defisit tinggi  : {kand.mean():+.2f} pp "
-          f"(n={len(kand)}, pulih >3pp: {(kand > 3).sum()})")
-    print(f"  seluruh string dianalisis: {delta.mean():+.2f} pp (n={len(delta)})")
+    print(f"  kandidat defisit tinggi  : median {V['median_pp']:+.2f} pp | "
+          f"rata-rata {V['mean_pp']:+.2f} pp | n={V['n_kandidat']} | "
+          f"pulih >={DEFAULT_RAIN_RECOVER_PP:.0f}pp: {V['n_pulih']}")
+    print(f"  seluruh string dianalisis: median {delta.median():+.2f} pp | "
+          f"rata-rata {delta.mean():+.2f} pp | n={len(delta)}")
+
+    # Vonisnya memakai MEDIAN. Sebaran ini menjulur -- sebagian besar string
+    # tidak bergerak, beberapa bergerak jauh -- jadi rata-rata bisa positif
+    # sementara kandidat KHAS tidak pulih sama sekali. Itu bukan hipotesis:
+    # run 14 Agustus mengumumkan "soiling nyata" atas rata-rata +1,21 pp
+    # padahal mediannya -0,26 dan 5 dari 8 pemulih ada di satu inverter.
+    if V["mean_pp"] - V["median_pp"] > 1.0:
+        print()
+        print(f"  CATATAN: rata-rata melampaui median "
+              f"{V['mean_pp'] - V['median_pp']:.2f} pp.")
+        print("  Sebarannya menjulur; rata-rata di sini menggambarkan ekornya,")
+        print("  bukan kandidat yang khas. Vonis di bawah memakai median.")
+
     print()
-    if kand.mean() < 1.0 and (kand > 3).sum() <= max(1, len(kand) // 10):
-        print("  KESIMPULAN: hujan tidak memulihkan -> defisitnya BUKAN debu.")
+    if V["putusan"] == "TIDAK_PULIH":
+        print("  VONIS: hujan tidak memulihkan -> defisitnya BUKAN debu.")
         print("  Cleaning tidak akan menyelesaikan masalah ini.")
+    elif V["putusan"] == "SOILING_MENYELURUH":
+        print("  VONIS: kandidat KHAS pulih -> komponen soiling menyeluruh.")
+        print("  Pembersihan se-situs terjustifikasi.")
     else:
-        print("  KESIMPULAN: ada pemulihan setelah hujan -> komponen soiling nyata.")
+        print("  VONIS: hanya ekornya yang pulih -> soiling LOKAL, bukan se-situs.")
+        print(f"  {V['n_pulih']} dari {V['n_kandidat']} kandidat pulih; sisanya tidak.")
+        if V["terkonsentrasi"]:
+            print(f"  Terkumpul di {V['inverter_dominan']}: "
+                  f"{V['bagian_dominan']:.0%} dari yang pulih.")
+            print(f"  TINDAKAN: bersihkan {V['inverter_dominan']}, "
+                  f"bukan seluruh situs.")
+            print("  Verifikasi: ukur ulang 7 hari setelahnya.")
+        else:
+            print("  Pemulihnya tersebar, tidak menumpuk di satu inverter.")
+            print("  Perlakukan sebagai daftar string, bukan program cleaning.")
 '''
 
 CODE_SAVE = '''# Cell 7 - Simpan workbook ke Drive + plot profil jam
