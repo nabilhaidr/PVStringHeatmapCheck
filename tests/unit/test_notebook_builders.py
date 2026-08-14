@@ -17,10 +17,15 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-BUILDERS = [
-    "_build_geometry_rescore_notebook",
-    "_build_string_intraday_notebook",
-]
+# Pembangun -> modul yang konstantanya dijaga untuk pembangun itu. Dipetakan
+# per pembangun, bukan satu modul untuk semua: notebook baru memakai modul
+# lain, dan menguncinya ke modul yang tidak dipakainya membuat penjaga ini
+# hijau tanpa menjaga apa pun.
+BUILDERS = {
+    "_build_geometry_rescore_notebook": "pv_pipeline.string_intraday_diagnostic",
+    "_build_string_intraday_notebook": "pv_pipeline.string_intraday_diagnostic",
+    "_build_drive_probe_notebook": "pv_pipeline.drive_probe",
+}
 
 
 def _muat(nama: str):
@@ -54,9 +59,9 @@ def _nama_dalam_sel(sumber_sel):
     return diimpor, dibuat, dipakai
 
 
-@pytest.mark.parametrize("nama", BUILDERS)
-def test_konstanta_modul_yang_dipakai_sel_selalu_ada_yang_mengimpor(nama):
-    """Konstanta ``string_intraday_diagnostic`` yang dipakai sel wajib diimpor.
+@pytest.mark.parametrize("nama,modul", sorted(BUILDERS.items()))
+def test_konstanta_modul_yang_dipakai_sel_selalu_ada_yang_mengimpor(nama, modul):
+    """Konstanta modul sumber yang dipakai sel wajib ada yang mengimpornya.
 
     Dibatasi pada konstanta ALL_CAPS milik modul itu, bukan seluruh nama
     bebas: nama seperti ``OUTPUT_DIR`` atau ``WORKBOOK`` memang lahir di sel
@@ -66,8 +71,10 @@ def test_konstanta_modul_yang_dipakai_sel_selalu_ada_yang_mengimpor(nama):
     sendiri baik-baik saja.
     """
     pembangun = _muat(nama)
-    diagnostic = importlib.import_module("pv_pipeline.string_intraday_diagnostic")
-    konstanta = {n for n in dir(diagnostic) if n.isupper() and not n.startswith("_")}
+    sumber_modul = importlib.import_module(modul)
+    konstanta = {
+        n for n in dir(sumber_modul) if n.isupper() and not n.startswith("_")
+    }
 
     sel_kode = [sumber for jenis, sumber in pembangun.CELLS if jenis == "code"]
     assert sel_kode, f"{nama}: tidak ada sel kode"
