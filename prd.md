@@ -894,6 +894,36 @@ column describes shape, not severity.
 Phase One's 22 `CALON_GEOMETRI` stay candidates. Clearing any of them still
 requires a second season, which does not yet exist for these blocks.
 
+**Settled 2026-08-15: the data supports the EL placement, and the cascade that
+blocked acting on it is far smaller than believed.** Two independent lines now
+agree. Terrain: the DXF positions put these four on slopes reaching −15.4°,
+while no Phase One string anywhere exceeds 2.67°. Cloud correlation
+(`Spatial_Correlation.ipynb`): under the EL placement the disputed strings show
+Spearman ρ = −0.885 against a control of −0.887 — statistically the same decay
+quality as inverters whose placement is known correct — while the DXF placement
+gives −0.697, a margin of 0.188.
+
+The standing objection was that the EL positions are already occupied by other
+inverters' DXF rows. Measured against all 4,388 rows belonging to other
+inverters, that is true for **7 of the 72 strings**, not for the set. The median
+distance from an EL position to the nearest other-inverter row is 41 m, and the
+median DXF→EL displacement is only **9.0 m** — for most of these strings the
+correction is small, not a relocation. The collisions are concentrated: six are
+WB02-INV02 strings landing ~2 m from WB02-INV03 rows, and those same six are the
+ones that move 60–75 m. The seventh is WB02-INV04-ST18 against WB02-INV05-ST13.
+
+So the re-derivation this blocks is **WB02-INV02 against WB02-INV03**, six
+strings — not the 900-string Phase One remap previously assumed.
+
+**Not yet applied, and the reason is specific.** Moving the coordinates without
+recomputing `slope_deg` / `aspect_deg` / `cross_slope_deg` at the new positions
+would leave the row internally inconsistent — coordinates from the EL survey,
+terrain from the DXF position — which is worse than the current NULL, because a
+NULL is visibly absent while a stale slope reads as evidence. Recomputing needs
+`dsm.tif`, which is not in the repository. The move should be done in
+`build_string_geometry.py` with the DSM at hand, in one pass, so coordinates and
+plane fit stay consistent.
+
 Verified on live data, 2026-08-14. Re-running both notebooks over the same June
 window with `WB06-INV06` added - 68 inverters, 1,354 strings - closed three
 questions at once.

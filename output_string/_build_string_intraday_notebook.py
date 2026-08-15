@@ -92,6 +92,25 @@ if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 print("REPO_DIR:", REPO_DIR)
 
+# Penanda ISI. Memeriksa keberadaan modul saja tidak cukup: salinan Drive yang
+# punya berkasnya tapi belum punya fungsi terbarunya akan lolos di sini lalu
+# menjatuhkan sel yang jauh di bawah dengan ImportError. Itu sudah terjadi pada
+# notebook saudaranya. Sebuah tes menjaga daftar ini tetap lengkap.
+_WAJIB = (
+    "build_intraday_diagnostic", "rain_recovery_verdict",
+    "seasonal_discriminator",
+)
+import pv_pipeline.string_intraday_diagnostic as _sid
+_hilang = [n for n in _WAJIB if not hasattr(_sid, n)]
+if _hilang:
+    raise RuntimeError(
+        f"Salinan Drive TERTINGGAL: string_intraday_diagnostic.py ada, tapi "
+        f"tidak punya {_hilang}. Sinkronkan ulang berkas itu lalu jalankan "
+        f"ulang dari Sel 1."
+    )
+print(f"versi repo (isi): string_intraday_diagnostic lengkap "
+      f"({len(_WAJIB)} nama)")
+
 # Repo DIBACA dari Drive, tidak di-clone dan tidak di-pull. Kalau salinan di
 # Drive tertinggal, perubahan terbaru diam-diam tidak berlaku dan hasilnya
 # tetap terlihat wajar -- kegagalan paling mahal di alur ini. Cetak versinya.
@@ -190,6 +209,11 @@ RAIN_EVENTS = [
 # Klasifikasi tetap dihitung untuk semua string; ambang ini cuma memfilter
 # tampilan supaya string sehat (yang wajar sesekali >1,0) tidak ikut.
 MIN_DEFICIT_PCT = 10.0
+
+# Ukur DERAU uji musiman dengan membelah hari-hari bulan ini jadi dua (Cell 8).
+# I/O-nya tidak bertambah: tiap CSV masuk tepat satu belahan, jadi totalnya
+# tetap satu lintasan penuh. Waktu hitungnya yang naik ~2x.
+UKUR_DERAU = True
 
 print("Baseline :", BASELINE_DIR)
 print("Bulan    :", BULAN)
@@ -397,6 +421,56 @@ except ImportError:
     print("matplotlib tidak tersedia; lewati plot.")
 '''
 
+
+CODE_NOISE = '''# Cell 8 - Derau uji musiman: belah hari-hari bulan ini jadi dua
+from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+if not UKUR_DERAU:
+    print("UKUR_DERAU=False -- dilewati.")
+elif len(CSV_PATHS) < 8:
+    print(f"Cuma {len(CSV_PATHS)} hari; tiap belahan terlalu tipis untuk")
+    print("mengukur derau. Butuh setidaknya 8 hari.")
+else:
+    # Dibelah SELANG-SELING, bukan separuh-awal separuh-akhir: cuaca bergerak
+    # sepanjang bulan, dan membelahnya berurutan akan memasukkan perubahan
+    # cuaca ke dalam angka yang justru harus bebas dari perubahan apa pun.
+    A = build_intraday_diagnostic(
+        CSV_PATHS[0::2], inverter_ids=INVERTER_IDS or None,
+        empty_pv_map=EMPTY_PV_MAP,
+    )
+    B = build_intraday_diagnostic(
+        CSV_PATHS[1::2], inverter_ids=INVERTER_IDS or None,
+        empty_pv_map=EMPTY_PV_MAP,
+    )
+    print(f"belahan A: {len(CSV_PATHS[0::2])} hari, {len(A.classification)} string")
+    print(f"belahan B: {len(CSV_PATHS[1::2])} hari, {len(B.classification)} string")
+
+    DERAU = seasonal_discriminator({
+        "belahan_A": A.classification, "belahan_B": B.classification,
+    })
+    D = DERAU[DERAU["verdikt"] != "TANPA_ASIMETRI"]["asym_rel_range"].dropna()
+    print()
+    print(f"{len(D)} string berasimetri layak-nilai di kedua belahan")
+    print("rentang relatif ANTAR BELAHAN -- ini derau murni, karena tidak ada")
+    print("perubahan musim sama sekali di antara keduanya:")
+    for q in (0.50, 0.75, 0.90, 0.95, 0.99):
+        print(f"  p{int(q * 100):<3d} {D.quantile(q):.3f}")
+    print()
+    print("CARA MEMAKAINYA. Geometri memprediksi rentang relatif NOL untuk")
+    print("string geometris murni setelah normalisasi, jadi SEASONAL_REL_RANGE_MAX")
+    print("seluruhnya kelonggaran derau. Angka p95 di atas adalah lantai itu:")
+    print("ambang di BAWAHnya akan memvonis OBSTRUKSI atas derau belaka.")
+    print()
+    print(f"Ambang yang berlaku sekarang 0,30 lawan p95 = {D.quantile(0.95):.3f}.")
+    if D.quantile(0.95) > 0.30:
+        print("  p95 DI ATAS ambang -> ambang terlalu ketat; sebagian vonis")
+        print("  OBSTRUKSI adalah derau. Menaikkan ambang membebaskan string,")
+        print("  jadi lakukan hanya dengan angka ini di tangan, bukan dari rasa.")
+    else:
+        print("  p95 di BAWAH ambang -> 0,30 sudah longgar terhadap derau.")
+        print("  Tidak ada alasan menaikkannya.")
+'''
+
 CELLS = [
     ("markdown", MD_INTRO),
     ("code", CODE_SETUP),
@@ -406,6 +480,7 @@ CELLS = [
     ("code", CODE_PRIORITY),
     ("code", CODE_RAIN),
     ("code", CODE_SAVE),
+    ("code", CODE_NOISE),
 ]
 
 
