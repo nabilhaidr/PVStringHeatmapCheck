@@ -150,12 +150,23 @@ CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
 # Folder baseline di Drive: berisi CSV harian {YYYY-MM-DD}.csv per bulan.
 # Data dibaca LANGSUNG dari sini -- tidak diunduh, tidak disalin.
 BASELINE_DIR = f"{DRIVE_ROOT}/baseline"
-BULAN = ["2026-03"]              # daftar subfolder bulan yang mau dianalisis
-# Musim KETIGA. Dua yang sudah ada duduk di doy 166 (Jun 2026) dan 335
-# (Nov-Des 2025) -- dua titik ekstrem. Ambang SEASONAL_REL_RANGE_MAX yang
-# disetel pada dua titik tidak bisa dibedakan dari garis lurus; titik ketiga
-# di TENGAH-lah yang mengujinya. Maret 2026 duduk di doy 76, berjarak 90 dari
-# jendela terdekat, dan punya 25 hari -- terbaik dari seluruh inventaris Drive
+BULAN = ["2025-11", "2025-12"]   # daftar subfolder bulan yang mau dianalisis
+# DISETEL UNTUK MENGUKUR DERAU (Cell 8), bukan untuk musim baru -- ketiga musim
+# sudah ada. Rentang ini dipilih karena UKURANNYA.
+#
+# Cell 8 membelah bulan jadi dua, dan sebarannya adalah derau murni. Tapi derau
+# pada median menyusut seperti 1/sqrt(n), jadi angkanya hanya sahih kalau tiap
+# belahan seukuran musim sungguhan. Run Maret memberi belahan 12-13 hari
+# sementara musim aslinya 20-40 hari, sehingga p95 = 0,510 yang keluar
+# MELEBIH-LEBIHKAN derau dan hanya bisa dikoreksi lewat argumen penskalaan.
+#
+# Nov-Des punya n_days median 40 -> belahannya ~20 hari, PERSIS n_days Juni dan
+# Maret. p95 dari sini langsung sebanding: tanpa penskalaan, tanpa argumen.
+# Itulah satu-satunya yang membuat SEASONAL_REL_RANGE_MAX berhenti provisional.
+#
+# Sesudah angkanya didapat, kembalikan BULAN ke bulan yang mau dianalisis.
+# Musim sebelumnya: ["2026-03"] doy 76 -- musim ketiga, 25 hari, berjarak 90
+# dari jendela terdekat, terbaik dari seluruh inventaris Drive
 # (Mar 2025 berjarak 91 tapi hanya 4 hari, tidak terpakai).
 
 # Folder output di Drive.
@@ -197,37 +208,38 @@ INVERTER_IDS = TERSANGKA_WB03_10 + VERIFIKASI_KOREKSI + PHASE_ONE
 # TIDAK menimbulkan galat -- rain_recovery() mengembalikan tabel kosong dan
 # Cell 6 mencetak "Tidak ada RAIN_EVENTS", seolah-olah tidak ada yang diisi.
 #
-# Set di bawah untuk BULAN = 2026-03. Maret peralihan: 64% hari di bawah
-# 5 mm, di antara Nov-Des (45-57%) dan Juni (87%).
+# Set di bawah untuk BULAN = 2025-11/2025-12, mengikuti BULAN di atas.
 #
-# TUJUAN RUN INI BUKAN UJI HUJAN, melainkan musim KETIGA untuk validasi
-# geometri. Jendela "sesudah" di Maret pendek-pendek (1 hari) karena hujan
-# datang beruntun, jadi perlakukan Cell 6 sebagai pelengkap, bukan putusan.
-# Vonis soiling tetap dari set Juni.
+# TUJUAN RUN INI MENGUKUR DERAU (Cell 8), bukan uji hujan. Nov-Des adalah
+# PUNCAK MUSIM HUJAN -- cuma 45-57% hari di bawah 5 mm, deret kering terpanjang
+# 6 hari -- sehingga panel tercuci tiap 2-3 hari dan nyaris tidak ada debu yang
+# sempat menumpuk. BACA CELL 6 BEGINI: delta ~0 di sini BUKAN bukti "bukan
+# debu", melainkan bukti tidak ada yang bisa dipulihkan. Vonis soiling yang
+# sahih tetap dari set Juni.
 RAIN_EVENTS = [
-    {"nama": "hujan 4 Mar (42,5 mm)",
-     "before": ("2026-03-01", "2026-03-03"),
-     "after":  ("2026-03-05", "2026-03-05")},
-    {"nama": "hujan 14-16 Mar (67,6 mm)",
-     "before": ("2026-03-10", "2026-03-13"),
-     "after":  ("2026-03-17", "2026-03-17")},
-    {"nama": "hujan 23 Mar (16,3 mm)",
-     "before": ("2026-03-19", "2026-03-22"),
-     "after":  ("2026-03-24", "2026-03-24")},
+    {"nama": "hujan 29-30 Nov (19,6 mm)",
+     "before": ("2025-11-24", "2025-11-28"),
+     "after":  ("2025-12-01", "2025-12-02")},
+    {"nama": "hujan 10 Des (16,6 mm)",
+     "before": ("2025-12-08", "2025-12-09"),
+     "after":  ("2025-12-11", "2025-12-12")},
+    {"nama": "hujan 27 Des (19,9 mm)",
+     "before": ("2025-12-25", "2025-12-26"),
+     "after":  ("2025-12-28", "2025-12-29")},
 ]
 # Set untuk BULAN = 2026-06 (musim kering -- uji soiling yang sahih):
 #     {"nama": "hujan 10-11 Jun", "before": ("2026-06-06", "2026-06-09"),
 #      "after": ("2026-06-12", "2026-06-15")},
 #     {"nama": "hujan 16 Jun",    "before": ("2026-06-13", "2026-06-15"),
 #      "after": ("2026-06-17", "2026-06-20")},
-# Set untuk BULAN = 2025-11/2025-12 (puncak musim hujan -- delta ~0 di sana
-# BUKAN bukti "bukan debu", melainkan bukti tidak ada yang bisa dipulihkan):
-#     {"nama": "hujan 29-30 Nov", "before": ("2025-11-24", "2025-11-28"),
-#      "after": ("2025-12-01", "2025-12-02")},
-#     {"nama": "hujan 10 Des",    "before": ("2025-12-08", "2025-12-09"),
-#      "after": ("2025-12-11", "2025-12-12")},
-#     {"nama": "hujan 27 Des",    "before": ("2025-12-25", "2025-12-26"),
-#      "after": ("2025-12-28", "2025-12-29")},
+# Set untuk BULAN = 2026-03 (peralihan, 64% hari kering; jendela "sesudah"
+# pendek-pendek karena hujannya beruntun):
+#     {"nama": "hujan 4 Mar",     "before": ("2026-03-01", "2026-03-03"),
+#      "after": ("2026-03-05", "2026-03-05")},
+#     {"nama": "hujan 14-16 Mar", "before": ("2026-03-10", "2026-03-13"),
+#      "after": ("2026-03-17", "2026-03-17")},
+#     {"nama": "hujan 23 Mar",    "before": ("2026-03-19", "2026-03-22"),
+#      "after": ("2026-03-24", "2026-03-24")},
 
 # Hanya string dengan defisit >= ini yang masuk daftar prioritas Cell 5.
 # Klasifikasi tetap dihitung untuk semua string; ambang ini cuma memfilter
