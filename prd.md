@@ -246,11 +246,28 @@ Acceptance criteria:
   WB03-WB10 riding a different transport gives the control — if WB03-WB10 is
   present on the same timestamps, the plant was up.
 
-  Not yet implemented in `pv_pipeline.availability`. Until it is, read Phase One
-  uptime for any date with zero Phase One rows as UNKNOWN rather than DOWN, and
-  check the per-file inverter count with
-  `pv_pipeline/drive_probe.py::probe_inverter_coverage` before acting on a
-  Phase One availability finding.
+  Implemented in `pv_pipeline.availability`. Absence was never scored as DOWN
+  here — an inverter with no rows forms no group, and a blank status maps to
+  UNKNOWN, which stays out of the uptime denominator. The defect was silence,
+  not arithmetic: without a marker, a cross-date uptime average is computed over
+  a different number of days per plant and nothing tells the reader. So the rule
+  is enforced as a report, not as a filter on the uptime figure.
+
+  `detect_link_outage` runs automatically inside `M2eAvailability.run()` and
+  emits a single `M2e_link` finding at INFO severity — INFO because a fibre
+  outage is external to the plant, and a higher severity would dispatch crews to
+  healthy equipment. Verdicts are `LINK_OUTAGE` (whole group absent, control
+  present), `NO_DATA` (all groups absent, no control to attribute against), and
+  `INVERTER_ABSENCE` (a subset absent — a real finding, follow it up). A complete
+  day emits nothing, so the marker stays rare enough to keep being read. The
+  roster comes from `empty_pv_map`; without it the check is skipped with a
+  warning rather than guessing which inverters should exist.
+
+  Known limit: the check compares the roster against the inverter IDs present in
+  whatever frame it is handed. The daily pipeline passes one date per run, so
+  this is per-date in production — but a single-date outage inside a multi-date
+  frame would be masked by the other dates. `probe_inverter_coverage` in
+  `pv_pipeline/drive_probe.py` remains the per-file cross-check.
 
 Related tooling:
 - `rekap_m2e_allstrings.py` merges the `M2e_hybrid_AllStrings` sheet across daily `m2_findings_{YYYYMMDD}.xlsx` outputs into one Excel: uptime pivot per date, per-string summary (worst days, days below threshold, total downtime), and the combined long table (CSV fallback beyond the Excel row limit).
