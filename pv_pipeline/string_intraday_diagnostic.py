@@ -51,6 +51,10 @@ DEFAULT_AMPM_GAP: float = 0.12        # selisih pagi vs sore -> shading berarah
 DEFAULT_RAIN_RECOVER_PP: float = 3.0   # string dianggap pulih bila >= ini
 DEFAULT_RAIN_MEDIAN_PP: float = 1.0    # median kandidat >= ini -> menyeluruh
 DEFAULT_RAIN_CONCENTRATION: float = 0.5  # bagian pemulih di satu inverter
+# Bagian saja tidak cukup. "50% dari yang pulih" bermakna kalau pemulihnya 8,
+# dan tidak bermakna apa-apa kalau pemulihnya 2 -- yang kedua adalah satu string
+# tunggal, dan run Maret sempat menerbitkan instruksi cuci atas dasar itu.
+DEFAULT_RAIN_MIN_RECOVERERS: int = 4
 
 LONG_COLUMNS: List[str] = ["ts", "inverter_id", "pv", "power_kw"]
 GEOMETRY_COLUMNS: List[str] = [
@@ -506,6 +510,7 @@ def rain_recovery_verdict(
     recover_pp: float = DEFAULT_RAIN_RECOVER_PP,
     median_pp: float = DEFAULT_RAIN_MEDIAN_PP,
     concentration: float = DEFAULT_RAIN_CONCENTRATION,
+    min_recoverers: int = DEFAULT_RAIN_MIN_RECOVERERS,
 ) -> dict:
     """Vonis uji hujan atas MEDIAN kandidat, dan sebut inverter yang mendominasi.
 
@@ -522,7 +527,10 @@ def rain_recovery_verdict(
     5 dari 42 tidak berarti apa-apa.
 
     ``concentration`` adalah ambang pelaporan: bagian dominan di atas nilai ini
-    layak disebut sebagai temuan per-inverter, bukan per-situs.
+    layak disebut sebagai temuan per-inverter, bukan per-situs. Ia BERPASANGAN
+    dengan ``min_recoverers``, karena bagian saja menyesatkan ketika pemulihnya
+    sedikit -- "50% dari yang pulih" adalah temuan kalau pemulihnya delapan dan
+    satu string tunggal kalau pemulihnya dua.
 
     Returns
     -------
@@ -570,7 +578,8 @@ def rain_recovery_verdict(
         "n_pulih": int(len(pulih)),
         "inverter_dominan": dominan,
         "bagian_dominan": bagian,
-        "terkonsentrasi": bool(len(pulih)) and bagian >= concentration,
+        "terkonsentrasi": (len(pulih) >= min_recoverers
+                            and bagian >= concentration),
         "putusan": putusan,
     }
 

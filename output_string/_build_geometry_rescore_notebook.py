@@ -119,6 +119,25 @@ _v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
 print("versi repo:", (_v.stdout.strip() or _v.stderr.strip()
                       or "(bukan git repo -- salinan manual?)"))
 print("REPO_DIR:", REPO_DIR)
+
+# Penanda ISI. Memeriksa keberadaan modul saja tidak cukup: salinan Drive yang
+# punya berkasnya tapi belum punya fungsi terbarunya akan lolos di sini lalu
+# menjatuhkan sel yang jauh di bawah dengan ImportError. Itu sudah terjadi pada
+# notebook saudaranya. Sebuah tes menjaga daftar ini tetap lengkap.
+_WAJIB = (
+    "attach_geometry_evidence", "provisional_direction_verdict",
+    "season_scales", "validate_geometry_seasonally",
+)
+import pv_pipeline.string_intraday_diagnostic as _sid
+_hilang = [n for n in _WAJIB if not hasattr(_sid, n)]
+if _hilang:
+    raise RuntimeError(
+        f"Salinan Drive TERTINGGAL: string_intraday_diagnostic.py ada, tapi "
+        f"tidak punya {_hilang}. Sinkronkan ulang berkas itu lalu jalankan "
+        f"ulang dari Sel 1."
+    )
+print(f"versi repo (isi): string_intraday_diagnostic lengkap "
+      f"({len(_WAJIB)} nama)")
 '''
 
 CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)

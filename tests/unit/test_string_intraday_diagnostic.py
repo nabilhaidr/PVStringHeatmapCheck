@@ -1121,3 +1121,71 @@ class TestAmbangTernormalisasiTurunanNol:
         from pv_pipeline.string_intraday_diagnostic import SEASONAL_REL_RANGE_MAX
 
         assert SEASONAL_REL_RANGE_MAX == 0.30
+
+
+class TestKonsentrasiButuhCukupPemulih:
+    """"50% dari yang pulih" tidak berarti apa-apa kalau pemulihnya dua.
+
+    Run Maret mencetak: "2 dari 28 kandidat pulih... Terkumpul di WB05-INV03:
+    50% dari yang pulih. TINDAKAN: bersihkan WB05-INV03." Lima puluh persen dari
+    dua adalah SATU string, dan itu instruksi kerja lapangan yang lahir dari
+    satu titik data.
+
+    Bandingkan Nov-Des: 5 dari 8 di WB07-INV08. Bagian yang sama-sama di atas
+    separuh, tapi yang satu bermakna dan yang lain tidak. Yang membedakan bukan
+    bagiannya melainkan JUMLAHNYA, jadi ambang bagian saja tidak cukup.
+    """
+
+    def _hujan(self, baris):
+        return pd.DataFrame(
+            [{"pv_string": s, "event": "uji", "ratio_before": 0.8,
+              "ratio_after": 0.8 + d / 100.0, "delta_pp": d}
+             for s, d in baris],
+            columns=["pv_string", "event", "ratio_before", "ratio_after",
+                     "delta_pp"],
+        )
+
+    def test_dua_pemulih_tidak_cukup_untuk_menamai_inverter(self):
+        """Satu string bukan pola; jangan kirim orang atas dasar itu."""
+        from pv_pipeline.string_intraday_diagnostic import rain_recovery_verdict
+
+        rain = self._hujan(
+            [(f"WB05-INV{i:02d}-PV1", 0.0) for i in range(1, 27)]
+            + [("WB05-INV03-PV4", 9.0), ("WB09-INV20-PV1", 8.0)]
+        )
+        hasil = rain_recovery_verdict(rain, list(rain["pv_string"]))
+
+        assert hasil["n_pulih"] == 2
+        assert hasil["bagian_dominan"] == pytest.approx(0.5)
+        assert not hasil["terkonsentrasi"], (
+            "bagian 50% dari dua pemulih bukan konsentrasi"
+        )
+
+    def test_pemulih_cukup_banyak_tetap_menamai_inverter(self):
+        """Penjaga arah sebaliknya: pola nyata harus tetap tersebut.
+
+        Bentuk data Nov-Des: 5 dari 8 pemulih di satu inverter. Kalau syarat
+        jumlah membuat kasus ini ikut diam, temuan WB07-INV08 yang sudah
+        menggerakkan uji cuci akan hilang.
+        """
+        from pv_pipeline.string_intraday_diagnostic import rain_recovery_verdict
+
+        rain = self._hujan(
+            [(f"WB05-INV{i:02d}-PV1", 0.0) for i in range(1, 35)]
+            + [(f"WB07-INV08-PV{n}", 9.0) for n in (2, 3, 13, 14, 18)]
+            + [("WB09-INV20-PV1", 8.0), ("WB03-INV06-PV2", 7.0),
+               ("WB04-INV02-PV3", 6.0)]
+        )
+        hasil = rain_recovery_verdict(rain, list(rain["pv_string"]))
+
+        assert hasil["n_pulih"] == 8
+        assert hasil["inverter_dominan"] == "WB07-INV08"
+        assert hasil["terkonsentrasi"]
+
+    def test_ambang_jumlah_pemulih_terpasang_sebagai_konstanta(self):
+        """Angkanya konvensi; menguburnya membuat orang mengira ia diturunkan."""
+        from pv_pipeline.string_intraday_diagnostic import (
+            DEFAULT_RAIN_MIN_RECOVERERS,
+        )
+
+        assert DEFAULT_RAIN_MIN_RECOVERERS >= 3
