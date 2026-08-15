@@ -65,9 +65,12 @@ Workbook empat sheet di folder outputs Drive:
 Jalankan Cell 1 sampai Cell 7 berurutan. Edit hanya nilai di **Cell 2**.
 '''
 
-CODE_SETUP = '''# Cell 1 - Mount Drive + siapkan repo
+CODE_SETUP = '''# Cell 1 - Kode dari GitHub, data dari Drive
 from pathlib import Path
-import os, sys
+import os, subprocess, sys
+
+REPO_URL = "https://github.com/nabilhaidr/PVStringHeatmapCheck.git"
+DRIVE_ROOT = "/content/drive/MyDrive/Cek PV String"     # DATA, bukan kode
 
 try:
     from google.colab import drive
@@ -75,7 +78,7 @@ try:
     IN_COLAB = True
 except ImportError:
     IN_COLAB = False
-    print("Bukan Colab -- pakai path lokal.")
+    print("Bukan Colab -- pakai repo lokal.")
 
 def find_repo_root(start=None):
     path = Path(start or os.getcwd()).resolve()
@@ -84,13 +87,35 @@ def find_repo_root(start=None):
             return candidate
     raise RuntimeError("Repo root tidak ditemukan.")
 
-REPO_DIR = find_repo_root(
-    "/content/drive/MyDrive/Cek PV String" if IN_COLAB else None
-)
+if IN_COLAB:
+    # KODE diambil dari GitHub, BUKAN dari salinan Drive.
+    #
+    # Salinan Drive disinkron sebagai berkas biasa, jadi .git di sana ikut
+    # tersalin dan melaporkan commit lama sementara kodenya entah versi mana.
+    # Tiga kegagalan berturut-turut pada notebook keluarga ini semuanya
+    # salinan Drive yang tertinggal, dan yang terakhir lolos pemeriksaan versi
+    # lalu tumbang di sel keempat. Clone dangkal menghapus seluruh kelas
+    # kegagalan itu: yang jalan selalu master yang sudah dipush.
+    #
+    # KONSEKUENSINYA: suntingan yang belum dipush TIDAK ikut. Push dulu.
+    REPO_DIR = Path("/content/PVStringHeatmapCheck")
+    if (REPO_DIR / ".git").is_dir():
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "fetch", "--depth", "1", "origin", "master"])
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "reset", "--hard", "origin/master"])
+    else:
+        subprocess.check_call(["git", "clone", "--depth", "1",
+                               REPO_URL, str(REPO_DIR)])
+else:
+    REPO_DIR = find_repo_root()
+    DRIVE_ROOT = str(REPO_DIR)      # lokal: data bersebelahan dgn kode
+
 os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
-print("REPO_DIR:", REPO_DIR)
+print("KODE :", REPO_DIR)
+print("DATA :", DRIVE_ROOT)
 
 # Penanda ISI. Memeriksa keberadaan modul saja tidak cukup: salinan Drive yang
 # punya berkasnya tapi belum punya fungsi terbarunya akan lolos di sini lalu
@@ -111,10 +136,9 @@ if _hilang:
 print(f"versi repo (isi): string_intraday_diagnostic lengkap "
       f"({len(_WAJIB)} nama)")
 
-# Repo DIBACA dari Drive, tidak di-clone dan tidak di-pull. Kalau salinan di
-# Drive tertinggal, perubahan terbaru diam-diam tidak berlaku dan hasilnya
-# tetap terlihat wajar -- kegagalan paling mahal di alur ini. Cetak versinya.
-import subprocess
+# Versi ini kini SAH: repo di atas hasil clone/fetch sungguhan, bukan folder
+# yang disalin. Sebelumnya baris ini melaporkan commit Juli selama berhari-hari
+# padahal kodenya sudah berubah.
 _v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
                     capture_output=True, text=True)
 print("versi repo:", (_v.stdout.strip() or _v.stderr.strip()
@@ -125,7 +149,7 @@ CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
 
 # Folder baseline di Drive: berisi CSV harian {YYYY-MM-DD}.csv per bulan.
 # Data dibaca LANGSUNG dari sini -- tidak diunduh, tidak disalin.
-BASELINE_DIR = "/content/drive/MyDrive/Cek PV String/baseline"
+BASELINE_DIR = f"{DRIVE_ROOT}/baseline"
 BULAN = ["2026-03"]              # daftar subfolder bulan yang mau dianalisis
 # Musim KETIGA. Dua yang sudah ada duduk di doy 166 (Jun 2026) dan 335
 # (Nov-Des 2025) -- dua titik ekstrem. Ambang SEASONAL_REL_RANGE_MAX yang
@@ -135,7 +159,7 @@ BULAN = ["2026-03"]              # daftar subfolder bulan yang mau dianalisis
 # (Mar 2025 berjarak 91 tapi hanya 4 hari, tidak terpakai).
 
 # Folder output di Drive.
-OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
+OUTPUT_DIR = f"{DRIVE_ROOT}/outputs"
 
 # Inverter yang dianalisis. Kosongkan ([]) untuk SELURUH inverter --
 # jauh lebih lambat dan boros RAM; isi daftar kalau sudah punya tersangka.
@@ -250,7 +274,10 @@ print(f"empty_pv_map: {len(EMPTY_PV_MAP)} inverter punya slot kosong terdaftar")
 # 0,15-2,79%). Rugi resistif memberi defisit RATA sepanjang hari -- bentuk
 # yang sama persis dengan soiling -- jadi kolom vdrop dipakai membaca
 # kategori UNIFORM sebelum regu cuci dikirim.
-CABLE_XLS = REPO_DIR / "raw data input" / "List of DC Cables 0411.xls"
+# DATA, bukan kode: "raw data input/" masuk .gitignore sehingga TIDAK ikut
+# clone. Diambil dari Drive; kalau ditunjuk ke REPO_DIR ia akan selalu hilang
+# dan kolom vdrop diam-diam kosong.
+CABLE_XLS = Path(DRIVE_ROOT) / "raw data input" / "List of DC Cables 0411.xls"
 CABLE_METRICS = None
 if CABLE_XLS.exists():
     from pv_pipeline.m2a.cleaning_report import build_cable_metrics, load_dc_cable_map
