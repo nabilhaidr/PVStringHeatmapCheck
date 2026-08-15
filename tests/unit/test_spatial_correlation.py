@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from pv_pipeline.spatial_correlation import (
     DEFAULT_MIN_CONTROL_RHO,
@@ -232,3 +233,175 @@ class TestVerdictPlacement:
             {"DXF": self._skor(-0.9), "EL": self._skor(-0.1)},
         )
         assert hasil["putusan"] == "TIDAK_SENSITIF"
+
+
+# ---------------------------------------------------------------------------
+# Memuat koordinat survei EL
+# ---------------------------------------------------------------------------
+
+_EL_HEADER = ("#String, Table x, Table y, Module x, Module y, Module type,"
+              " Longitude, Latitude, EL Uniformity\n")
+
+
+def _tulis_el(path, baris, *, pengantar=33):
+    """Tiru berkas asli: baris pengantar + baris KOSONG, lalu header, lalu data.
+
+    Baris kosongnya penting. Berkas asli punya lima di antara pengantarnya, dan
+    ``pd.read_csv`` melewatinya secara default sehingga indeks baris apa pun
+    yang dihitung dari luar akan meleset.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fp:
+        for i in range(pengantar):
+            fp.write("\n" if i % 7 == 0 else f"#pengantar {i}\n")
+        fp.write(_EL_HEADER)
+        for b in baris:
+            fp.write(b + "\n")
+
+
+def _modul(label, lon, lat, n=4):
+    """``n`` baris modul untuk satu string, tersebar sedikit di sekitar titiknya."""
+    return [f"{label}, , 2, {i + 1}, 2, 1, {lon + i * 1e-7:.8f}, "
+            f"{lat - i * 1e-6:.8f}, 10.0" for i in range(n)]
+
+
+class TestLoadElCoords:
+
+    def test_header_dicari_dari_isinya_bukan_nomor_baris(self, tmp_path):
+        """Menghitung baris dari luar selalu meleset, dan sudah dua kali.
+
+        ``pd.read_csv`` melewati baris kosong, jadi indeks header yang dihitung
+        manual bergeser sebanyak jumlah baris kosong di atasnya. Dua tebakan
+        berturut-turut (32 lalu 33) sama-sama mendarat di baris DATA, dan
+        gejalanya bukan galat melainkan nama kolom yang berisi angka.
+        """
+        from pv_pipeline.spatial_correlation import load_el_coords
+
+        p = tmp_path / "all.csv"
+        _tulis_el(p, _modul("S201_01", 116.638, -0.993), pengantar=33)
+        q = tmp_path / "all_pendek.csv"
+        _tulis_el(q, _modul("S201_01", 116.638, -0.993), pengantar=7)
+
+        assert set(load_el_coords(p)) == set(load_el_coords(q)) == {
+            "WB02-INV01-ST1"
+        }
+
+    def test_dua_ragam_label_didekode_keduanya(self, tmp_path):
+        """Satu berkas, dua konvensi -- seperti kolom telemetrinya.
+
+        Phase One memakai ``S{plant}{inverter}_{st}``; WB03-10 memakai bentuk
+        panjang. Mengenali satu ragam saja akan membuang separuh survei tanpa
+        galat apa pun.
+        """
+        from pv_pipeline.spatial_correlation import load_el_coords
+
+        p = tmp_path / "all.csv"
+        _tulis_el(p, (_modul("S201_01", 116.638, -0.993)
+                      + _modul("S125_18", 116.639, -0.994)
+                      + _modul("WB10INV17ST23", 116.640, -0.995)))
+
+        koor = load_el_coords(p)
+
+        assert set(koor) == {
+            "WB02-INV01-ST1", "WB01-INV25-ST18", "WB10-INV17-ST23",
+        }
+
+    def test_modul_diringkas_jadi_satu_titik_per_string(self, tmp_path):
+        """Survei per-modul, uji ini per-string: 24 baris jadi satu koordinat."""
+        from pv_pipeline.spatial_correlation import load_el_coords
+
+        p = tmp_path / "all.csv"
+        _tulis_el(p, _modul("S201_01", 116.638, -0.993, n=24))
+
+        assert len(load_el_coords(p)) == 1
+
+    def test_derajat_dikonversi_ke_meter(self, tmp_path):
+        """Satuannya HARUS meter, karena dibandingkan dengan koordinat DXF.
+
+        ``decay_score`` menghitung jarak Euclid apa adanya. Kandidat dalam
+        derajat dan kandidat dalam meter akan menghasilkan dua skala jarak yang
+        berbeda 10^5 kali -- keduanya masih memberi rho, dan tidak ada apa pun
+        yang memberi tahu bahwa perbandingannya omong kosong.
+        """
+        from math import hypot
+
+        from pv_pipeline.spatial_correlation import load_el_coords
+
+        p = tmp_path / "all.csv"
+        # Beda lintang 0,001 derajat kira-kira 111 m.
+        _tulis_el(p, (_modul("S201_01", 116.638, -0.993, n=1)
+                      + _modul("S201_02", 116.638, -0.994, n=1)))
+
+        koor = load_el_coords(p)
+        a, b = koor["WB02-INV01-ST1"], koor["WB02-INV01-ST2"]
+
+        assert 100.0 < hypot(a[0] - b[0], a[1] - b[1]) < 125.0
+
+
+class TestElCoordsToPv:
+
+    def _geom(self):
+        return pd.DataFrame([
+            {"inverter_id": "WB02-INV01", "st": 1, "pv": 1},
+            {"inverter_id": "WB10-INV17", "st": 23, "pv": 26},   # pv != st
+            {"inverter_id": "WB10-INV17", "st": 24, "pv": None},  # tak dipetakan
+        ])
+
+    def test_st_dipetakan_ke_pv_lewat_geometri_bukan_diasumsikan_sama(self):
+        """pv = st BENAR untuk Phase One, SALAH untuk WB03-10.
+
+        Menyamakan keduanya akan menempelkan koordinat EL ke kanal yang keliru
+        di seluruh WB03-10 -- diam-diam, karena namanya tetap terbentuk.
+        """
+        from pv_pipeline.spatial_correlation import el_coords_to_pv
+
+        hasil = el_coords_to_pv(
+            {"WB02-INV01-ST1": (0.0, 0.0), "WB10-INV17-ST23": (10.0, 10.0)},
+            self._geom(),
+        )
+
+        assert set(hasil) == {"WB02-INV01-PV1", "WB10-INV17-PV26"}
+
+    def test_st_tanpa_pv_dibuang_bukan_ditebak(self):
+        """Pemetaan yang tidak ada bukan alasan menebak.
+
+        Ini aturan yang sama dengan NULL cross-slope: pemetaan yang belum
+        terbukti lebih buruk daripada tidak ada, karena tidak ada yang di
+        hilir bisa tahu ia karangan.
+        """
+        from pv_pipeline.spatial_correlation import el_coords_to_pv
+
+        hasil = el_coords_to_pv({"WB10-INV17-ST24": (1.0, 2.0)}, self._geom())
+
+        assert hasil == {}
+
+
+class TestKerangkaKoordinat:
+    """EL relatif terhadap pusat survei, DXF absolut UTM -- dan itu tidak apa.
+
+    ``load_el_coords`` mengembalikan meter relatif terhadap centroid survei;
+    ``coords_from_geometry`` mengembalikan northing/easting UTM absolut. Selisih
+    originnya sekitar 9,9 juta meter.
+
+    Itu AMAN untuk perbandingan penempatan karena ``decay_score`` hanya memakai
+    jarak antar pasangan DI DALAM satu himpunan koordinat, dan jarak kebal
+    terhadap translasi. Sifat itulah yang dikunci di sini -- kalau suatu saat
+    skor mulai bergantung pada posisi absolut, kedua kandidat berhenti
+    sebanding dan tidak ada yang akan menyadarinya.
+
+    Yang TIDAK aman: mengurangkan koordinat EL dari koordinat DXF untuk
+    menghitung simpangan per string. Itu akan memberi ~9,9 juta meter, bukan
+    puluhan meter.
+    """
+
+    def test_skor_peluruhan_kebal_terhadap_translasi(self):
+        from pv_pipeline.spatial_correlation import decay_score
+
+        wide = residual_after_site_median(_hari_berawan())
+        pasangan = pairwise_correlation(wide)
+        asli = _koordinat_benar()
+        digeser = {k: (n + 9_890_000.0, e + 459_000.0)
+                   for k, (n, e) in asli.items()}
+
+        assert decay_score(pasangan, asli)["rho"] == pytest.approx(
+            decay_score(pasangan, digeser)["rho"]
+        )

@@ -131,15 +131,15 @@ INVERTER_KONTROL = ["WB02-INV03", "WB02-INV05", "WB02-INV07", "WB02-INV08"]
 # inverter ini sudah di-NULL-kan lewat PLACEMENT_DISPUTED, tapi KOORDINATnya
 # masih ada -- itulah yang diuji di sini.
 #
-# EL: dari survei drone. Nama kolomnya TIDAK terekam di kode mana pun, jadi ia
-# jadi nilai konfigurasi alih-alih ditebak. Sel 4 akan berhenti dan mencetak
-# daftar kolom sebenarnya kalau ketiganya tidak cocok -- betulkan di sini lalu
-# jalankan ulang selnya.
-EL_CSV = "/content/drive/MyDrive/raw data input/el drone 2025/all.csv"
-EL_HEADER_ROW = 32          # header di baris ke-33 (0-indexed 32)
-EL_KOL_STRING = "string_id"
-EL_KOL_NORTH = "north"
-EL_KOL_EAST = "east"
+# EL: survei drone. Skemanya kini ditangani load_el_coords, jadi tidak ada lagi
+# nama kolom yang perlu ditebak di sini. Berkasnya per MODUL (114.420 baris
+# untuk 4.470 string), berkoordinat Longitude/Latitude, dan memakai DUA ragam
+# label: S{plant}{inv}_{st} untuk Phase One, WB10INV17ST23 untuk WB03-10.
+# Headernya dicari lewat penanda "#String", bukan nomor baris -- menghitung
+# baris dari luar sudah dua kali meleset karena pd.read_csv melewati baris
+# kosong di blok pengantarnya.
+EL_CSV = ("/content/drive/MyDrive/Cek PV String/"
+          "raw data input/Drawing/el drone 2025/all.csv")
 
 JENDELA = DEFAULT_MIDDAY
 MIN_OVERLAP = DEFAULT_MIN_OVERLAP
@@ -192,7 +192,8 @@ if _hilang:
 
 CODE_CORR = '''# Cell 4 - Sisa setelah sinyal se-situs, lalu korelasi tiap pasangan
 from pv_pipeline.spatial_correlation import (
-    coords_from_geometry, pairwise_correlation, residual_after_site_median,
+    coords_from_geometry, el_coords_to_pv, load_el_coords,
+    pairwise_correlation, residual_after_site_median,
 )
 
 WIDE = residual_after_site_median(LONG, midday=JENDELA)
@@ -214,22 +215,11 @@ GEOM = pd.read_csv("config/string_geometry.csv")
 KOOR_DXF = coords_from_geometry(GEOM)
 print(f"\\nDXF : {len(KOOR_DXF)} string berkoordinat")
 
-EL = pd.read_csv(EL_CSV, header=EL_HEADER_ROW)
-_perlu = [EL_KOL_STRING, EL_KOL_NORTH, EL_KOL_EAST]
-_tidak_ada = [c for c in _perlu if c not in EL.columns]
-if _tidak_ada:
-    raise KeyError(
-        f"Kolom {_tidak_ada} tidak ada di {EL_CSV}.\\n"
-        f"Kolom yang TERSEDIA: {list(EL.columns)}\\n"
-        "Betulkan EL_KOL_* di Cell 2 lalu jalankan ulang sel ini."
-    )
-KOOR_EL = {
-    str(r[EL_KOL_STRING]).strip().upper(): (float(r[EL_KOL_NORTH]),
-                                            float(r[EL_KOL_EAST]))
-    for _, r in EL.iterrows()
-    if pd.notna(r[EL_KOL_NORTH]) and pd.notna(r[EL_KOL_EAST])
-}
-print(f"EL  : {len(KOOR_EL)} string berkoordinat")
+EL_PER_ST = load_el_coords(EL_CSV)
+KOOR_EL = el_coords_to_pv(EL_PER_ST, GEOM)
+print(f"EL  : {len(EL_PER_ST)} string di survei -> {len(KOOR_EL)} berkanal PV")
+print("      Selisihnya string yang tidak punya pemetaan ST->PV di as-built;")
+print("      dibuang, bukan ditebak. pv = st BENAR di Phase One, SALAH di WB03-10.")
 
 _uji = set(PASANGAN["a"]) | set(PASANGAN["b"])
 print(f"\\ncakupan pada string yang diuji: DXF {len(_uji & set(KOOR_DXF))}, "

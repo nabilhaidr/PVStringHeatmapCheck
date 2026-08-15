@@ -76,7 +76,14 @@ def _exec(notebook: dict, indexes, scope: dict) -> None:
 
 
 def _posisi_benar() -> dict:
-    """``{pv_string: (north, east)}`` -- kebenaran yang dibangun uji ini.
+    """Kebenaran yang dibangun uji ini, dalam DUA sistem koordinat sekaligus.
+
+    ``{pv_string: {"utm": (north, east), "ll": (lat, lon), "st": int}}``
+
+    Keduanya perlu karena dipakai di tempat berbeda: telemetri sintetis
+    dibayangi menurut UTM, sementara berkas EL palsu ditulis dalam
+    lintang/bujur seperti berkas aslinya. Keduanya harus menggambarkan posisi
+    yang SAMA, jadi permutasinya menukar seluruh catatan sekaligus.
 
     Kontrol memakai koordinat DXF apa adanya. Yang dibantah memakai koordinat
     DXF milik SAUDARANYA -- ditukar dengan permutasi tetap, sehingga struktur
@@ -87,18 +94,24 @@ def _posisi_benar() -> dict:
 
     benar = {}
     for row in geom.itertuples(index=False):
-        if pd.isna(row.pv) or pd.isna(row.north) or pd.isna(row.east):
+        if any(pd.isna(v) for v in
+               (row.pv, row.st, row.north, row.east, row.lat, row.lon)):
             continue
         nama = f"{row.inverter_id}-PV{int(row.pv)}"
-        benar[nama] = (float(row.north), float(row.east))
+        benar[nama] = {
+            "utm": (float(row.north), float(row.east)),
+            "ll": (float(row.lat), float(row.lon)),
+            "st": int(row.st),
+        }
 
     nama_dibantah = sorted(k for k in benar
                            if k.rsplit("-", 1)[0] in set(DIBANTAH))
-    posisi = [benar[k] for k in nama_dibantah]
+    catatan = [dict(benar[k]) for k in nama_dibantah]
     rng = np.random.default_rng(7)
-    urut = rng.permutation(len(posisi))
+    urut = rng.permutation(len(catatan))
     for k, j in zip(nama_dibantah, urut):
-        benar[k] = posisi[j]
+        # ST tetap milik string itu sendiri; yang ditukar hanya POSISInya.
+        benar[k] = {**catatan[j], "st": benar[k]["st"]}
     return benar
 
 
@@ -119,8 +132,8 @@ def _tulis_baseline(baseline_dir: Path, benar: dict) -> None:
     dan kolom PV memakai DUA konvensi huruf, supaya pemetaan inverter dan
     jebakan huruf besar-kecil ikut teruji.
     """
-    utara = np.array([p[0] for p in benar.values()])
-    timur = np.array([p[1] for p in benar.values()])
+    utara = np.array([p["utm"][0] for p in benar.values()])
+    timur = np.array([p["utm"][1] for p in benar.values()])
     u0, u1 = utara.min(), utara.max()
     t0, t1 = timur.min(), timur.max()
 
@@ -135,7 +148,8 @@ def _tulis_baseline(baseline_dir: Path, benar: dict) -> None:
         pusat_u = np.linspace(u0 - 50, u1 + 50, n)
 
         per_inv: dict = {}
-        for nama, (nu, te) in benar.items():
+        for nama, rec in benar.items():
+            nu, te = rec["utm"]
             inv, pv = nama.rsplit("-PV", 1)
             jarak2 = (pusat_t - te) ** 2 + (pusat_u - nu) ** 2
             teduh = np.exp(-jarak2 / (2 * LEBAR_AWAN_M ** 2))
@@ -162,14 +176,32 @@ def _tulis_baseline(baseline_dir: Path, benar: dict) -> None:
         pd.DataFrame(baris).to_csv(folder / f"{hari}.csv", index=False)
 
 
-def _tulis_el(path: Path, benar: dict, *, kolom_string="string_id") -> None:
-    """CSV EL palsu: 32 baris sampah lalu header, seperti berkas aslinya."""
+EL_HEADER = ("#String, Table x, Table y, Module x, Module y, Module type,"
+             " Longitude, Latitude, EL Uniformity\n")
+
+
+def _tulis_el(path: Path, benar: dict, *, penanda: str = "#String") -> None:
+    """CSV EL palsu dalam format ASLINYA.
+
+    Tiga sifat berkas asli ditiru karena ketiganya pernah menjatuhkan
+    pembacaan: blok pengantar yang memuat baris KOSONG (yang membuat hitungan
+    indeks baris meleset), label bentuk pendek ``S{plant}{inv}_{st}``, dan satu
+    baris PER MODUL dengan koordinat lintang/bujur -- bukan per string, bukan
+    meter.
+    """
     with open(path, "w", encoding="utf-8", newline="") as fp:
-        for i in range(32):
-            fp.write(f"# baris pengantar survei {i + 1}\n")
-        fp.write(f"{kolom_string},north,east\n")
-        for nama, (nu, te) in benar.items():
-            fp.write(f"{nama},{nu},{te}\n")
+        for i in range(33):
+            fp.write("\n" if i % 7 == 0 else f"#pengantar survei {i}\n")
+        fp.write(EL_HEADER.replace("#String", penanda, 1))
+        for nama, rec in benar.items():
+            inv = nama.rsplit("-PV", 1)[0]
+            plant = int(inv[3:4])          # WB01 -> 1, WB02 -> 2
+            nomor = int(inv.split("INV")[1])
+            label = f"S{plant}{nomor:02d}_{rec['st']:02d}"
+            lat, lon = rec["ll"]
+            for m in range(4):             # beberapa modul per string
+                fp.write(f"{label}, , 2, {m + 1}, 2, 1, "
+                         f"{lon + m * 1e-7:.8f}, {lat - m * 1e-7:.8f}, 10.0\n")
 
 
 def _scope(temp: Path, el_csv: Path, notebook: dict) -> dict:
@@ -216,24 +248,24 @@ def _periksa(scope: dict) -> None:
           f"| margin {verdict['margin']:.3f}")
 
 
-def _periksa_galat_kolom_el(temp: Path, benar: dict) -> None:
-    """Nama kolom EL yang salah harus menyalak DAN menyebutkan kolom yang ada.
+def _periksa_berkas_el_asing(temp: Path, benar: dict) -> None:
+    """Berkas tanpa penanda header harus BERGALAT, bukan mengarang kolom.
 
-    Skema all.csv tidak terekam di kode mana pun, jadi tebakan default di Cell 2
-    memang bisa meleset. Yang menentukan bukan galatnya melainkan apakah pesan
-    itu memberi tahu cara membetulkannya -- kalau tidak, orang di Colab buntu.
+    Inilah kegagalan yang sebenarnya terjadi: dua tebakan indeks baris
+    berturut-turut mendarat di baris DATA, dan pandas dengan patuh memakai
+    ``S101_01`` serta ``116.63659701`` sebagai NAMA KOLOM. Tidak ada galat --
+    hanya tabel yang salah. Pencarian lewat penanda harus berhenti sama sekali
+    kalau penandanya tidak ada.
     """
-    el_salah = temp / "el_kolom_lain.csv"
-    _tulis_el(el_salah, benar, kolom_string="nomor_string")
+    el_asing = temp / "el_tanpa_penanda.csv"
+    _tulis_el(el_asing, benar, penanda="Kolom Pertama")
     try:
-        _jalankan(temp, el_salah)
-    except KeyError as exc:
-        pesan = str(exc)
-        assert "nomor_string" in pesan, pesan
-        assert "TERSEDIA" in pesan, pesan
-        print("[smoke] galat kolom EL menyebutkan kolom yang tersedia OK")
+        _jalankan(temp, el_asing)
+    except ValueError as exc:
+        assert "#String" in str(exc), str(exc)
+        print("[smoke] berkas EL tanpa penanda header bergalat OK")
         return
-    raise AssertionError("kolom EL salah seharusnya menyalak, tapi lolos")
+    raise AssertionError("berkas EL asing seharusnya menyalak, tapi lolos")
 
 
 def main() -> None:
@@ -250,7 +282,7 @@ def main() -> None:
             _tulis_el(el_csv, benar)
 
             _periksa(_jalankan(temp, el_csv))
-            _periksa_galat_kolom_el(temp, benar)
+            _periksa_berkas_el_asing(temp, benar)
             print("[smoke] OK")
     finally:
         os.chdir(cwd)

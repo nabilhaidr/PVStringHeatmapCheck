@@ -29,8 +29,10 @@ skor yang sama-sama lemah adalah lempar koin berbaju bukti.
 """
 from __future__ import annotations
 
+import re
 from itertools import combinations
-from math import hypot
+from math import cos, hypot, radians
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -56,6 +58,140 @@ DEFAULT_MIN_CONTROL_RHO: float = -0.20
 # Dua kandidat yang selisih rho-nya di bawah ini tidak terbedakan mengingat
 # derau dari jumlah pasangan yang terbatas. Laporkan seri, jangan memilih.
 DEFAULT_MIN_MARGIN: float = 0.10
+
+# Header berkas survei EL dicari lewat PENANDA ini, bukan nomor baris.
+# Menghitung barisnya dari luar sudah dua kali meleset: pengantarnya memuat
+# baris kosong, ``pd.read_csv`` melewatinya secara default, dan indeks apa pun
+# yang dihitung manual bergeser sebanyak jumlah baris kosong di atasnya.
+# Gejalanya bukan galat melainkan nama kolom yang berisi angka.
+EL_HEADER_MARKER: str = "#String"
+
+# Konversi derajat -> meter di sekitar lintang situs (~ -1 derajat). Wajib,
+# karena koordinat ini diadu dengan koordinat DXF yang satuannya meter:
+# decay_score menghitung jarak Euclid apa adanya, dan dua kandidat dengan skala
+# berbeda 10^5 kali sama-sama tetap menghasilkan rho tanpa ada yang menandai
+# bahwa perbandingannya omong kosong.
+_M_PER_DEG_LAT: float = 110574.0
+_M_PER_DEG_LON_EKUATOR: float = 111320.0
+
+# Dua ragam label dalam SATU berkas, seperti konvensi huruf kolom telemetri.
+_EL_PHASE_ONE_RE = re.compile(r"^S(?P<plant>[12])(?P<inv>\d{2})_(?P<st>\d+)$")
+_EL_PANJANG_RE = re.compile(
+    r"^WB(?P<wb>\d{2})INV(?P<inv>\d+)ST(?P<st>\d+)$", re.I,
+)
+
+
+def _decode_el_label(label: str) -> Optional[str]:
+    """Label survei EL -> ``"WBnn-INVmm-STss"``; None bila tak dikenali.
+
+    Berkas memakai dua konvensi sekaligus. Phase One memakai bentuk pendek
+    ``S{plant}{inverter}_{st}`` -- pengkodean yang sama dengan ``Inv_A_2nn_IKN``
+    di telemetri -- sementara WB03-10 memakai bentuk panjang ``WB10INV17ST23``.
+    Mengenali satu ragam saja membuang separuh survei tanpa galat apa pun.
+    """
+    teks = str(label).strip()
+    m = _EL_PHASE_ONE_RE.match(teks)
+    if m:
+        return (f"WB0{m.group('plant')}-INV{int(m.group('inv')):02d}"
+                f"-ST{int(m.group('st'))}")
+    m = _EL_PANJANG_RE.match(teks)
+    if m:
+        return (f"WB{int(m.group('wb')):02d}-INV{int(m.group('inv')):02d}"
+                f"-ST{int(m.group('st'))}")
+    return None
+
+
+def load_el_coords(
+    csv_path: Path | str,
+    *,
+    header_marker: str = EL_HEADER_MARKER,
+) -> Dict[str, Tuple[float, float]]:
+    """Survei EL drone -> ``{"WBnn-INVmm-STss": (north_m, east_m)}``.
+
+    Berkasnya per MODUL (114.420 baris untuk 4.470 string), berkoordinat
+    Longitude/Latitude derajat, dan didahului blok pengantar yang panjang.
+    Fungsi ini meringkas modul jadi satu titik per string dan mengubah derajat
+    jadi meter relatif terhadap pusat data.
+
+    Kuncinya memakai ST, bukan PV. Untuk Phase One keduanya kebetulan sama,
+    tapi untuk WB03-10 TIDAK -- lihat :func:`el_coords_to_pv`.
+
+    Raises
+    ------
+    ValueError
+        Bila penanda header tidak ditemukan. Lebih baik berhenti daripada
+        mengembalikan tabel yang nama kolomnya sebenarnya baris data.
+    """
+    path = Path(csv_path)
+    lewati = None
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fp:
+        for i, baris in enumerate(fp):
+            if baris.lstrip().startswith(header_marker):
+                lewati = i
+                break
+    if lewati is None:
+        raise ValueError(
+            f"{path.name}: penanda header {header_marker!r} tidak ditemukan; "
+            f"berkas ini bukan ekspor survei EL yang dikenali."
+        )
+
+    df = pd.read_csv(path, skiprows=lewati, low_memory=False)
+    df.columns = [str(c).strip().lstrip("#") for c in df.columns]
+    for kolom in ("String", "Longitude", "Latitude"):
+        if kolom not in df.columns:
+            raise ValueError(
+                f"{path.name}: kolom {kolom!r} tidak ada. "
+                f"Tersedia: {list(df.columns)[:12]}"
+            )
+
+    df = df[["String", "Longitude", "Latitude"]].copy()
+    df["kunci"] = df["String"].map(_decode_el_label)
+    df["Longitude"] = pd.to_numeric(df["Longitude"], errors="coerce")
+    df["Latitude"] = pd.to_numeric(df["Latitude"], errors="coerce")
+    df = df.dropna(subset=["kunci", "Longitude", "Latitude"])
+    if df.empty:
+        return {}
+
+    per_string = df.groupby("kunci")[["Longitude", "Latitude"]].mean()
+    lat0 = float(per_string["Latitude"].mean())
+    lon0 = float(per_string["Longitude"].mean())
+    m_per_lon = _M_PER_DEG_LON_EKUATOR * cos(radians(lat0))
+
+    return {
+        kunci: ((row.Latitude - lat0) * _M_PER_DEG_LAT,
+                (row.Longitude - lon0) * m_per_lon)
+        for kunci, row in per_string.iterrows()
+    }
+
+
+def el_coords_to_pv(
+    el_by_st: Dict[str, Tuple[float, float]],
+    geom: pd.DataFrame,
+) -> Dict[str, Tuple[float, float]]:
+    """Ganti kunci ST jadi kunci PV lewat pemetaan geometri.
+
+    ``pv = st`` BENAR untuk Phase One dan SALAH untuk WB03-10. Menyamakannya
+    akan menempelkan koordinat EL ke kanal yang keliru di seluruh WB03-10 --
+    diam-diam, karena nama yang terbentuk tetap terlihat sah.
+
+    Pemetaan ST->PV datang dari as-built DC cable list lewat
+    ``string_geometry.csv`` dan tidak ada hubungannya dengan POSISI, jadi
+    memakainya di sini tidak melingkar terhadap sengketa penempatan.
+
+    ST yang tidak punya PV DIBUANG, tidak ditebak -- aturan yang sama dengan
+    cross-slope yang di-NULL-kan: pemetaan yang belum terbukti lebih buruk
+    daripada tidak ada, karena tidak ada yang di hilir bisa tahu ia karangan.
+    """
+    peta: Dict[str, str] = {}
+    for row in geom.itertuples(index=False):
+        st, pv = getattr(row, "st", None), getattr(row, "pv", None)
+        if st is None or pv is None or pd.isna(st) or pd.isna(pv):
+            continue
+        peta[f"{row.inverter_id}-ST{int(st)}"] = (
+            f"{row.inverter_id}-PV{int(pv)}"
+        )
+
+    return {peta[k]: v for k, v in el_by_st.items() if k in peta}
 
 
 def residual_after_site_median(
