@@ -168,7 +168,11 @@ for hari in HARI:
 assert CSV_PATHS, "Tidak ada CSV untuk HARI; cek BASELINE_DIR dan tanggalnya."
 print(f"{len(CSV_PATHS)} hari terbaca")
 
-EMPTY_PV_MAP = load_empty_pv_map("config/strings.yaml")
+# core.load_empty_pv_map menerima dict KONFIGURASI, bukan path -- beda dari
+# string_config.load_empty_pv_map dan string_config.get_empty_pv_map yang
+# keduanya menerima path. Dict kosong memakai default config/strings.yaml.
+# Pemanggilan ini sama persis dengan String_Intraday_Diagnostic Cell 4.
+EMPTY_PV_MAP = load_empty_pv_map({}, base_dir=str(REPO_DIR))
 SEMUA_INV = INVERTER_DIBANTAH + INVERTER_KONTROL
 
 LONG = load_baseline_power_long(
