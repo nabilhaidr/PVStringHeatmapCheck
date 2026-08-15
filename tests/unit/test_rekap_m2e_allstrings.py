@@ -204,6 +204,53 @@ class TestRekapSadarTautan:
 
         assert list(baris["verdict"]) == ["INVERTER_ABSENCE"]
 
+    def test_inverter_yang_tidak_pernah_melapor_tetap_terdeteksi(self):
+        """Roster yang disimpulkan dari data tidak bisa melihat yang tak pernah ada.
+
+        Ini lubang paling senyap di rekap. Roster diambil dari gabungan
+        inverter yang PERNAH terlihat, jadi inverter yang mati sepanjang
+        rentang tidak pernah masuk roster dan karenanya tidak pernah dinilai
+        hilang. Ia lenyap dari laporan bukan sebagai temuan melainkan sebagai
+        ketiadaan, dan ketiadaan tidak pernah menyalakan apa pun.
+
+        Sebuah inverter yang padam sebulan penuh adalah kerugian energi
+        terbesar yang bisa dipunyai satu situs -- justru kasus itu yang paling
+        tidak boleh lolos. Roster resmi (``empty_pv_map``) menutupnya.
+        """
+        from rekap_m2e_allstrings import build_link_audit
+
+        long_df = self._long([
+            self._b("2025-11-13", "WB01-INV01"), self._b("2025-11-13", "WB05-INV01"),
+            self._b("2025-11-14", "WB01-INV01"), self._b("2025-11-14", "WB05-INV01"),
+        ])
+        # WB01-INV02 ada di roster resmi tetapi TIDAK pernah melapor.
+        roster = ["WB01-INV01", "WB01-INV02", "WB05-INV01"]
+
+        audit = build_link_audit(long_df, roster=roster)
+
+        assert not audit.empty, (
+            "inverter yang tak pernah melapor harus tetap muncul; roster "
+            "resmi diberikan justru supaya kasus ini tidak lolos"
+        )
+        for hari in ("2025-11-13", "2025-11-14"):
+            baris = audit[(audit["date"] == pd.Timestamp(hari))
+                          & (audit["group"] == "phase_one_iconplus_fibre")]
+            assert len(baris) == 1, hari
+            assert baris.iloc[0]["verdict"] == "INVERTER_ABSENCE", hari
+            assert baris.iloc[0]["present"] == 1, hari
+            assert baris.iloc[0]["expected"] == 2, hari
+
+    def test_tanpa_roster_perilaku_lama_dipertahankan(self):
+        """Roster opsional: pemanggil lama tidak boleh berubah artinya."""
+        from rekap_m2e_allstrings import build_link_audit
+
+        long_df = self._long([
+            self._b("2025-11-13", "WB01-INV01"), self._b("2025-11-13", "WB05-INV01"),
+            self._b("2025-11-14", "WB01-INV01"), self._b("2025-11-14", "WB05-INV01"),
+        ])
+
+        assert build_link_audit(long_df).empty
+
     def test_rekap_memberi_kolom_hari_tautan_putus(self):
         """String Phase One harus membawa hitungan itu; WB03-10 tidak.
 

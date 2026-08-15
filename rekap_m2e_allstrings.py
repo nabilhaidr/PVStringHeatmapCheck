@@ -29,7 +29,7 @@ import argparse
 import os
 import re
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -148,7 +148,10 @@ def build_rekap_per_string(
     )
 
 
-def build_link_audit(long_df: pd.DataFrame) -> pd.DataFrame:
+def build_link_audit(
+    long_df: pd.DataFrame,
+    roster: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
     """Tanggal mana yang kehilangan SELURUH satu kelompok transport.
 
     Situs mengekspor dari dua Fusion Solar di jaringan berbeda: Phase One
@@ -160,12 +163,15 @@ def build_link_audit(long_df: pd.DataFrame) -> pd.DataFrame:
     Akibatnya ``uptime_mean`` dua plant dihitung atas jumlah hari berbeda lalu
     diperbandingkan seolah setara.
 
-    Roster "yang seharusnya ada" disimpulkan dari data itu sendiri: gabungan
-    seluruh inverter yang pernah terlihat pada rentang tanggal ini.
-    Konsekuensinya perlu disadari -- inverter yang TIDAK PERNAH melapor
-    sepanjang rentang tidak ada di roster dan karenanya tidak terdeteksi. Untuk
-    kasus itu pakai temuan ``M2e_link`` dari run harian, yang rosternya diambil
-    dari ``empty_pv_map``.
+    Roster "yang seharusnya ada" boleh diberikan lewat ``roster`` -- berikan
+    kunci ``empty_pv_map`` supaya rosternya resmi, bukan disimpulkan.
+
+    Tanpa ``roster`` ia jatuh kembali ke gabungan inverter yang PERNAH terlihat
+    pada rentang ini, dan lubangnya harus disadari: inverter yang TIDAK PERNAH
+    melapor sepanjang rentang tidak masuk roster, jadi tidak pernah dinilai
+    hilang. Ia lenyap sebagai ketiadaan, bukan sebagai temuan -- padahal
+    inverter yang padam sebulan penuh justru kerugian energi terbesar yang bisa
+    dipunyai satu situs. Berikan ``roster`` untuk menutupnya.
 
     Returns
     -------
@@ -174,13 +180,15 @@ def build_link_audit(long_df: pd.DataFrame) -> pd.DataFrame:
         ``verdict``. Hanya kelompok yang TIDAK lengkap; tanggal normal tidak
         menghasilkan baris supaya penandanya tetap langka dan tetap dibaca.
     """
-    if long_df.empty or "inverter_id" not in long_df.columns:
+    if roster is None and (long_df.empty or "inverter_id" not in long_df.columns):
         return pd.DataFrame(
             columns=["date", "group", "expected", "present", "missing",
                      "verdict"]
         )
 
-    roster = sorted(long_df["inverter_id"].dropna().astype(str).unique())
+    if roster is None:
+        roster = long_df["inverter_id"].dropna().astype(str).unique()
+    roster = sorted({str(i).strip().upper() for i in roster})
     baris = []
     for hari, sub in long_df.groupby("date", sort=True):
         hadir = sub["inverter_id"].dropna().astype(str).unique()
@@ -279,7 +287,21 @@ def main() -> None:
           f"{long_df.groupby(['inverter_id', 'pv_string']).ngroups} string")
 
     pivot = build_uptime_pivot(long_df)
-    link_audit = build_link_audit(long_df)
+
+    # Roster resmi kalau bisa didapat. Tanpa ini inverter yang TIDAK PERNAH
+    # melapor sepanjang rentang tidak akan pernah dinilai hilang -- justru
+    # kasus terparah yang paling senyap.
+    _roster = None
+    try:
+        from pv_pipeline.core import load_empty_pv_map
+        _roster = sorted(load_empty_pv_map({}).keys()) or None
+    except Exception as exc:                      # noqa: BLE001
+        print(f"[rekap-m2e] roster resmi tidak terbaca ({exc}); "
+              f"jatuh ke roster simpulan -- inverter yang tak pernah melapor "
+              f"TIDAK akan terdeteksi.")
+    if _roster:
+        print(f"[rekap-m2e] roster resmi: {len(_roster)} inverter")
+    link_audit = build_link_audit(long_df, roster=_roster)
     rekap = attach_link_days(
         build_rekap_per_string(long_df, args.uptime_threshold), link_audit,
     )
