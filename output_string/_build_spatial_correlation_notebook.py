@@ -68,7 +68,10 @@ Jalankan Sel 1 sampai Sel 6 berurutan. Edit hanya nilai di **Sel 2**.
 
 CODE_SETUP = '''# Cell 1 - Mount Drive + siapkan repo
 from pathlib import Path
-import os, sys
+import os, subprocess, sys
+
+REPO_URL = "https://github.com/nabilhaidr/PVStringHeatmapCheck.git"
+DRIVE_ROOT = "/content/drive/MyDrive/Cek PV String"     # DATA, bukan kode
 
 try:
     from google.colab import drive
@@ -76,7 +79,7 @@ try:
     IN_COLAB = True
 except ImportError:
     IN_COLAB = False
-    print("Bukan Colab -- pakai path lokal.")
+    print("Bukan Colab -- pakai repo lokal.")
 
 def find_repo_root(start=None):
     path = Path(start or os.getcwd()).resolve()
@@ -85,21 +88,35 @@ def find_repo_root(start=None):
             return candidate
     raise RuntimeError("Repo root tidak ditemukan.")
 
-REPO_DIR = find_repo_root(
-    "/content/drive/MyDrive/Cek PV String" if IN_COLAB else None
-)
+if IN_COLAB:
+    # KODE dari GitHub, BUKAN dari salinan Drive. Salinan Drive disinkron
+    # sebagai berkas biasa, jadi .git ikut tersalin dan melaporkan commit lama
+    # sementara kodenya entah versi mana. Clone dangkal menghapus seluruh kelas
+    # kegagalan itu. KONSEKUENSINYA: suntingan yang belum dipush TIDAK ikut.
+    REPO_DIR = Path("/content/PVStringHeatmapCheck")
+    if (REPO_DIR / ".git").is_dir():
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "fetch", "--depth", "1", "origin", "master"])
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "reset", "--hard", "origin/master"])
+    else:
+        subprocess.check_call(["git", "clone", "--depth", "1",
+                               REPO_URL, str(REPO_DIR)])
+else:
+    REPO_DIR = find_repo_root()
+    DRIVE_ROOT = str(REPO_DIR)      # lokal: data bersebelahan dgn kode
+
 os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
-print("REPO_DIR:", REPO_DIR)
+print("KODE :", REPO_DIR)
+print("DATA :", DRIVE_ROOT)
 
-# .git di Drive bisa tertinggal berbulan-bulan, jadi penandanya memeriksa ISI.
-#
-# Memeriksa keberadaan MODUL saja tidak cukup, dan itu sudah terbukti: salinan
-# Drive yang punya berkasnya tapi belum punya fungsi terbarunya lolos Sel 1
-# dengan cetakan "ADA", lalu Sel 4 tumbang dengan ImportError. Nama-nama di
-# bawah disebut satu per satu; sebuah tes menjaga daftarnya tetap lengkap saat
-# sel berubah.
+# Penanda ISI. Clone sudah menutup kelas kegagalan salinan basi, tapi ini
+# tetap ada untuk kasus lain: fetch yang gagal separuh, atau nama yang dipakai
+# sel ternyata belum dipush. Memeriksa keberadaan MODUL saja tidak cukup --
+# salinan yang punya berkasnya tapi belum punya fungsi terbarunya lolos Sel 1
+# lalu menjatuhkan Sel 4. Sebuah tes menjaga daftar ini tetap lengkap.
 _WAJIB = (
     "coords_from_geometry", "decay_score", "el_coords_to_pv",
     "load_el_coords", "pairwise_correlation", "residual_after_site_median",
@@ -109,16 +126,15 @@ try:
     import pv_pipeline.spatial_correlation as _sc
 except ImportError:
     raise RuntimeError(
-        "pv_pipeline/spatial_correlation.py tidak ada di salinan Drive ini. "
-        "Sinkronkan ulang repo ke Drive."
+        "pv_pipeline/spatial_correlation.py tidak ada di clone. Cek apakah "
+        "berkas itu memang sudah dipush ke master."
     )
 _hilang = [n for n in _WAJIB if not hasattr(_sc, n)]
 if _hilang:
     raise RuntimeError(
-        f"Salinan Drive TERTINGGAL: pv_pipeline/spatial_correlation.py ada, "
-        f"tapi tidak punya {_hilang}. Sinkronkan ulang berkas itu ke Drive "
-        f"lalu jalankan ulang dari Sel 1. Jangan lanjut -- sel berikutnya "
-        f"akan gagal di tengah jalan."
+        f"Clone TERTINGGAL dari yang dibutuhkan notebook ini: "
+        f"spatial_correlation.py ada tapi tidak punya {_hilang}. Push dulu "
+        f"perubahannya, lalu jalankan ulang dari Sel 1."
     )
 print(f"versi repo (isi): spatial_correlation lengkap ({len(_WAJIB)} nama)")
 '''
@@ -131,7 +147,7 @@ from pv_pipeline.spatial_correlation import (
     DEFAULT_MIN_OVERLAP,
 )
 
-BASELINE_DIR = "/content/drive/MyDrive/Cek PV String/baseline"
+BASELINE_DIR = f"{DRIVE_ROOT}/baseline"
 
 # Hari berawan sebagian, hasil peringkat Drive_Probe.ipynb Sel 5.
 # Hari cerah stabil TIDAK berguna di sini: tanpa awan lewat tidak ada kontras
@@ -157,8 +173,7 @@ INVERTER_KONTROL = ["WB02-INV03", "WB02-INV05", "WB02-INV07", "WB02-INV08"]
 # Headernya dicari lewat penanda "#String", bukan nomor baris -- menghitung
 # baris dari luar sudah dua kali meleset karena pd.read_csv melewati baris
 # kosong di blok pengantarnya.
-EL_CSV = ("/content/drive/MyDrive/Cek PV String/"
-          "raw data input/Drawing/el drone 2025/all.csv")
+EL_CSV = f"{DRIVE_ROOT}/raw data input/Drawing/el drone 2025/all.csv"
 
 JENDELA = DEFAULT_MIDDAY
 MIN_OVERLAP = DEFAULT_MIN_OVERLAP

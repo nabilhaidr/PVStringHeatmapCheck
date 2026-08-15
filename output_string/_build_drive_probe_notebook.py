@@ -59,7 +59,10 @@ Jalankan Sel 1 sampai Sel 6 berurutan. Edit hanya nilai di **Sel 2**.
 
 CODE_SETUP = '''# Cell 1 - Mount Drive + siapkan repo
 from pathlib import Path
-import os, sys
+import os, subprocess, sys
+
+REPO_URL = "https://github.com/nabilhaidr/PVStringHeatmapCheck.git"
+DRIVE_ROOT = "/content/drive/MyDrive/Cek PV String"     # DATA, bukan kode
 
 try:
     from google.colab import drive
@@ -67,7 +70,7 @@ try:
     IN_COLAB = True
 except ImportError:
     IN_COLAB = False
-    print("Bukan Colab -- pakai path lokal.")
+    print("Bukan Colab -- pakai repo lokal.")
 
 def find_repo_root(start=None):
     path = Path(start or os.getcwd()).resolve()
@@ -76,19 +79,31 @@ def find_repo_root(start=None):
             return candidate
     raise RuntimeError("Repo root tidak ditemukan.")
 
-REPO_DIR = find_repo_root(
-    "/content/drive/MyDrive/Cek PV String" if IN_COLAB else None
-)
+if IN_COLAB:
+    # KODE dari GitHub, BUKAN dari salinan Drive. Salinan Drive disinkron
+    # sebagai berkas biasa, jadi .git ikut tersalin dan melaporkan commit lama
+    # sementara kodenya entah versi mana. Clone dangkal menghapus seluruh kelas
+    # kegagalan itu. KONSEKUENSINYA: suntingan yang belum dipush TIDAK ikut.
+    REPO_DIR = Path("/content/PVStringHeatmapCheck")
+    if (REPO_DIR / ".git").is_dir():
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "fetch", "--depth", "1", "origin", "master"])
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "reset", "--hard", "origin/master"])
+    else:
+        subprocess.check_call(["git", "clone", "--depth", "1",
+                               REPO_URL, str(REPO_DIR)])
+else:
+    REPO_DIR = find_repo_root()
+    DRIVE_ROOT = str(REPO_DIR)      # lokal: data bersebelahan dgn kode
+
 os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
-print("REPO_DIR:", REPO_DIR)
+print("KODE :", REPO_DIR)
+print("DATA :", DRIVE_ROOT)
 
-# Repo DIBACA dari Drive, tidak di-clone dan tidak di-pull. Kalau salinan di
-# Drive tertinggal, perubahan terbaru diam-diam tidak berlaku dan hasilnya
-# tetap terlihat wajar. Cetak versinya -- tapi JANGAN percaya begitu saja:
-# Drive disinkron sebagai berkas, .git bisa tertinggal berbulan-bulan.
-import subprocess
+# Versi ini kini SAH: repo di atas hasil clone/fetch sungguhan.
 _v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
                     capture_output=True, text=True)
 print("versi repo (git):", (_v.stdout.strip() or _v.stderr.strip()
@@ -107,15 +122,15 @@ try:
     import pv_pipeline.drive_probe as _dp
 except ImportError:
     raise RuntimeError(
-        "pv_pipeline/drive_probe.py tidak ada di salinan Drive ini. "
-        "Notebook ini butuh modul itu; sinkronkan ulang repo ke Drive."
+        "pv_pipeline/drive_probe.py tidak ada di clone. Cek apakah "
+        "berkas itu memang sudah dipush ke master."
     )
 _hilang = [n for n in _WAJIB if not hasattr(_dp, n)]
 if _hilang:
     raise RuntimeError(
-        f"Salinan Drive TERTINGGAL: pv_pipeline/drive_probe.py ada, tapi "
-        f"tidak punya {_hilang}. Sinkronkan ulang berkas itu lalu jalankan "
-        f"ulang dari Sel 1."
+        f"Clone TERTINGGAL dari yang dibutuhkan notebook ini: "
+        f"drive_probe.py ada tapi tidak punya {_hilang}. Push dulu "
+        f"perubahannya, lalu jalankan ulang dari Sel 1."
     )
 print(f"versi repo (isi) : drive_probe lengkap ({len(_WAJIB)} nama)")
 '''
@@ -127,7 +142,7 @@ from pv_pipeline.drive_probe import (
     DEFAULT_VARIABILITY_MIDDAY,
 )
 
-BASELINE_DIR = "/content/drive/MyDrive/Cek PV String/baseline"
+BASELINE_DIR = f"{DRIVE_ROOT}/baseline"
 
 # --- Probe A: periode yang mau diperiksa cakupannya -------------------------
 BULAN_DIPERIKSA = ["2025-11", "2025-12"]
@@ -145,7 +160,8 @@ POA_MULAI = "2026-06-01"
 POA_SELESAI = "2026-06-30"
 # Kosongkan untuk memakai config/site_geometry.yaml. Isi daftar path kalau
 # folder "raw data input" sedang tidak di tempat yang diharapkan config.
-POA_XLSX = []
+POA_XLSX = [f"{DRIVE_ROOT}/raw data input/POA PLTS IKN 2025.xlsx",
+            f"{DRIVE_ROOT}/raw data input/POA PLTS IKN 2026.xlsx"]
 JENDELA_VARIABILITAS = DEFAULT_VARIABILITY_MIDDAY
 MIN_POA_RATA = DEFAULT_MIN_MEAN_POA
 TOP_HARI = 10

@@ -86,7 +86,10 @@ Jalankan Cell 1 sampai Cell 6 berurutan. Edit hanya nilai di **Cell 2**.
 
 CODE_SETUP = '''# Cell 1 - Mount Drive + siapkan repo
 from pathlib import Path
-import os, sys
+import os, subprocess, sys
+
+REPO_URL = "https://github.com/nabilhaidr/PVStringHeatmapCheck.git"
+DRIVE_ROOT = "/content/drive/MyDrive/Cek PV String"     # DATA, bukan kode
 
 try:
     from google.colab import drive
@@ -94,7 +97,7 @@ try:
     IN_COLAB = True
 except ImportError:
     IN_COLAB = False
-    print("Bukan Colab -- pakai path lokal.")
+    print("Bukan Colab -- pakai repo lokal.")
 
 def find_repo_root(start=None):
     path = Path(start or os.getcwd()).resolve()
@@ -103,22 +106,36 @@ def find_repo_root(start=None):
             return candidate
     raise RuntimeError("Repo root tidak ditemukan.")
 
-REPO_DIR = find_repo_root(
-    "/content/drive/MyDrive/Cek PV String" if IN_COLAB else None
-)
+if IN_COLAB:
+    # KODE dari GitHub, BUKAN dari salinan Drive. Salinan Drive disinkron
+    # sebagai berkas biasa, jadi .git ikut tersalin dan melaporkan commit lama
+    # sementara kodenya entah versi mana. Clone dangkal menghapus seluruh kelas
+    # kegagalan itu. KONSEKUENSINYA: suntingan yang belum dipush TIDAK ikut.
+    REPO_DIR = Path("/content/PVStringHeatmapCheck")
+    if (REPO_DIR / ".git").is_dir():
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "fetch", "--depth", "1", "origin", "master"])
+        subprocess.check_call(["git", "-C", str(REPO_DIR),
+                               "reset", "--hard", "origin/master"])
+    else:
+        subprocess.check_call(["git", "clone", "--depth", "1",
+                               REPO_URL, str(REPO_DIR)])
+else:
+    REPO_DIR = find_repo_root()
+    DRIVE_ROOT = str(REPO_DIR)      # lokal: data bersebelahan dgn kode
+
 os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 
-# Repo DIBACA dari Drive, tidak di-clone dan tidak di-pull. Salinan Drive yang
-# tertinggal membuat perubahan terbaru diam-diam tidak berlaku sementara
-# hasilnya tetap terlihat wajar -- kegagalan paling mahal di alur ini.
-import subprocess
+# Versi ini kini SAH: repo di atas hasil clone/fetch sungguhan, bukan folder
+# yang disalin.
 _v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
                     capture_output=True, text=True)
 print("versi repo:", (_v.stdout.strip() or _v.stderr.strip()
                       or "(bukan git repo -- salinan manual?)"))
-print("REPO_DIR:", REPO_DIR)
+print("KODE :", REPO_DIR)
+print("DATA :", DRIVE_ROOT)
 
 # Penanda ISI. Memeriksa keberadaan modul saja tidak cukup: salinan Drive yang
 # punya berkasnya tapi belum punya fungsi terbarunya akan lolos di sini lalu
@@ -144,10 +161,10 @@ CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
 
 # Workbook diagnostik yang mau dinilai ulang -- keluaran
 # String_Intraday_Diagnostic.ipynb. Sheet "Klasifikasi" dan "Metadata" dipakai.
-WORKBOOK = "/content/drive/MyDrive/Cek PV String/outputs/" \\
+WORKBOOK = f"{DRIVE_ROOT}/outputs/" \\
            "string_intraday_diagnostic_20260601_20260630.xlsx"
 
-OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
+OUTPUT_DIR = f"{DRIVE_ROOT}/outputs"
 
 # Workbook dari rentang tanggal musim LAIN, untuk validasi silang di Cell 5.
 # DAFTAR, bukan satu path: seasonal_discriminator() memang menerima berapa pun
@@ -164,10 +181,10 @@ OUTPUT_DIR = "/content/drive/MyDrive/Cek PV String/outputs"
 # 90 dari jendela terdekat dan punya 25 hari; Maret 2025 berjarak 91 tapi
 # hanya 4 hari.
 WORKBOOK_MUSIM_LAIN = [
-    "/content/drive/MyDrive/Cek PV String/outputs/"
+    f"{DRIVE_ROOT}/outputs/"
     "string_intraday_diagnostic_20251103_20251229.xlsx",
-    "/content/drive/MyDrive/Cek PV String/outputs/"
-    "string_intraday_diagnostic_20260301_20260331.xlsx",
+    f"{DRIVE_ROOT}/outputs/"
+    "string_intraday_diagnostic_20260304_20260331.xlsx",
 ]
 
 # Daftar string yang jadi subjek laporan yang sudah beredar
