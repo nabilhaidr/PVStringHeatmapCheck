@@ -155,6 +155,28 @@ if _hilang:
     )
 print(f"versi repo (isi): string_intraday_diagnostic lengkap "
       f"({len(_WAJIB)} nama)")
+
+# Penanda ISI untuk GEOMETRI. Open Question 8 diterapkan 15 Agu 2026: keempat
+# inverter Phase One yang disengketakan pindah ke posisi survei EL dan kolom
+# bidangnya dihitung ulang dari dsm.tif, mengubah 72 baris dari NULL jadi
+# terukur. Klon yang tertinggal masih membawa NULL-nya, dan itu TIDAK
+# menggagalkan apa pun -- ketujuh puluh dua string itu cuma jatuh diam-diam ke
+# TIDAK_BERLAKU, persis seperti sebelumnya, tanpa satu pun galat. Run yang
+# tampak sukses akan melewatkan justru bagian yang baru bisa dinilai.
+import pandas as _pd
+_geom = _pd.read_csv(REPO_DIR / "config" / "string_geometry.csv")
+_OQ8 = ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"]
+_n_oq8 = _geom[_geom["inverter_id"].isin(_OQ8)]["cross_slope_deg"].notna().sum()
+if _n_oq8 < 72:
+    raise RuntimeError(
+        f"Geometri TERTINGGAL: hanya {_n_oq8}/72 baris WB02-INV01/02/04/06 "
+        f"punya cross_slope_deg. Klon ini mendahului penerapan Open Question 8 "
+        f"(commit 22b059e, 15 Agu 2026). Jalankan ulang Sel 1 supaya "
+        f"fetch/reset mengambil master terbaru."
+    )
+_n_cs = int(_geom["cross_slope_deg"].notna().sum())
+print(f"versi repo (isi): geometri OQ8 diterapkan "
+      f"({_n_oq8}/72 baris sengketa, {_n_cs} cross-slope se-situs)")
 '''
 
 CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
@@ -364,6 +386,33 @@ else:
         print("Ini menguji penskalaan musiman model. Untuk string yang memang")
         print("geometris, residual harus jauh lebih stabil antar musim daripada")
         print("asimetri mentahnya; drift besar menandakan k(hari) meleset.")
+
+    # Keempat inverter Open Question 8. Sampai 15 Agu 2026 kolom bidangnya NULL,
+    # jadi ke-72 stringnya selalu jatuh ke TIDAK_BERLAKU tanpa pernah benar-benar
+    # dinilai. Sesudah OQ8 diterapkan mereka punya cross-slope, jadi inilah
+    # pertama kalinya mereka masuk penilaian. Dipisahkan supaya perubahannya
+    # terlihat, bukan tenggelam di antara 1.354 baris lain.
+    _oq8_inv = ("WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06")
+    # pv_string adalah KOLOM di sini, bukan indeks -- validate_geometry_seasonally
+    # mengembalikannya begitu, dan pemanggil yang mengindeksnya harus set_index
+    # sendiri.
+    _m = VALIDASI["pv_string"].astype(str).str.startswith(_oq8_inv)
+    _oq8 = VALIDASI[_m]
+    print()
+    print(f"=== Open Question 8: {len(_oq8)} string dari {len(_oq8_inv)} inverter ===")
+    if _oq8.empty:
+        print("Tidak ada di workbook ini -- rentang tanggalnya mungkin belum")
+        print("memuat Phase One. Itu bukan galat, tapi berarti penerapan OQ8")
+        print("belum terbaca di sini.")
+    else:
+        for nama, n in _oq8["hasil"].value_counts().items():
+            print(f"  {nama:<24} {n}")
+        _tb = int((_oq8["hasil"] == "TIDAK_BERLAKU").sum())
+        print(f"\\n{len(_oq8) - _tb} dari {len(_oq8)} kini benar-benar dinilai;")
+        print("sebelum OQ8 diterapkan seluruhnya TIDAK_BERLAKU karena tanpa")
+        print("cross-slope. Ingat tanah Phase One RATA (|cs| median 1,34 maks")
+        print("3,29 derajat), jadi geometri praktis tidak punya pekerjaan di")
+        print("sana -- TIDAK_BERLAKU yang tersisa wajar, bukan kegagalan.")
 '''
 
 CODE_SAVE = '''# Cell 6 - Simpan hasil penilaian ulang
