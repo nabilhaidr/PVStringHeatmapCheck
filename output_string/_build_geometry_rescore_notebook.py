@@ -252,7 +252,9 @@ if int(_utara.sum()):
 '''
 
 CODE_VALIDATE = '''# Cell 5 - Validasi silang: prediksi geometris vs perilaku musiman
-from pv_pipeline.string_intraday_diagnostic import validate_geometry_seasonally
+from pv_pipeline.string_intraday_diagnostic import (
+    season_scales, validate_geometry_seasonally,
+)
 
 VALIDASI = None
 if not WORKBOOK_MUSIM_LAIN:
@@ -276,6 +278,25 @@ else:
         print(f"\\nPERHATIAN -- jumlah string berbeda antar musim: {_n}")
         print("Periksa kolom n_musim di hasil; string yang tidak hadir di semua")
         print("musim dinilai atas lebih sedikit titik.")
+
+    # Uji musiman ikut mengukur cuaca. |asimetri| median se-situs berbeda ~50%
+    # antar musim (Jun 0,162 / Nov-Des 0,095 / Mar 0,083), sementara ambang
+    # 0,30 diturunkan dari variasi GEOMETRIS antar solstis yang cuma ~22,5%.
+    # Faktor bersama itu dibuang lebih dulu; skalanya dari string TERUKUR,
+    # bukan dari model, supaya kedua penilai tetap saling bebas.
+    SKALA = season_scales(MUSIM)
+    if SKALA is None:
+        print("\\nPERHATIAN -- kohort terlalu kecil, normalisasi musiman "
+              "DILEWATI.")
+        print("Rentang relatif akan memuat faktor musiman bersama dan vonis")
+        print("condong ke OBSTRUKSI. Bacalah hasil di bawah dengan itu di kepala.")
+    else:
+        print("\\nskala asimetri per musim (median |pagi-sore| atas kohort sama):")
+        for _lb, _v in SKALA.items():
+            print(f"  {_lb}  {_v:.4f}")
+        print("Nilai ini DIBAGIKAN keluar sebelum sebaran dihitung. Kolom")
+        print("asym_<musim> di hasil tetap nilai TERUKUR supaya bisa dibandingkan")
+        print("dengan grafik dan workbook lama.")
 
     VALIDASI = validate_geometry_seasonally(MUSIM)
     display(VALIDASI.head(40))

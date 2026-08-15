@@ -22,6 +22,7 @@ Dipakai oleh ``output_string/String_Intraday_Diagnostic.ipynb``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -68,10 +69,32 @@ RAIN_COLUMNS: List[str] = [
 # Asimetri pagi-sore akibat kemiringan tanah bervariasi ~22,5% dari nilainya
 # sendiri antar solstis, dan angka itu KONSTAN terhadap besar cross-slope
 # (2,5 / 5,0 / 9,2 / 13,2 / 18,3 derajat -> 22,6 / 22,7 / 22,6 / 22,5 / 22,4%).
-# Tandanya juga tidak pernah berbalik. Ambang 0,30 memberi margin derau di atas
-# 22,5% tanpa melewatkan obstruksi ringan. Diturunkan dari geometri surya
-# (pvlib clear-sky pada lintang site), bukan disetel ke data.
+# Tandanya juga tidak pernah berbalik.
+#
+# PEMBENARANNYA BERUBAH 15 Agustus 2026; nilainya tidak. Sejak normalisasi
+# musiman dipasang, angka 22,5% di atas TIDAK lagi mendasari ambang ini -- ia
+# habis dikonsumsi normalisasi itu sendiri. Turunannya: asimetri berbentuk
+# k(doy)*sin(theta) dan cahaya difus meredamnya dengan faktor D yang juga
+# se-musim, sedangkan skala musim adalah k*D*median|sin theta|; maka
+#
+#     z = asym / skala = sin(theta) / median|sin theta|
+#
+# dengan k DAN D dua-duanya tercoret. Untuk string geometris murni z tidak
+# bergantung musim sama sekali, jadi rentang relatif yang DIPREDIKSI geometri
+# adalah NOL. Dikunci di TestAmbangTernormalisasiTurunanNol.
+#
+# Yang tersisa karenanya murni kelonggaran derau, dan 0,30 terhadap prediksi
+# nol sudah longgar. Nilainya dipertahankan, bukan dinaikkan, karena arah
+# risikonya asimetris: ambang TINGGI menghasilkan lebih banyak GEOMETRI,
+# karenanya lebih banyak PEMBEBASAN dari daftar kunjungan. Menaikkannya
+# menuntut estimasi derau empiris yang belum ada -- lihat prd.md 8.15 untuk
+# cara memperolehnya (run split-half dalam satu musim).
 SEASONAL_REL_RANGE_MAX: float = 0.30
+
+# Kohort minimum untuk menghitung skala musim. Di bawah ini skalanya praktis
+# nilai string itu sendiri, normalisasinya jadi tak berarti, dan fungsinya
+# menolak menormalkan sambil menyalak.
+DEFAULT_MIN_STRINGS_FOR_SCALE: int = 20
 
 # Asimetri itu berbentuk ``k(hari) * sin(cross_slope)``. Bentuk sinus bukan
 # pilihan gaya: ia mereproduksi kedua puluh nilai pvlib clear-sky yang sudah
@@ -85,7 +108,8 @@ AMPM_ASYM_DOY: tuple = (80, 172, 264, 356)
 AMPM_ASYM_K: tuple = (2.9775, 2.6104, 2.9039, 3.2693)
 
 SEASONAL_COLUMNS: List[str] = [
-    "pv_string", "n_musim", "asym_mean", "asym_rel_range", "verdikt",
+    "pv_string", "n_musim", "asym_mean", "asym_rel_range", "ternormalisasi",
+    "verdikt",
 ]
 VALIDATION_COLUMNS: List[str] = [
     "pv_string", "n_musim", "verdikt_musiman", "verdikt_geometris",
@@ -551,11 +575,71 @@ def rain_recovery_verdict(
     }
 
 
+def season_scales(
+    by_season: Dict[str, pd.DataFrame],
+    *,
+    ampm_gap: float = DEFAULT_AMPM_GAP,
+    min_strings: int = DEFAULT_MIN_STRINGS_FOR_SCALE,
+) -> Optional[Dict[str, float]]:
+    """Skala asimetri per musim -- faktor bersama yang harus dibuang.
+
+    Uji musiman ikut mengukur cuaca. Pada run tiga musim, |asimetri| median
+    se-situs adalah 0,162 (Jun), 0,095 (Nov-Des), 0,083 (Mar) -- selisih
+    sekitar 50%, sementara ``SEASONAL_REL_RANGE_MAX`` = 0,30 diturunkan dari
+    variasi GEOMETRIS antar solstis yang cuma ~22,5%. Akibatnya suku sebaran
+    didominasi faktor yang tidak berkata apa-apa tentang string mana pun, dan
+    95% string melewati ambang.
+
+    Faktornya multiplikatif -- rasio Nov/Jun bermedian 0,53 dan Mar/Jun 0,46,
+    keduanya rapat -- jadi membagi tiap musim dengan skalanya sendiri
+    membuangnya.
+
+    Skalanya diambil dari string TERUKUR, bukan dari model. Itu penting: uji
+    musiman harus tetap BEBAS dari prediksi geometris, kalau tidak kesepakatan
+    keduanya berhenti jadi validasi dan berubah jadi tautologi.
+
+    Kohortnya SAMA di tiap musim -- string yang hadir di semua musim dan
+    asimetrinya melewati ``ampm_gap`` di setidaknya satu musim. Memilih string
+    per musim akan membuat skalanya bias: musim redup kehilangan string
+    lemahnya lebih dulu sehingga skalanya justru naik, kebalikan dari yang
+    harus dikoreksi.
+
+    Returns
+    -------
+    dict or None
+        ``{label musim: skala}``, atau None bila kohortnya di bawah
+        ``min_strings`` -- pemanggil yang memutuskan apa yang dilakukan.
+    """
+    per: Dict[str, Dict[str, float]] = {}
+    for label, frame in by_season.items():
+        if frame is None or frame.empty:
+            continue
+        for row in frame.itertuples(index=False):
+            am, pm = getattr(row, "pagi", np.nan), getattr(row, "sore", np.nan)
+            if pd.notna(am) and pd.notna(pm):
+                per.setdefault(row.pv_string, {})[label] = float(am) - float(pm)
+
+    labels = [lb for lb in by_season if by_season[lb] is not None]
+    kohort = [
+        nilai for nilai in per.values()
+        if len(nilai) == len(labels)
+        and max(abs(v) for v in nilai.values()) >= ampm_gap
+    ]
+    if len(kohort) < min_strings:
+        return None
+
+    return {
+        lb: float(np.median([abs(n[lb]) for n in kohort]))
+        for lb in labels
+    }
+
+
 def seasonal_discriminator(
     by_season: Dict[str, pd.DataFrame],
     *,
     ampm_gap: float = DEFAULT_AMPM_GAP,
     rel_range_max: float = SEASONAL_REL_RANGE_MAX,
+    season_scale: Optional[object] = "auto",
 ) -> pd.DataFrame:
     """Pisahkan asimetri pagi-sore GEOMETRI dari OBSTRUKSI lewat perilaku musiman.
 
@@ -580,16 +664,39 @@ def seasonal_discriminator(
                 per.setdefault(row.pv_string, {})[label] = float(am) - float(pm)
 
     labels = list(by_season)
+
+    # Buang faktor musiman bersama sebelum menilai. Tanpa ini suku sebaran
+    # mengukur cuaca se-situs, bukan perilaku string -- lihat season_scales.
+    skala: Optional[Dict[str, float]] = None
+    if isinstance(season_scale, dict):
+        skala = season_scale
+    elif season_scale == "auto":
+        skala = season_scales(by_season, ampm_gap=ampm_gap)
+        if skala is None:
+            warnings.warn(
+                "[seasonal] kohort terlalu kecil; normalisasi musiman "
+                "DILEWATI. Rentang relatif akan memuat faktor musiman "
+                "bersama dan vonis condong ke OBSTRUKSI.",
+                stacklevel=2,
+            )
+    if skala is not None and any(v <= 0 for v in skala.values()):
+        skala = None
+
     rows: List[dict] = []
     for key, seasons in per.items():
-        amps = list(seasons.values())
+        dipakai = ({lb: v / skala[lb] for lb, v in seasons.items()}
+                   if skala is not None else seasons)
+        amps = list(dipakai.values())
         mean_abs = float(np.mean([abs(a) for a in amps]))
         spread = (max(amps) - min(amps)) if len(amps) > 1 else np.nan
         rel = spread / mean_abs if len(amps) > 1 and mean_abs > 0 else np.nan
 
         if len(amps) < 2:
             verdikt = "DATA_KURANG"
-        elif max(abs(a) for a in amps) < ampm_gap:
+        elif max(abs(a) for a in seasons.values()) < ampm_gap:
+            # Ambang asimetri diperiksa pada nilai TERUKUR, bukan ternormalisasi:
+            # ia soal "apakah ada asimetri yang layak dinilai", dan itu
+            # pertanyaan tentang poin persen sungguhan.
             verdikt = "TANPA_ASIMETRI"
         elif min(amps) < 0 < max(amps):
             verdikt = "OBSTRUKSI"          # tanda berbalik -- tak mungkin geometri
@@ -601,10 +708,13 @@ def seasonal_discriminator(
         entry = {
             "pv_string": key,
             "n_musim": len(amps),
-            "asym_mean": round(float(np.mean(amps)), 4),
+            "asym_mean": round(float(np.mean(list(seasons.values()))), 4),
             "asym_rel_range": None if pd.isna(rel) else round(float(rel), 3),
+            "ternormalisasi": skala is not None,
             "verdikt": verdikt,
         }
+        # Kolom per musim tetap nilai TERUKUR -- itu yang bisa dibandingkan
+        # orang dengan grafik dan dengan workbook lama.
         for label in labels:
             entry[f"asym_{label}"] = (round(seasons[label], 4)
                                       if label in seasons else None)
@@ -668,6 +778,7 @@ def validate_geometry_seasonally(
     *,
     ampm_gap: float = DEFAULT_AMPM_GAP,
     rel_range_max: float = SEASONAL_REL_RANGE_MAX,
+    season_scale: Optional[object] = "auto",
 ) -> pd.DataFrame:
     """Uji silang prediksi geometris terhadap perilaku terukur antar musim.
 
@@ -694,6 +805,7 @@ def validate_geometry_seasonally(
     """
     musiman = seasonal_discriminator(
         by_season, ampm_gap=ampm_gap, rel_range_max=rel_range_max,
+        season_scale=season_scale,
     )
     if musiman.empty:
         return pd.DataFrame(columns=VALIDATION_COLUMNS)

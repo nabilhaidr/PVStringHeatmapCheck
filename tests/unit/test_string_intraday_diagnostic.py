@@ -927,3 +927,197 @@ class TestTigaMusim:
 
         assert out.loc["X", "n_musim"] == 3
         assert out.loc["Y", "n_musim"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Normalisasi musiman -- membuang faktor bersama sebelum menilai
+# ---------------------------------------------------------------------------
+
+class TestNormalisasiMusiman:
+    """Uji musiman ikut mengukur cuaca, bukan hanya geometri.
+
+    Diukur pada run tiga musim: |asimetri| median se-situs Juni 0,162,
+    Nov-Des 0,095, Maret 0,083 -- selisih sekitar 50%. Ambang
+    ``SEASONAL_REL_RANGE_MAX`` = 0,30 diturunkan dari variasi GEOMETRIS antar
+    solstis yang cuma ~22,5%. Jadi suku sebaran didominasi faktor musiman
+    bersama yang tidak ada hubungannya dengan string mana pun, dan 95% string
+    melewati ambang -- vonis OBSTRUKSI jadi hampir otomatis.
+
+    Faktornya multiplikatif (rasio Nov/Jun median 0,53, Mar/Jun 0,46, keduanya
+    rapat), jadi obatnya membagi tiap musim dengan skalanya sendiri. Skalanya
+    diambil dari string LAIN pada musim itu -- data terukur, bukan model --
+    sehingga uji musiman tetap BEBAS dari prediksi geometris dan kesepakatan
+    keduanya tetap validasi, bukan tautologi.
+    """
+
+    def _kohort(self, faktor, n=40, penyimpang=None):
+        """``n`` string berasimetri tetap, dikalikan ``faktor`` di musim ini.
+
+        ``penyimpang``: {pv_string: faktor sendiri} untuk string yang TIDAK
+        mengikuti pola bersama.
+        """
+        baris = []
+        for i in range(n):
+            nama = f"WB05-INV{i // 10 + 1:02d}-PV{i % 10 + 1}"
+            f = (penyimpang or {}).get(nama, faktor)
+            asym = (0.20 + 0.01 * i) * f
+            baris.append((nama, 1.0 + asym / 2, 1.0 - asym / 2))
+        return _klas(baris)
+
+    def test_faktor_musiman_bersama_tidak_lagi_memicu_obstruksi(self):
+        """Seluruh situs meredup bersamaan bukan bukti apa pun tentang string.
+
+        Tanpa normalisasi, penyusutan seragam 50% memberi rentang relatif jauh
+        di atas 0,30 dan SETIAP string divonis OBSTRUKSI -- termasuk yang
+        asimetrinya sempurna mengikuti pola bersama.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        musim = {"jun": self._kohort(1.0), "mar": self._kohort(0.5)}
+
+        mentah = seasonal_discriminator(musim, season_scale=None)
+        ternormal = seasonal_discriminator(musim, season_scale="auto")
+
+        assert (mentah["verdikt"] == "OBSTRUKSI").all(), "prakondisi uji"
+        assert (ternormal["verdikt"] == "GEOMETRI").all(), (
+            ternormal["verdikt"].value_counts().to_dict()
+        )
+
+    def test_string_yang_menyimpang_dari_pola_bersama_tetap_tertangkap(self):
+        """Normalisasi tidak boleh membutakan ujinya.
+
+        Penjaga arah sebaliknya: kalau membuang faktor bersama juga membuang
+        sinyal per-string, ujinya berhenti berguna dan setiap string lolos
+        sebagai GEOMETRI.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        nakal = "WB05-INV01-PV1"
+        musim = {
+            "jun": self._kohort(1.0),
+            "mar": self._kohort(0.5, penyimpang={nakal: 0.1}),
+        }
+
+        out = seasonal_discriminator(musim, season_scale="auto").set_index("pv_string")
+
+        assert out.loc[nakal, "verdikt"] == "OBSTRUKSI"
+        assert (out.drop(index=nakal)["verdikt"] == "GEOMETRI").all()
+
+    def test_kohort_terlalu_kecil_tidak_menormalkan_dan_menyalak(self):
+        """Diam-diam kembali ke metode terkonfound adalah cara cacat ini bertahan.
+
+        Dengan satu-dua string, skala musim sama dengan nilai string itu
+        sendiri: normalisasi jadi tak berarti dan setiap string mendarat di
+        1,0. Fungsi harus menolak menormalkan DAN mengatakannya.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        musim = {"jun": _klas([("X", 1.10, 0.90)]),
+                 "mar": _klas([("X", 1.05, 0.95)])}
+
+        with pytest.warns(UserWarning, match="normalisasi"):
+            out = seasonal_discriminator(musim, season_scale="auto")
+
+        assert not out["ternormalisasi"].any()
+
+    def test_skala_dihitung_dari_kohort_yang_sama_di_tiap_musim(self):
+        """Memilih string per musim membuat skalanya bias.
+
+        Kalau tiap musim memakai himpunan stringnya sendiri (mis. yang
+        melewati ambang di musim itu), musim redup akan kehilangan string
+        lemahnya lebih dulu sehingga skalanya justru naik -- persis kebalikan
+        dari yang harus dikoreksi.
+        """
+        from pv_pipeline.string_intraday_diagnostic import season_scales
+
+        musim = {"jun": self._kohort(1.0), "mar": self._kohort(0.5)}
+        skala = season_scales(musim)
+
+        assert skala["mar"] == pytest.approx(skala["jun"] * 0.5, rel=1e-6)
+
+    def test_kolom_ternormalisasi_melaporkan_apa_yang_terjadi(self):
+        """Pembaca membandingkan workbook lama dan baru; keadaannya harus terbaca."""
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        musim = {"jun": self._kohort(1.0), "mar": self._kohort(0.5)}
+
+        assert seasonal_discriminator(musim, season_scale="auto")["ternormalisasi"].all()
+        assert not seasonal_discriminator(musim, season_scale=None)["ternormalisasi"].any()
+
+
+class TestAmbangTernormalisasiTurunanNol:
+    """Setelah normalisasi, geometri memprediksi rentang relatif NOL.
+
+    Asimetri berbentuk ``k(doy) * sin(cross_slope)``, dan cahaya difus
+    meredamnya dengan faktor ``D`` yang juga se-musim. Skala musim adalah
+    median |asimetri| atas kohort, yaitu ``k * D * median|sin theta|``. Maka
+
+        z = asym / skala = sin(theta) / median|sin theta|
+
+    ``k`` DAN ``D`` dua-duanya tercoret, dan z tidak lagi bergantung musim.
+
+    Konsekuensinya menentukan: angka 22,5% yang mendasari
+    ``SEASONAL_REL_RANGE_MAX`` = 0,30 adalah drift geometris antar solstis, dan
+    drift itu HABIS dikonsumsi normalisasi. Tidak ada komponen geometris
+    tersisa untuk menurunkan ambang -- sisanya murni kelonggaran derau.
+
+    Arah risikonya perlu disadari: ambang TINGGI menghasilkan lebih banyak
+    GEOMETRI, karenanya lebih banyak pembebasan dari daftar kunjungan, dan
+    itulah arah yang berbahaya. Terhadap prediksi nol, 0,30 sudah longgar.
+    Menaikkannya menuntut estimasi derau empiris yang belum ada.
+    """
+
+    def _musim(self, k, damping, sudut, n=40):
+        """Satu musim: asimetri = k * D * sin(theta) untuk tiap string."""
+        import math
+        baris = []
+        for i, th in enumerate(sudut):
+            asym = k * damping * math.sin(math.radians(th))
+            baris.append((f"WB05-INV{i // 10 + 1:02d}-PV{i % 10 + 1}",
+                          1.0 + asym / 2, 1.0 - asym / 2))
+        return _klas(baris)
+
+    def _sudut(self, n=40):
+        return [2.5 + i * 0.7 for i in range(n)]
+
+    def test_string_geometris_murni_memberi_rentang_relatif_nol(self):
+        """Musim boleh berbeda k DAN berbeda redaman; z tetap sama.
+
+        Ini penurunannya, dijalankan. Kalau suatu saat normalisasi berhenti
+        mencoret kedua faktor itu, tes ini gagal dan klaim "prediksinya nol"
+        ikut gugur bersamanya.
+        """
+        from pv_pipeline.string_intraday_diagnostic import seasonal_discriminator
+
+        sudut = self._sudut()
+        musim = {
+            "jun": self._musim(1.00, 1.00, sudut),
+            "mar": self._musim(0.85, 0.52, sudut),    # k dan D beda jauh
+            "des": self._musim(1.22, 0.58, sudut),
+        }
+
+        out = seasonal_discriminator(musim)
+
+        assert out["ternormalisasi"].all()
+        assert out["asym_rel_range"].max() < 1e-6, (
+            out["asym_rel_range"].describe().to_dict()
+        )
+        # Sudut kecil benar mendapat TANPA_ASIMETRI: ambang 0,12 diperiksa pada
+        # nilai TERUKUR, dan sin(2,5 derajat) memang di bawahnya. Yang penting
+        # tidak ada satu pun yang divonis OBSTRUKSI.
+        assert set(out["verdikt"]) <= {"GEOMETRI", "TANPA_ASIMETRI"}, (
+            out["verdikt"].value_counts().to_dict()
+        )
+        assert (out["verdikt"] == "GEOMETRI").sum() > 0
+
+    def test_ambang_yang_berlaku_kini_kelonggaran_derau_bukan_drift_geometris(self):
+        """Nilainya boleh tetap 0,30, tapi PEMBENARANNYA berbeda.
+
+        Dibiarkan tanpa catatan, angka itu terbaca seolah masih diturunkan dari
+        22,5% drift antar solstis. Ia tidak. Tes ini menahan nilainya di tempat
+        supaya kenaikan -- satu-satunya arah yang menciptakan pembebasan baru --
+        tidak bisa terjadi tanpa seseorang menyentuh berkas ini.
+        """
+        from pv_pipeline.string_intraday_diagnostic import SEASONAL_REL_RANGE_MAX
+
+        assert SEASONAL_REL_RANGE_MAX == 0.30

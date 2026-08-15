@@ -775,6 +775,43 @@ median 0.027 where both methods say geometry against 0.190 where both say
 obstruction — a factor of seven, achieved without correcting the magnitude at
 all.
 
+That argument holds for `residual_drift` and **fails for the other half of the
+pair**, which went unnoticed until the third season arrived (2026-08-15).
+`seasonal_discriminator` judges on `spread / mean_abs` of the *measured*
+asymmetry, and that ratio does not cancel a common multiplicative factor — it is
+inflated by it. Measured across the three seasons, the site-wide median
+|asymmetry| is 0.162 (June), 0.095 (Nov-Dec) and 0.083 (March): a spread of
+about 50 %, where `SEASONAL_REL_RANGE_MAX` = 0.30 was derived from the ~22.5 %
+that solar geometry allows between solstices. The consequence is severe: on the
+raw quantity **95 % of strings exceed the threshold**, so `OBSTRUKSI` was very
+nearly automatic, and the agreement counts looked healthy only because both
+methods were biased the same way (231 of 233 agreements were `OBSTRUKSI`).
+
+The factor is multiplicative — the Nov/June ratio has median 0.53 and the
+March/June ratio 0.46, both tight — so `season_scales` divides each season by
+its own scale before the spread is taken. The scale is the median |asymmetry|
+over a **fixed cohort present in every season**; per-season selection would bias
+it, because a dimmer season loses its weak strings first and its scale would
+rise, the opposite of the needed correction. Crucially the scale comes from
+*measured* strings, never from the model, so the two assessors stay independent
+and their agreement remains validation rather than tautology.
+
+Normalisation does not increase agreement — it lowers it, from 233 to 181, and
+raises `MUSIMAN_TERLALU_LONGGAR` from 12 to 71. That is the intended result: the
+raw agreement was inflated by shared bias, and the disagreement it hid is now
+visible. `GEOMETRI` agreements rise from 2 to 9.
+
+Two limits stated plainly. First, `SEASONAL_REL_RANGE_MAX` = 0.30 was derived
+for the raw quantity; applied to the normalised one it is a different measure
+and **has not been re-derived** — 72 % of strings still exceed it after
+normalisation. It must be re-derived from geometry, not fitted to the data.
+Second, three runs over the same borderline strings (two-season, three-season
+raw, three-season normalised) have produced three different verdicts for a
+handful of them; that is a signal the method is at its resolution limit for
+those cases, not that any one run is authoritative. The conservative rule
+absorbs this: a string is released only when both methods agree, so disagreement
+leaves it on the visit list.
+
 What it does invalidate is the single-season verdict. `WB08-INV15-PV20` was
 cleared from the field-visit list on a June residual of −0.048; the second
 season showed its asymmetry **shrinking 33 %** where geometry demands it **grow
