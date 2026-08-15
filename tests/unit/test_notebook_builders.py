@@ -87,3 +87,47 @@ def test_konstanta_modul_yang_dipakai_sel_selalu_ada_yang_mengimpor(nama, modul)
         f"{nama}: dipakai sel notebook tapi tidak ada sel yang mengimpornya: "
         f"{hilang}"
     )
+
+
+@pytest.mark.parametrize("nama,modul", sorted(BUILDERS.items()))
+def test_penanda_versi_menyebut_setiap_nama_yang_dipakai_sel(nama, modul):
+    """Penanda versi harus memeriksa ISI modul, bukan sekadar keberadaannya.
+
+    Repo dibaca dari Drive, dan salinan Drive bisa tertinggal berbulan-bulan.
+    Penanda yang hanya menjalankan ``import pv_pipeline.x`` lulus pada salinan
+    lama mana pun yang kebetulan sudah punya berkas itu -- lalu sel yang jauh di
+    bawah tumbang dengan ImportError. Persis itu yang terjadi pada
+    ``el_coords_to_pv``: Sel 1 mencetak "ADA", Sel 4 gagal.
+
+    Maka penandanya menyebut nama satu per satu lewat tuple ``_WAJIB``, dan tes
+    ini menjaga daftar itu tetap lengkap saat sel berubah -- kalau tidak, ia
+    akan membusuk dan kembali memberi lampu hijau palsu.
+
+    Pembangun tanpa ``_WAJIB`` dilewati: sebagian notebook lama memakai penanda
+    isi bergaya lain (mis. mencetak 72/72 string yang dikosongkan).
+    """
+    pembangun = _muat(nama)
+    sel_kode = [sumber for jenis, sumber in pembangun.CELLS if jenis == "code"]
+
+    wajib = None
+    dipakai = set()
+    for sumber in sel_kode:
+        for node in ast.walk(ast.parse(sumber)):
+            if (isinstance(node, ast.Assign)
+                    and any(getattr(t, "id", None) == "_WAJIB"
+                            for t in node.targets)):
+                wajib = {el.value for el in node.value.elts}
+            elif isinstance(node, ast.ImportFrom) and node.module == modul:
+                dipakai |= {a.name for a in node.names}
+
+    if wajib is None:
+        pytest.skip(f"{nama}: tidak memakai penanda _WAJIB")
+
+    # Konstanta ALL_CAPS sudah dijaga tes di atas; di sini yang penting nama
+    # yang dipanggil, karena itulah yang hilang saat salinan Drive tertinggal.
+    hilang = sorted(n for n in dipakai - wajib if not n.isupper())
+    assert not hilang, (
+        f"{nama}: diimpor sel tapi tidak diperiksa penanda versi Sel 1: "
+        f"{hilang}. Salinan Drive yang tertinggal akan lolos Sel 1 lalu "
+        f"gagal di sel yang memakainya."
+    )

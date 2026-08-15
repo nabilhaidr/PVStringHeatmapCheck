@@ -93,15 +93,34 @@ if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 print("REPO_DIR:", REPO_DIR)
 
-# .git di Drive bisa tertinggal berbulan-bulan; penanda isi tidak bisa bohong.
+# .git di Drive bisa tertinggal berbulan-bulan, jadi penandanya memeriksa ISI.
+#
+# Memeriksa keberadaan MODUL saja tidak cukup, dan itu sudah terbukti: salinan
+# Drive yang punya berkasnya tapi belum punya fungsi terbarunya lolos Sel 1
+# dengan cetakan "ADA", lalu Sel 4 tumbang dengan ImportError. Nama-nama di
+# bawah disebut satu per satu; sebuah tes menjaga daftarnya tetap lengkap saat
+# sel berubah.
+_WAJIB = (
+    "coords_from_geometry", "decay_score", "el_coords_to_pv",
+    "load_el_coords", "pairwise_correlation", "residual_after_site_median",
+    "verdict_placement",
+)
 try:
-    import pv_pipeline.spatial_correlation  # noqa: F401
-    print("versi repo (isi): pv_pipeline.spatial_correlation ADA")
+    import pv_pipeline.spatial_correlation as _sc
 except ImportError:
     raise RuntimeError(
         "pv_pipeline/spatial_correlation.py tidak ada di salinan Drive ini. "
         "Sinkronkan ulang repo ke Drive."
     )
+_hilang = [n for n in _WAJIB if not hasattr(_sc, n)]
+if _hilang:
+    raise RuntimeError(
+        f"Salinan Drive TERTINGGAL: pv_pipeline/spatial_correlation.py ada, "
+        f"tapi tidak punya {_hilang}. Sinkronkan ulang berkas itu ke Drive "
+        f"lalu jalankan ulang dari Sel 1. Jangan lanjut -- sel berikutnya "
+        f"akan gagal di tengah jalan."
+    )
+print(f"versi repo (isi): spatial_correlation lengkap ({len(_WAJIB)} nama)")
 '''
 
 CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)

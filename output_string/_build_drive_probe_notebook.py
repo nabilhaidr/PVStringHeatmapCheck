@@ -94,16 +94,30 @@ _v = subprocess.run(["git", "-C", str(REPO_DIR), "log", "--oneline", "-1"],
 print("versi repo (git):", (_v.stdout.strip() or _v.stderr.strip()
                             or "(bukan git repo -- salinan manual?)"))
 
-# Penanda isi: ini TIDAK bisa bohong seperti .git bisa. Kalau modul di bawah
-# tidak ada, salinan Drive tertinggal dari commit yang memperkenalkannya.
+# Penanda isi: ini TIDAK bisa bohong seperti .git bisa. Tapi memeriksa
+# keberadaan MODUL saja tidak cukup -- salinan Drive yang punya berkasnya tapi
+# belum punya fungsi terbarunya akan lolos di sini lalu menjatuhkan sel yang
+# jauh di bawah dengan ImportError. Itu sudah terjadi pada notebook saudaranya.
+# Nama-nama disebut satu per satu; sebuah tes menjaga daftarnya tetap lengkap.
+_WAJIB = (
+    "inventory_baseline", "probe_channel_silence", "probe_inverter_coverage",
+    "rank_variable_days",
+)
 try:
-    import pv_pipeline.drive_probe  # noqa: F401
-    print("versi repo (isi) : pv_pipeline.drive_probe ADA -- salinan mutakhir")
+    import pv_pipeline.drive_probe as _dp
 except ImportError:
     raise RuntimeError(
         "pv_pipeline/drive_probe.py tidak ada di salinan Drive ini. "
         "Notebook ini butuh modul itu; sinkronkan ulang repo ke Drive."
     )
+_hilang = [n for n in _WAJIB if not hasattr(_dp, n)]
+if _hilang:
+    raise RuntimeError(
+        f"Salinan Drive TERTINGGAL: pv_pipeline/drive_probe.py ada, tapi "
+        f"tidak punya {_hilang}. Sinkronkan ulang berkas itu lalu jalankan "
+        f"ulang dari Sel 1."
+    )
+print(f"versi repo (isi) : drive_probe lengkap ({len(_WAJIB)} nama)")
 '''
 
 CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)
