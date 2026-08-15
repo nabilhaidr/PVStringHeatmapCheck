@@ -164,6 +164,13 @@ BULAN = ["2025-11", "2025-12"]   # daftar subfolder bulan yang mau dianalisis
 # Maret. p95 dari sini langsung sebanding: tanpa penskalaan, tanpa argumen.
 # Itulah satu-satunya yang membuat SEASONAL_REL_RANGE_MAX berhenti provisional.
 #
+# SUDAH DIJALANKAN 2026-08-15: belahan 25 lawan 24 hari, 168 string, p95 = 0,316.
+# Ambang 0,30 DIPERTAHANKAN, tidak digeser ke 0,316 -- CI 95% p95 itu sendiri
+# [0,271; 0,584] sudah memuat 0,30, dan menggesernya berarti memaskan ambang ke
+# data. Yang berubah hanya batas atas tesnya: 0,40 -> 0,316, supaya ambang tidak
+# pernah naik melewati lantai derau. Menjalankan ulang sel ini hanya perlu kalau
+# lantai derau mau diukur ulang, bukan untuk memutuskan ambangnya lagi.
+#
 # Sesudah angkanya didapat, kembalikan BULAN ke bulan yang mau dianalisis.
 # Musim sebelumnya: ["2026-03"] doy 76 -- musim ketiga, 25 hari, berjarak 90
 # dari jendela terdekat, terbaik dari seluruh inventaris Drive

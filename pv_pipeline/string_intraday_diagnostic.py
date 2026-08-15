@@ -90,9 +90,16 @@ RAIN_COLUMNS: List[str] = [
 # Yang tersisa karenanya murni kelonggaran derau, dan 0,30 terhadap prediksi
 # nol sudah longgar. Nilainya dipertahankan, bukan dinaikkan, karena arah
 # risikonya asimetris: ambang TINGGI menghasilkan lebih banyak GEOMETRI,
-# karenanya lebih banyak PEMBEBASAN dari daftar kunjungan. Menaikkannya
-# menuntut estimasi derau empiris yang belum ada -- lihat prd.md 8.15 untuk
-# cara memperolehnya (run split-half dalam satu musim).
+# karenanya lebih banyak PEMBEBASAN dari daftar kunjungan.
+#
+# Lantai derau itu kini TERUKUR dan tidak lagi tertunda: split-half
+# selang-seling di dalam SATU musim (Nov-Des 2025, belahan 25 lawan 24 hari,
+# 168 string) memberi p95 = 0,316. Angkanya sengaja TIDAK dipakai menggeser
+# 0,30 -- CI 95% untuk p95 itu sendiri melintang [0,271; 0,584] pada n=168,
+# jadi 0,30 ada di dalamnya dan tidak ada dasar memindahkannya. Yang berubah
+# hanya batas atas tesnya, kini dikunci ke 0,316 supaya ambang tidak pernah
+# naik melewati lantai derau dan membebaskan string atas derau belaka.
+# Lihat prd.md 8.15 dan test_seasonal_threshold_sits_below_the_measured_noise_floor.
 SEASONAL_REL_RANGE_MAX: float = 0.30
 
 # Kohort minimum untuk menghitung skala musim. Di bawah ini skalanya praktis

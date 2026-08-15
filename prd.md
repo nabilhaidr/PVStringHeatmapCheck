@@ -593,7 +593,10 @@ facing north, morning window 07-09 and afternoon window 15-17 - the same windows
 within 0.0005; it explains why the seasonal drift is a constant 22.5 % of its
 own value regardless of cross-slope magnitude, since `sin` factors the magnitude
 out (this is what makes `SEASONAL_REL_RANGE_MAX = 0.30` legitimate as a single
-threshold for both gentle and steep strings); and it extrapolates correctly to
+threshold for both gentle and steep strings — note that this 22.5 % reasoning
+applies to the **raw** quantity and is superseded once the seasonal
+normalisation below cancels it to zero, after which the threshold is justified
+against the measured noise floor instead); and it extrapolates correctly to
 the site's real range of -29.8 to +31.5 degrees, where a linear fit overshoots.
 
 The reference is the **inverter median**, not flat ground, because `ratio` is
@@ -818,11 +821,33 @@ raises `MUSIMAN_TERLALU_LONGGAR` from 12 to 71. That is the intended result: the
 raw agreement was inflated by shared bias, and the disagreement it hid is now
 visible. `GEOMETRI` agreements rise from 2 to 9.
 
-Two limits stated plainly. First, `SEASONAL_REL_RANGE_MAX` = 0.30 was derived
-for the raw quantity; applied to the normalised one it is a different measure
-and **has not been re-derived** — 72 % of strings still exceed it after
-normalisation. It must be re-derived from geometry, not fitted to the data.
-Second, three runs over the same borderline strings (two-season, three-season
+One limit now closed, one still open. **Closed 2026-08-15.**
+`SEASONAL_REL_RANGE_MAX` = 0.30 was derived for the raw quantity, and applied to
+the normalised one it is a different measure. It has now been re-derived — but
+not from geometry, because after normalisation geometry predicts a relative
+range of exactly **zero**. That leaves the threshold as pure noise allowance and
+nothing else, so the reference quantity is the empirical noise floor. It was
+measured by an interleaved split-half **inside a single season**, so that no
+seasonal change at all sits between the halves: Nov-Dec 2025, halves of 25 and
+24 days, 168 strings scoreable in both, giving **p95 = 0.316**.
+
+The value was deliberately **not** moved to 0.316. A p95 from 168 samples rests
+on roughly eight tail points and its own 95 % confidence interval spans
+[0.271, 0.584] — the tail is steep (p90 = 0.248, p99 = 0.641) — so 0.30 sits
+inside it and there is no statistical basis for shifting it. Moving it would
+also be fitting the threshold to the data, which this section forbids. What
+changed instead is the guard: the bound in
+`test_seasonal_threshold_sits_below_the_measured_noise_floor` tightened from
+`<= 0.40` to `<= 0.316`.
+
+The direction is the whole point. A threshold *above* the noise floor returns
+`GEOMETRI` on noise alone, and `GEOMETRI` **releases** a string from the visit
+list — an error that removes the only action that would have caught it. Below
+the floor the cost is a wasted visit to a healthy string. The tightened bound
+makes the unrecoverable direction unreachable; the previous `<= 0.40` did not,
+since it admitted values such as 0.35 that sit above the measured floor.
+
+**Still open:** three runs over the same borderline strings (two-season, three-season
 raw, three-season normalised) have produced three different verdicts for a
 handful of them; that is a signal the method is at its resolution limit for
 those cases, not that any one run is authoritative. The conservative rule

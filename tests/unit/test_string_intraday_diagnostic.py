@@ -580,12 +580,40 @@ def test_seasonal_needs_two_seasons_per_string():
     assert out.loc["WB10-INV03-PV24", "verdikt"] == "DATA_KURANG"
 
 
-def test_seasonal_threshold_clears_the_geometric_drift_it_must_tolerate():
-    """Ambang harus di ATAS 22,5% supaya geometri tidak salah dicap obstruksi,
-    dan tidak jauh di atasnya supaya obstruksi ringan tetap tertangkap."""
+def test_seasonal_threshold_sits_below_the_measured_noise_floor():
+    """Ambang adalah kelonggaran derau MURNI, jadi harus di BAWAH lantai derau.
+
+    Angka 22,5% yang dulu jadi alasan batas ini sudah habis tercoret: setelah
+    normalisasi musim, geometri memprediksi rentang relatif NOL (dikunci di
+    ``TestAmbangTernormalisasiTurunanNol``). Yang tersisa bukan lagi toleransi
+    terhadap drift geometris melainkan seluruhnya kelonggaran terhadap derau.
+
+    Lantai derau itu diukur, bukan ditebak: split-half SELANG-SELING di dalam
+    satu musim (Nov-Des 2025, belahan 25 lawan 24 hari, 168 string berasimetri
+    layak-nilai di kedua belahan). Karena kedua belahan semusim, rentang di
+    antara keduanya tidak memuat perubahan musim sama sekali -- itu derau
+    murni. Hasilnya p95 = 0,316.
+
+    Batas ATAS dikunci ke lantai itu, dan arah galatnya yang menentukan.
+    Ambang DI ATAS lantai derau memvonis GEOMETRI atas derau belaka, dan
+    GEOMETRI MEMBEBASKAN -- string itu hilang dari daftar kunjungan dan tidak
+    ada yang datang melihatnya lagi. Ambang di BAWAH lantai cuma mengirim
+    orang ke string yang ternyata sehat. Galat yang satu tidak bisa ditebus,
+    yang lain bisa; karena itu batasnya di sisi bawah.
+
+    Nilai berlaku 0,30 sengaja TIDAK digeser ke 0,316. CI 95% untuk p95 itu
+    sendiri melintang [0,271; 0,584] pada n=168 (ekornya curam: p90 = 0,248,
+    p99 = 0,641), jadi 0,30 ada di dalamnya dan tidak ada dasar statistik
+    untuk memindahkannya -- ambang diturunkan dari fisika lalu dikunci di
+    sini, bukan dipaskan ke data.
+
+    Batas BAWAH menahan ambang di atas p75-p90 derau (0,176-0,248); di bawah
+    itu lebih dari seperempat string geometris murni divonis OBSTRUKSI dan
+    daftar kunjungannya berhenti bisa dibaca orang.
+    """
     from pv_pipeline.string_intraday_diagnostic import SEASONAL_REL_RANGE_MAX
 
-    assert 0.225 < SEASONAL_REL_RANGE_MAX <= 0.40
+    assert 0.225 < SEASONAL_REL_RANGE_MAX <= 0.316
 
 
 # --- vonis satu musim tidak boleh membebaskan string --------------------------
