@@ -152,39 +152,69 @@ BASELINE_DIR = f"{DRIVE_ROOT}/baseline"
 # Hari berawan sebagian, hasil peringkat Drive_Probe.ipynb Sel 5.
 # Hari cerah stabil TIDAK berguna di sini: tanpa awan lewat tidak ada kontras
 # antar string, dan seluruh skor akan runtuh ke nol untuk kedua kandidat.
-HARI = ["2026-06-08", "2026-06-22", "2026-06-20"]
+# --- Gelombang mana yang dijalankan -----------------------------------------
+# Gugus WB01 yang penempatannya berselisih dengan survei EL berisi 13
+# inverter (>5 m). Diuji BERGELOMBANG, bukan sekaligus: satu run hanya
+# sanggup ~4 kandidat + 4 kontrol sebelum pasangannya terlalu berjauhan
+# untuk dibandingkan -- pasangan kandidat gelombang 2 sudah bermedian
+# 249-285 m lawan 64 m pada kontrol.
+#
+# KENAPA HARUS SELESAI SEMUA SEBELUM DITERAPKAN. Memindahkan sebagian gugus
+# meninggalkan tetangganya di posisi DXF, dan pasangan yang terbelah dua
+# sumber saling bertabrakan. Terukur pada gelombang 2: memindahkan 4 dari 13
+# menaikkan tabrakan <3 m dari 14 menjadi 68, memindahkan 7 menjadi 28, dan
+# hanya memindahkan ke-13 sekaligus yang mengembalikannya ke 14. Jadi
+# ketiga gelombang harus tuntas lebih dulu, baru string_geometry.csv diubah
+# satu kali untuk seluruh 13.
+GELOMBANG = 3          # <-- ganti ke 4 untuk putaran terakhir
 
-# GELOMBANG 2 -- WB01, disetel 16 Agu 2026.
-#
-# Gelombang 1 (WB02-INV01/02/04/06) SUDAH SELESAI: kontrol -0,887, EL -0,885,
-# DXF -0,697, margin 0,188. Penempatan EL menang dan sudah diterapkan ke
-# config/string_geometry.csv (commit 22b059e), jadi koordinat keempatnya kini
-# SAMA DENGAN EL -- menjalankannya lagi hanya akan mengadu EL lawan EL dan
-# memberi margin nol. Jangan diulang; setel ke gelombang berikutnya.
-#
-# Kandidat gelombang 2 dipilih dari pengukuran, bukan dugaan: pergeseran
-# posisi tersimpan -> posisi survei EL, per inverter. Enam belas inverter
-# Phase One bergeser >5 m dan TIGA BELAS di antaranya di WB01. Empat terparah
-# diambil lebih dulu -- kalau metodenya tidak memisahkan di sini, ia tidak
-# akan memisahkan di mana pun.
-#
-#   WB01-INV21  median 50,05 m  maks 77,42 m
-#   WB01-INV18  median 46,79 m  maks 70,82 m
-#   WB01-INV25  median 41,88 m  maks 79,43 m
-#   WB01-INV01  median 40,17 m  maks 82,53 m
-INVERTER_DIBANTAH = ["WB01-INV21", "WB01-INV18", "WB01-INV25", "WB01-INV01"]
+_KANDIDAT = {
+    # SELESAI 16 Agu 2026, dua set hari bebas, keduanya memilih EL:
+    # margin 0,107 (08/22/20 Jun) dan 0,131 (01/10/06 Jun).
+    2: ["WB01-INV21", "WB01-INV18", "WB01-INV25", "WB01-INV01"],
+    # Empat terparah berikutnya, 30-33 m. Ketiganya yang pertama justru
+    # tetangga yang bertabrakan dengan gelombang 2 -- itulah sebabnya
+    # mereka didahulukan.
+    3: ["WB01-INV20", "WB01-INV19", "WB01-INV08", "WB01-INV02"],
+    # Lima terakhir, 9-27 m.
+    4: ["WB01-INV07", "WB01-INV03", "WB01-INV13", "WB01-INV12",
+        "WB01-INV06"],
+}
 
-# KONTROL -- dipakai membuktikan metodenya punya daya pisah pada data hari itu.
-# Tetangga se-blok supaya cuacanya sama.
+# Hari berawan sebagian, hasil peringkat Drive_Probe.ipynb Sel 5. Hari cerah
+# stabil TIDAK berguna: tanpa awan lewat tidak ada kontras antar string dan
+# skornya runtuh ke nol untuk kedua kandidat.
 #
-# PILIH YANG BERSIH. Kontrol gelombang 1 keliru di sini: WB02-INV03 (16,25 m),
-# INV07 (16,17 m) dan INV08 (14,60 m) ternyata IKUT bergeser, cuma INV05
-# (1,87 m) yang bersih. Itu tidak membatalkan vonis gelombang 1 -- kontrol yang
-# bergeser MELEMAHKAN peluruhan sehingga -0,887 adalah batas bawah, dan kedua
-# arm DXF/EL menguji kandidat yang sama sehingga terpengaruh setara -- tetapi
-# kontrol yang bersih membuat angkanya berarti apa adanya.
+# Tiap gelombang memakai hari yang BELUM dipakai gelombang lain. Bukan
+# karena harinya habis -- 23 dari 30 hari Juni memenuhi lantai -- melainkan
+# supaya tiap vonis berdiri di atas awan yang berbeda.
+_HARI = {
+    2: ["2026-06-01", "2026-06-10", "2026-06-06"],
+    3: ["2026-06-24", "2026-06-21", "2026-06-28"],
+    # ISI DARI Drive_Probe Sel 5 sebelum menjalankan gelombang 4. Sengaja
+    # dikosongkan: menebak tanggal yang belum diperingkat bisa memilih hari
+    # cerah stabil, yang memulangkan skor nol dan terbaca seolah buktinya
+    # hilang.
+    4: [],
+}
+
+INVERTER_DIBANTAH = _KANDIDAT[GELOMBANG]
+HARI = _HARI[GELOMBANG]
+if not HARI:
+    raise ValueError(
+        f"HARI untuk gelombang {GELOMBANG} masih kosong. Jalankan "
+        f"Drive_Probe.ipynb Sel 5 -- ia mengecualikan hari yang sudah "
+        f"dipakai -- lalu salin baris HARI-nya ke _HARI[{GELOMBANG}]."
+    )
+
+# KONTROL -- dipakai membuktikan metodenya punya daya pisah pada data hari
+# itu. Tetangga se-blok supaya cuacanya sama, dan SAMA untuk tiap gelombang
+# supaya angka kontrolnya bisa dibandingkan antar putaran.
 #
-# Keempat ini bergeser <=1,7 m, sebanding dengan simpangan titik acuan biasa.
+# PILIH YANG BERSIH. Kontrol gelombang 1 keliru: WB02-INV03 (16,25 m),
+# INV07 (16,17) dan INV08 (14,60) ternyata IKUT bergeser, cuma INV05 yang
+# bersih. Keempat ini terukur berselisih 0,11 m saja terhadap posisi EL
+# setelah direcenter -- benar-benar tidak disengketakan.
 INVERTER_KONTROL = ["WB01-INV24", "WB01-INV22", "WB01-INV23", "WB01-INV17"]
 
 # --- Kandidat penempatan -----------------------------------------------------

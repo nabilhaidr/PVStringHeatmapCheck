@@ -173,7 +173,11 @@ TOP_HARI = 10
 # margin 0,107 -- lolos ambang 0,10 dengan bantalan 7% -- sehingga justru
 # hari yang BERBEDA yang menentukan apakah itu nyata.
 # Kosongkan ([]) kalau memang ingin mengulang hari yang sama.
-HARI_SUDAH_DIPAKAI = ["2026-06-08", "2026-06-22", "2026-06-20"]
+HARI_SUDAH_DIPAKAI = [
+    "2026-06-08", "2026-06-22", "2026-06-20",   # gelombang 2, run 1
+    "2026-06-01", "2026-06-10", "2026-06-06",   # gelombang 2, run 2
+    "2026-06-24", "2026-06-21", "2026-06-28",   # gelombang 3
+]
 
 # --- Probe C: kanal yang dituduh kosong ------------------------------------
 KANAL_DIUJI = [("WB05-INV05", 9)]
