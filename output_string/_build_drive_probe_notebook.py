@@ -166,6 +166,15 @@ JENDELA_VARIABILITAS = DEFAULT_VARIABILITY_MIDDAY
 MIN_POA_RATA = DEFAULT_MIN_MEAN_POA
 TOP_HARI = 10
 
+# Hari yang SUDAH dipakai uji korelasi spasial, dikeluarkan dari rekomendasi.
+# Sebuah konfirmasi yang berjalan di atas hari yang sama bukan konfirmasi: ia
+# akan memulangkan angka yang hampir sama karena membaca awan yang sama, dan
+# marginnya terlihat bertahan tanpa satu pun bukti baru. Gelombang 2 memberi
+# margin 0,107 -- lolos ambang 0,10 dengan bantalan 7% -- sehingga justru
+# hari yang BERBEDA yang menentukan apakah itu nyata.
+# Kosongkan ([]) kalau memang ingin mengulang hari yang sama.
+HARI_SUDAH_DIPAKAI = ["2026-06-08", "2026-06-22", "2026-06-20"]
+
 # --- Probe C: kanal yang dituduh kosong ------------------------------------
 KANAL_DIUJI = [("WB05-INV05", 9)]
 # Bulan tempat mencari hari saat inverternya melapor.
@@ -177,6 +186,7 @@ print("Baseline :", BASELINE_DIR)
 print("Probe A  :", BULAN_DIPERIKSA, f"({CSV_PER_BULAN} CSV/bulan)")
 print("Probe B  :", POA_MULAI, "s.d.", POA_SELESAI,
       f"jendela {JENDELA_VARIABILITAS}, lantai {MIN_POA_RATA:.0f} W/m2")
+print("           hari sudah dipakai (dikecualikan):", HARI_SUDAH_DIPAKAI or "(tidak ada)")
 print("Probe C  :", KANAL_DIUJI, "dicari di", BULAN_UNTUK_KANAL)
 '''
 
@@ -295,11 +305,32 @@ print()
 _layak = HARI[HARI["cukup_terang"]]
 print(f"{len(_layak)} dari {len(HARI)} hari memenuhi lantai "
       f"{MIN_POA_RATA:.0f} W/m2.")
+
+_dipakai = set(HARI_SUDAH_DIPAKAI)
+_baru = _layak[~_layak["tanggal"].astype(str).isin(_dipakai)]
+if _dipakai:
+    print(f"{len(_layak) - len(_baru)} di antaranya sudah dipakai dan "
+          f"dikecualikan; tersisa {len(_baru)} hari yang BELUM dipakai.")
+
 if _layak.empty:
     print("Tidak ada hari yang layak. Periodenya mendung; pilih periode lain.")
+elif _baru.empty:
+    print("Semua hari layak SUDAH dipakai. Perluas POA_MULAI/POA_SELESAI ke")
+    print("bulan lain, atau kosongkan HARI_SUDAH_DIPAKAI kalau memang mau")
+    print("mengulang hari yang sama -- tapi itu bukan konfirmasi bebas.")
 else:
-    _pakai = _layak.head(3)["tanggal"].tolist()
-    print("Kandidat teratas untuk uji korelasi spasial:", _pakai)
+    _pakai = _baru.head(3)["tanggal"].astype(str).tolist()
+    print()
+    print(f"{len(_pakai)} hari untuk run KONFIRMASI (belum pernah dipakai):")
+    print("  HARI =", _pakai)
+    print()
+    print("Salin baris HARI itu ke Sel 2 Spatial_Correlation.ipynb,")
+    print("lalu jalankan Sel 1-6. Yang dibaca: apakah margin EL-DXF")
+    print("bertahan di sekitar 0,1 pada awan yang BERBEDA.")
+    if len(_baru) < 3:
+        print()
+        print(f"PERINGATAN: cuma {len(_baru)} hari baru yang layak, kurang")
+        print("dari tiga. Hasilnya akan lebih berisik daripada run pertama.")
     print()
     print("Cara membacanya:")
     print("  variabilitas tinggi + cukup_terang  -> hari cerah yang DIINTERUPSI.")
