@@ -1298,5 +1298,22 @@ Seven of the 72 land within about 2.0 m of rows belonging to WB02-INV03 and WB02
 
 The 2.0 m separation is not created by the move: it is already present between the *stored* DXF coordinates of WB02-INV02 and WB02-INV03, at the identical 1.97 m, before anything was applied. What the move does is leave the pair straddling two coordinate sources. Measured consistently — EL against EL — the same two inverters sit **7.21 m** apart, on the lattice, with no collision at all. The apparent conflict was an artefact of comparing a relocated inverter against a neighbour still held at its DXF position, and it needed no third source to settle.
 
-That neighbour is itself displaced: WB02-INV03 differs from its EL position by a median 16.25 m. It is one of **16 Phase One inverters whose stored placement disagrees with the EL survey by more than 5 m** (worst: WB01-INV21 at a median 50.05 m), none of which carry the cloud-shadow and terrain evidence that settled the four. That is the real open question, and it is the one already tracked here — larger than the four inverters and unchanged in nature by this correction.
+That neighbour is itself displaced: WB02-INV03 differs from its EL position by a median 16.25 m.
+
+**The WB01 cluster was tested in full on 2026-08-16 and does not resolve.** Thirteen WB01 inverters sit more than 5 m from their EL positions, and the cloud-shadow test was run over all of them in three waves against a clean control (WB01-INV24/22/23/17, which agree with EL to 0.11 m after recentering). Only the first four separate:
+
+| wave | inverters | control | DXF | EL | margin | verdict |
+|---|---|---|---|---|---|---|
+| 2, run 1 | INV21/18/25/01 | -0.927 | -0.785 | -0.891 | 0.107 | EL |
+| 2, run 2 | same, other days | -0.897 | -0.769 | -0.900 | 0.131 | EL |
+| 3 | INV20/19/08/02 | -0.934 | -0.859 | -0.868 | 0.009 | tie |
+| 4 | INV07/03/13/12/06 | -0.950 | -0.729 | -0.808 | 0.079 | tie |
+
+The controls are healthy in all four runs, so the ties are readable results rather than failed measurements. They are also not a blind spot of the method: a rigid translation of a whole inverter would preserve pairwise distances and leave the test unable to see it, but that is not what happens here — pairwise distances change by a median 25.09 m in wave 3, more than the 24.06 m in wave 2 that did separate. The telemetry simply does not distinguish the two placements for those nine.
+
+Terrain does not break the tie either, and this is where WB01 differs from WB02. The wave-1 argument was that the DXF positions put four inverters on a -15.4 degree ramp while the EL positions were flat. Nothing like that appears anywhere in WB01: at both placements |cross-slope| has a median of 0.4-0.7 degrees and a maximum near 2, on all three waves. So wave 2's verdict rests on **one** line of evidence measured twice, not on two independent lines as in wave 1. One mild consideration points the other way — the DSM plane fit is about twice as rough at the EL positions (median rms 0.33-0.38 m against 0.13-0.16 m at DXF) — which is not decisive but is not nothing.
+
+**Nothing was moved, and moving the tested four alone would make the data worse.** Partial relocation leaves neighbours at their DXF positions and the split pair collides: moving 4 of the 13 raises collisions under 3 m from 14 to 68, moving 7 gives 28, and only moving all 13 returns to 14. So the choice is between relocating nine inverters on a tie and relocating none, and the project's rule puts the burden of proof on the change. The cluster stays where it is.
+
+What would settle it is not another telemetry run but a **field check**: read the physical string labels at a few tables in the WB01 cluster, which distinguishes the two placements directly and cheaply. The visit-list document already instructs crews to trust physical labels over map points for WB01-INV07 PV4/PV5 for exactly this reason. It is one of **16 Phase One inverters whose stored placement disagrees with the EL survey by more than 5 m** (worst: WB01-INV21 at a median 50.05 m), none of which carry the cloud-shadow and terrain evidence that settled the four. That is the real open question, and it is the one already tracked here — larger than the four inverters and unchanged in nature by this correction.
 
