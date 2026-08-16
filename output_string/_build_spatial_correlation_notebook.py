@@ -289,25 +289,39 @@ print(f"\\ncakupan pada string yang diuji: DXF {len(_uji & set(KOOR_DXF))}, "
 # Penjaga gelombang. Begitu sebuah gelombang diterapkan ke
 # string_geometry.csv, koordinat DXF kandidatnya MENJADI koordinat EL, dan
 # uji ini berubah jadi EL lawan EL: margin nol, tanpa satu pun galat, dan
-# hasilnya terbaca seolah buktinya menghilang. Itu kegagalan senyap, bukan
-# temuan. Berhenti di sini.
-import math as _math
-_geser = []
-for _s in sorted(_uji):
-    _a, _b = KOOR_DXF.get(_s), KOOR_EL.get(_s)
-    if _a and _b:
-        _geser.append(_math.dist(_a, _b))
-if _geser:
-    _med = sorted(_geser)[len(_geser) // 2]
-    print(f"pergeseran DXF->EL pada kandidat: median {_med:.2f} m "
-          f"(n={len(_geser)})")
+# hasilnya terbaca seolah buktinya menghilang. Itu kegagalan senyap.
+#
+# KEDUA HIMPUNAN BEDA KERANGKA: coords_from_geometry memulangkan UTM
+# absolut (north ~9.890.000) sedangkan load_el_coords memulangkan meter
+# relatif terhadap centroid survei (~0). Mengurangkannya mentah-mentah
+# memberi ~9.901.361 m -- jarak antar kerangka, bukan pergeseran string --
+# sehingga penjaganya SELALU lolos dan tidak menjaga apa pun. Versi pertama
+# penjaga ini melakukan persis itu. Recenter dulu, baru bandingkan.
+#
+# decay_score sendiri tidak terpengaruh: ia menghitung jarak DI DALAM satu
+# himpunan, jadi offset kerangka meniadakan diri dan skornya tetap sah.
+_kand = sorted(s for s in _uji
+               if s.rsplit('-PV', 1)[0] in set(INVERTER_DIBANTAH)
+               and s in KOOR_DXF and s in KOOR_EL)
+if _kand:
+    import math as _math
+    _a = [KOOR_DXF[s] for s in _kand]
+    _b = [KOOR_EL[s] for s in _kand]
+    _ca = (sum(p[0] for p in _a) / len(_a), sum(p[1] for p in _a) / len(_a))
+    _cb = (sum(p[0] for p in _b) / len(_b), sum(p[1] for p in _b) / len(_b))
+    _d = sorted(_math.dist((x[0] - _ca[0], x[1] - _ca[1]),
+                          (y[0] - _cb[0], y[1] - _cb[1]))
+                for x, y in zip(_a, _b))
+    _med = _d[len(_d) // 2]
+    print(f"pergeseran DXF->EL pada KANDIDAT (setelah recenter): "
+          f"median {_med:.2f} m, maks {_d[-1]:.2f} m (n={len(_d)})")
     if _med < 1.0:
         raise RuntimeError(
-            f"Kedua penempatan praktis SAMA (median {_med:.2f} m). "
-            f"Gelombang ini agaknya SUDAH diterapkan ke "
-            f"config/string_geometry.csv, jadi uji ini mengadu EL lawan "
-            f"EL dan memberi margin nol. Setel INVERTER_DIBANTAH di Sel 2 "
-            f"ke gelombang yang BELUM diterapkan."
+            f"Kedua penempatan praktis SAMA pada kandidat (median "
+            f"{_med:.2f} m setelah recenter). Gelombang ini agaknya SUDAH "
+            f"diterapkan ke config/string_geometry.csv, jadi uji ini "
+            f"mengadu EL lawan EL dan memberi margin nol. Setel "
+            f"INVERTER_DIBANTAH di Sel 2 ke gelombang yang BELUM diterapkan."
         )
 print("Cakupan yang timpang membuat kedua skor dihitung atas pasangan berbeda")
 print("dan tidak sebanding. Periksa angka ini sebelum membaca vonis.")
