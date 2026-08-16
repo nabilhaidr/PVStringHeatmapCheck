@@ -134,6 +134,77 @@ def detect_link_outage(
     return baris
 
 
+def detect_incomplete_copy(copies: dict) -> list:
+    """Inverter yang hadir di sebagian salinan tanggal yang sama, hilang di lain.
+
+    Kelas kegagalan KETIGA. :func:`detect_link_outage` membelah ketiadaan jadi
+    "seluruh kelompok hilang" (tautan, faktor eksternal) dan "sebagian hilang"
+    (inverternya, tindak lanjuti). Sebagian bisa berarti yang ketiga: ekspor
+    yang tersalin tidak lengkap.
+
+    Terjadi pada 2025-12-01. Salinan baseline memuat 193 inverter dan
+    detect_link_outage memvonis ``INVERTER_ABSENCE`` untuk WB02-INV15 -- vonis
+    yang MENGIRIM ORANG ke lapangan. Ekspor tanggal yang sama memuat 194, dan
+    WB02-INV15 punya 155 barisnya di sana, berproduksi median 56,7 kW.
+    Inverternya sehat; salinannya yang pendek.
+
+    Pembandingnya harus salinan LAIN, bukan sinyal di dalam satu berkas.
+    Jumlah baris per inverter sempat terlihat seragam (155 pada 2025-12-01)
+    sehingga kekurangan satu inverter tampak sebagai kelipatan persis, tapi
+    itu kebetulan hari itu: pada 2026-07-01 jumlahnya 140/145/152/153/154/224
+    dalam satu berkas. Tidak ada bilangan tunggal untuk dikalikan, jadi
+    aturan "kelipatan persis" TIDAK berlaku umum dan tidak dipakai di sini.
+
+    Parameters
+    ----------
+    copies
+        ``{nama_salinan: iterable ID inverter}``. Minimal dua; nama dipakai
+        apa adanya di keluaran supaya bisa ditunjuk orang.
+
+    Returns
+    -------
+    list of dict
+        Satu baris per inverter yang tidak muncul di semua salinan, terurut
+        nama. Kunci: ``inverter_id``, ``hadir_di``, ``hilang_dari``,
+        ``verdict`` (selalu ``INCOMPLETE_COPY``). Salinan yang cocok
+        seluruhnya menghasilkan daftar kosong, supaya penandanya tetap langka.
+
+    Raises
+    ------
+    ValueError
+        Bila salinannya kurang dari dua. Daftar kosong akan terbaca "aman"
+        padahal yang benar "tidak diperiksa", dan diam adalah kegagalan yang
+        justru dicegah fungsi ini.
+    """
+    if len(copies) < 2:
+        raise ValueError(
+            f"detect_incomplete_copy butuh dua salinan atau lebih untuk "
+            f"dibandingkan; diberi {len(copies)}. Tanpa pembanding, "
+            f"ketiadaan sebuah inverter tidak bisa dibedakan dari inverter "
+            f"yang memang absen."
+        )
+
+    per_salinan = {
+        nama: {str(i).strip().upper() for i in isi}
+        for nama, isi in copies.items()
+    }
+    semua = set().union(*per_salinan.values())
+
+    baris = []
+    for inv in sorted(semua):
+        hadir = [n for n, isi in per_salinan.items() if inv in isi]
+        hilang = [n for n, isi in per_salinan.items() if inv not in isi]
+        if not hilang:
+            continue
+        baris.append({
+            "inverter_id": inv,
+            "hadir_di": hadir,
+            "hilang_dari": hilang,
+            "verdict": "INCOMPLETE_COPY",
+        })
+    return baris
+
+
 def _link_outage_findings(baris: list, timestamp) -> list:
     """Baris detect_link_outage -> M2Finding INFO.
 

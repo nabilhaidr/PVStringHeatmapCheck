@@ -112,6 +112,84 @@ class TestDetectLinkOutage:
         assert terpetakan == {f"WB{n:02d}" for n in range(1, 11)}
 
 
+class TestDeteksiSalinanTidakLengkap:
+    """Kelas kegagalan KETIGA: bukan tautan, bukan inverter, tapi salinannya.
+
+    detect_link_outage membelah ketiadaan jadi "seluruh kelompok" (tautan) dan
+    "sebagian" (inverternya). Sebagian bisa berarti yang ketiga: ekspor yang
+    tersalin tidak lengkap. Arah galatnya yang mahal -- artefak transfer
+    berpakaian kerusakan alat, dan INVERTER_ABSENCE adalah vonis yang
+    MENGIRIM ORANG ke lapangan.
+    """
+
+    def test_inverter_hilang_di_satu_salinan_saja_adalah_salinan_pendek(self):
+        """Kejadian 2025-12-01: WB02-INV15 hilang dari baseline, utuh di ekspor.
+
+        Ia berproduksi normal 56,7 kW hari itu. Tanpa pembanding, satu-satunya
+        pembacaan yang tersedia adalah INVERTER_ABSENCE, dan tim berangkat ke
+        inverter yang sehat.
+        """
+        from pv_pipeline.availability import detect_incomplete_copy
+
+        baris = detect_incomplete_copy({
+            "baseline": ["WB02-INV14", "WB02-INV16"],
+            "ekspor": ["WB02-INV14", "WB02-INV15", "WB02-INV16"],
+        })
+
+        assert len(baris) == 1
+        b = baris[0]
+        assert b["inverter_id"] == "WB02-INV15"
+        assert b["verdict"] == "INCOMPLETE_COPY"
+        assert b["hadir_di"] == ["ekspor"]
+        assert b["hilang_dari"] == ["baseline"]
+
+    def test_salinan_identik_tidak_melaporkan_apa_apa(self):
+        """Penanda yang muncul tiap hari akan diabaikan orang.
+
+        Ini kejadian 2026-07-01: kedua salinan 29.741 baris, 194 inverter sama.
+        """
+        from pv_pipeline.availability import detect_incomplete_copy
+
+        assert detect_incomplete_copy({
+            "baseline": ["WB02-INV14", "WB02-INV15"],
+            "ekspor": ["WB02-INV15", "WB02-INV14"],
+        }) == []
+
+    def test_satu_salinan_saja_menolak_menebak(self):
+        """Tanpa pembanding pertanyaannya TIDAK bisa dijawab.
+
+        Mengembalikan daftar kosong akan terbaca sebagai "aman", padahal yang
+        benar adalah "tidak diperiksa". Diamnya justru bahaya di sini.
+        """
+        import pytest
+        from pv_pipeline.availability import detect_incomplete_copy
+
+        with pytest.raises(ValueError, match="dua salinan"):
+            detect_incomplete_copy({"ekspor": ["WB02-INV14"]})
+
+    def test_hilang_dari_beberapa_salinan_sekaligus_tetap_tertangkap(self):
+        """Tiga salinan, hadir cuma di satu -- tetap salinan, bukan inverter."""
+        from pv_pipeline.availability import detect_incomplete_copy
+
+        baris = detect_incomplete_copy({
+            "a": ["WB05-INV01"],
+            "b": ["WB05-INV01"],
+            "c": ["WB05-INV01", "WB05-INV02"],
+        })
+
+        assert [b["inverter_id"] for b in baris] == ["WB05-INV02"]
+        assert baris[0]["hilang_dari"] == ["a", "b"]
+
+    def test_penamaan_dinormalkan_supaya_beda_huruf_bukan_temuan(self):
+        """Satu berkas dua konvensi huruf sudah pernah menjatuhkan analisis ini."""
+        from pv_pipeline.availability import detect_incomplete_copy
+
+        assert detect_incomplete_copy({
+            "a": ["wb02-inv14", " WB02-INV15 "],
+            "b": ["WB02-INV14", "wb02-inv15"],
+        }) == []
+
+
 class TestLinkOutageWiredIntoRun:
     """Deteksinya harus otomatis, bukan fungsi yang menunggu dipanggil orang."""
 
