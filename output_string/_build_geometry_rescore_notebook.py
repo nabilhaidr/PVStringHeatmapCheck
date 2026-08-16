@@ -296,17 +296,22 @@ print("TIDAK_BERLAKU  label non-arah (SHADING_PULIH/UNIFORM/CAMPURAN). "
       "Rasio >1,0 dan")
 print("               defisit datar juga tidak bisa dihasilkan cross-slope.")
 
-# Penanda versi pada DATA: penempatan keempat inverter tepi utara Phase One
-# dibantah tiga sumber bebas, geometrinya sengaja dikosongkan, sehingga
-# putusannya WAJIB TIDAK_BERLAKU. Kalau ada yang lain, salinan repo di Drive
-# tertinggal dan bukti geometris yang sudah ditolak ikut terpakai lagi.
+# Keempat inverter tepi utara Phase One. Sampai 15 Agu 2026 geometrinya
+# sengaja dikosongkan dan baris ini berfungsi sebagai penanda versi. Open
+# Question 8 mencabut dasar itu: barisnya kini terisi, dan penanda versinya
+# pindah ke Sel 1 yang memeriksa cross_slope_deg langsung.
+#
+# Yang dicetak di sini karena itu bukan lagi penanda melainkan pengamatan:
+# putusannya tetap TIDAK_BERLAKU, tetapi kini karena LABELNYA non-arah
+# (UNIFORM/SHADING_PULIH), bukan karena geometrinya kosong. Alasan lama akan
+# lolos sambil menyatakan hal yang sudah tidak benar.
 _utara = KLAS["inverter_id"].isin(
     ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"])
 if int(_utara.sum()):
     _tb = int((KLAS.loc[_utara, "putusan_geometris"] == "TIDAK_BERLAKU").sum())
     print()
     print(f"tepi utara Phase One: {_tb}/{int(_utara.sum())} TIDAK_BERLAKU "
-          f"(harus 72/72 -- geometrinya sengaja dikosongkan)")
+          f"-- kini karena labelnya non-arah, bukan karena geometri kosong")
 '''
 
 CODE_VALIDATE = '''# Cell 5 - Validasi silang: prediksi geometris vs perilaku musiman

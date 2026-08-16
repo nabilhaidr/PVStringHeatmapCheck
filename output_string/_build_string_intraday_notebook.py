@@ -316,14 +316,23 @@ if GEOM_CSV.exists():
     STRING_GEOMETRY = pd.read_csv(GEOM_CSV)
     print(f"geometri: {STRING_GEOMETRY['cross_slope_deg'].notna().sum()} string "
           f"punya cross-slope terukur")
-    # Penanda versi kedua, kali ini pada DATA. Penempatan keempat inverter tepi
-    # utara Phase One dibantah tiga sumber bebas, jadi kolom bidangnya sengaja
-    # dikosongkan. Masih terisi = salinan repo di Drive tertinggal.
+    # Penanda versi kedua, kali ini pada DATA. Keempat inverter tepi utara
+    # Phase One sempat dikosongkan karena penempatan DXF-nya dibantah tiga
+    # sumber bebas. Open Question 8 menutup itu pada 15 Agu 2026: barisnya
+    # pindah ke posisi survei EL dan kolom bidangnya dihitung ulang dari
+    # dsm.tif, jadi arah penandanya kini TERBALIK -- masih KOSONG berarti
+    # salinan repo tertinggal dari commit 22b059e.
     _dibantah = STRING_GEOMETRY["inverter_id"].isin(
         ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"])
-    _kosong = int(STRING_GEOMETRY.loc[_dibantah, "cross_slope_deg"].isna().sum())
-    print(f"          {_kosong}/{int(_dibantah.sum())} string tepi utara "
-          f"Phase One dikosongkan (harus 72/72)")
+    _terisi = int(STRING_GEOMETRY.loc[_dibantah, "cross_slope_deg"].notna().sum())
+    print(f"          {_terisi}/{int(_dibantah.sum())} string tepi utara "
+          f"Phase One terisi geometri OQ8 (harus 72/72)")
+    if _terisi < int(_dibantah.sum()):
+        raise RuntimeError(
+            f"Geometri TERTINGGAL: hanya {_terisi}/72 baris tepi utara punya "
+            f"cross_slope_deg. Salinan ini mendahului Open Question 8 "
+            f"(commit 22b059e). Sinkronkan ulang lalu jalankan dari Sel 1."
+        )
 else:
     print(f"geometri: {GEOM_CSV.name} tidak ada -> kolom cross-slope kosong")
 
