@@ -154,17 +154,44 @@ BASELINE_DIR = f"{DRIVE_ROOT}/baseline"
 # antar string, dan seluruh skor akan runtuh ke nol untuk kedua kandidat.
 HARI = ["2026-06-08", "2026-06-22", "2026-06-20"]
 
-# Empat inverter yang penempatan DXF-nya dibantah.
-INVERTER_DIBANTAH = ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"]
+# GELOMBANG 2 -- WB01, disetel 16 Agu 2026.
+#
+# Gelombang 1 (WB02-INV01/02/04/06) SUDAH SELESAI: kontrol -0,887, EL -0,885,
+# DXF -0,697, margin 0,188. Penempatan EL menang dan sudah diterapkan ke
+# config/string_geometry.csv (commit 22b059e), jadi koordinat keempatnya kini
+# SAMA DENGAN EL -- menjalankannya lagi hanya akan mengadu EL lawan EL dan
+# memberi margin nol. Jangan diulang; setel ke gelombang berikutnya.
+#
+# Kandidat gelombang 2 dipilih dari pengukuran, bukan dugaan: pergeseran
+# posisi tersimpan -> posisi survei EL, per inverter. Enam belas inverter
+# Phase One bergeser >5 m dan TIGA BELAS di antaranya di WB01. Empat terparah
+# diambil lebih dulu -- kalau metodenya tidak memisahkan di sini, ia tidak
+# akan memisahkan di mana pun.
+#
+#   WB01-INV21  median 50,05 m  maks 77,42 m
+#   WB01-INV18  median 46,79 m  maks 70,82 m
+#   WB01-INV25  median 41,88 m  maks 79,43 m
+#   WB01-INV01  median 40,17 m  maks 82,53 m
+INVERTER_DIBANTAH = ["WB01-INV21", "WB01-INV18", "WB01-INV25", "WB01-INV01"]
 
-# KONTROL -- penempatannya tidak dibantah, dipakai membuktikan metodenya punya
-# daya pisah pada data hari itu. Tetangga se-blok supaya cuacanya sama.
-INVERTER_KONTROL = ["WB02-INV03", "WB02-INV05", "WB02-INV07", "WB02-INV08"]
+# KONTROL -- dipakai membuktikan metodenya punya daya pisah pada data hari itu.
+# Tetangga se-blok supaya cuacanya sama.
+#
+# PILIH YANG BERSIH. Kontrol gelombang 1 keliru di sini: WB02-INV03 (16,25 m),
+# INV07 (16,17 m) dan INV08 (14,60 m) ternyata IKUT bergeser, cuma INV05
+# (1,87 m) yang bersih. Itu tidak membatalkan vonis gelombang 1 -- kontrol yang
+# bergeser MELEMAHKAN peluruhan sehingga -0,887 adalah batas bawah, dan kedua
+# arm DXF/EL menguji kandidat yang sama sehingga terpengaruh setara -- tetapi
+# kontrol yang bersih membuat angkanya berarti apa adanya.
+#
+# Keempat ini bergeser <=1,7 m, sebanding dengan simpangan titik acuan biasa.
+INVERTER_KONTROL = ["WB01-INV24", "WB01-INV22", "WB01-INV23", "WB01-INV17"]
 
 # --- Kandidat penempatan -----------------------------------------------------
-# DXF: dari config/string_geometry.csv, kolom north/east. Kolom BIDANG keempat
-# inverter ini sudah di-NULL-kan lewat PLACEMENT_DISPUTED, tapi KOORDINATnya
-# masih ada -- itulah yang diuji di sini.
+# DXF: dari config/string_geometry.csv, kolom north/east. Untuk gelombang 2
+# koordinat itu masih koordinat DXF asli, belum tersentuh -- itulah yang diuji
+# di sini melawan posisi EL. (Untuk gelombang 1 keduanya kini identik karena
+# hasilnya sudah diterapkan; lihat catatan di INVERTER_DIBANTAH.)
 #
 # EL: survei drone. Skemanya kini ditangani load_el_coords, jadi tidak ada lagi
 # nama kolom yang perlu ditebak di sini. Berkasnya per MODUL (114.420 baris
@@ -258,6 +285,30 @@ print("      dibuang, bukan ditebak. pv = st BENAR di Phase One, SALAH di WB03-1
 _uji = set(PASANGAN["a"]) | set(PASANGAN["b"])
 print(f"\\ncakupan pada string yang diuji: DXF {len(_uji & set(KOOR_DXF))}, "
       f"EL {len(_uji & set(KOOR_EL))} dari {len(_uji)}")
+
+# Penjaga gelombang. Begitu sebuah gelombang diterapkan ke
+# string_geometry.csv, koordinat DXF kandidatnya MENJADI koordinat EL, dan
+# uji ini berubah jadi EL lawan EL: margin nol, tanpa satu pun galat, dan
+# hasilnya terbaca seolah buktinya menghilang. Itu kegagalan senyap, bukan
+# temuan. Berhenti di sini.
+import math as _math
+_geser = []
+for _s in sorted(_uji):
+    _a, _b = KOOR_DXF.get(_s), KOOR_EL.get(_s)
+    if _a and _b:
+        _geser.append(_math.dist(_a, _b))
+if _geser:
+    _med = sorted(_geser)[len(_geser) // 2]
+    print(f"pergeseran DXF->EL pada kandidat: median {_med:.2f} m "
+          f"(n={len(_geser)})")
+    if _med < 1.0:
+        raise RuntimeError(
+            f"Kedua penempatan praktis SAMA (median {_med:.2f} m). "
+            f"Gelombang ini agaknya SUDAH diterapkan ke "
+            f"config/string_geometry.csv, jadi uji ini mengadu EL lawan "
+            f"EL dan memberi margin nol. Setel INVERTER_DIBANTAH di Sel 2 "
+            f"ke gelombang yang BELUM diterapkan."
+        )
 print("Cakupan yang timpang membuat kedua skor dihitung atas pasangan berbeda")
 print("dan tidak sebanding. Periksa angka ini sebelum membaca vonis.")
 '''
