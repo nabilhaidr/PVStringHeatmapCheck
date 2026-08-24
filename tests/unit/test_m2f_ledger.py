@@ -97,3 +97,26 @@ def test_claiming_locked_category_raises():
     led = _ledger([1.0], [0.0])
     with pytest.raises(ValueError, match="terkunci"):
         led.claim("microcrack", np.array([1.0]))
+
+
+def test_claiming_unknown_category_raises():
+    # WHY: kategori typo (mis. "dc_cabel_fault") sebelumnya diterima diam-diam,
+    # masuk ke _claims tapi tidak pernah muncul di totals() -- energinya lenyap
+    # tanpa jejak. Ledger harus menolak, bukan menelan, kategori tak dikenal.
+    led = _ledger([2.0, 2.0], [0.0, 0.0])
+    with pytest.raises(ValueError, match="bukan kategori yang dikenal"):
+        led.claim("dc_cabel_fault", np.array([2.0, 2.0]))
+
+
+def test_nan_in_expected_is_rejected_at_construction():
+    # WHY: NaN yang lolos ke _remaining meracuni claim()/residual() secara diam-
+    # diam, dan `nan > CLOSURE_TOLERANCE_KWH` selalu False sehingga
+    # assert_closure() "lulus" pada state yang sudah korup. Menolak NaN di
+    # constructor mencegah kerusakan itu menjalar sama sekali.
+    with pytest.raises(ValueError, match="NaN"):
+        _ledger([1.0, np.nan, 3.0], [0.5, 1.0, 1.0])
+
+
+def test_nan_in_actual_is_rejected_at_construction():
+    with pytest.raises(ValueError, match="NaN"):
+        _ledger([1.0, 2.0, 3.0], [0.5, np.nan, 1.0])

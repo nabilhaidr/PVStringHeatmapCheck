@@ -55,6 +55,16 @@ class LossLedger:
             raise ValueError(
                 f"[m2f] e_expected {expected.shape} != e_actual {actual.shape}"
             )
+        # NaN di sini berarti bug upstream (Task 2 seharusnya sudah
+        # .fillna(0.0)), bukan data normal. Menolak di sini -- alih-alih
+        # membiarkannya menjalar lewat _remaining -> claim() -> residual()
+        # -- supaya bug muncul sebagai crash, bukan sebagai closure yang
+        # diam-diam "lolos" karena `nan > tolerance` selalu False.
+        if np.any(np.isnan(expected)) or np.any(np.isnan(actual)):
+            raise ValueError(
+                f"[m2f] NaN pada e_expected/e_actual untuk {string_id} {day}: "
+                "seharusnya sudah di-fillna(0.0) sebelum sampai ke ledger."
+            )
         self.string_id = string_id
         self.day = day
         self.e_expected = expected
@@ -83,6 +93,15 @@ class LossLedger:
         if category in LOCKED_CATEGORIES:
             raise ValueError(
                 f"[m2f] {category!r} terkunci (tidak ada instrumen), tidak boleh klaim."
+            )
+        if category not in CLAIMABLE_CATEGORIES:
+            # Kategori tak dikenal (mis. typo "dc_cabel_fault") tidak boleh
+            # diam-diam diterima: totals() hanya mengiterasi CLAIMABLE_CATEGORIES
+            # + LOCKED_CATEGORIES, jadi klaim ini akan hilang dari laporan
+            # padahal residual() sudah memotongnya dari l_total.
+            raise ValueError(
+                f"[m2f] {category!r} bukan kategori yang dikenal (lihat "
+                "CLAIMABLE_CATEGORIES); klaim ditolak untuk cegah energi hilang diam-diam."
             )
         amount = np.asarray(amount_kwh_per_ts, dtype=float)
         amount = np.nan_to_num(amount, nan=0.0, posinf=0.0, neginf=0.0)
@@ -114,7 +133,16 @@ class LossLedger:
         return out
 
     def assert_closure(self) -> None:
-        """Raise bila identitas closure dilanggar."""
+        """Raise bila identitas closure dilanggar.
+
+        Catatan: ``residual()`` didefinisikan sebagai ``l_total() -
+        sum(claims)``, jadi drift yang dicek di sini secara aljabar selalu
+        tereduksi ke ``abs(0)``. Fungsi ini TIDAK membuktikan atribusi
+        benar -- ini murni pengecekan bahwa `_claims` dan `residual()`
+        masih konsisten (mis. tidak ada NaN yang menyelinap). Proteksi
+        anti-double-count yang sesungguhnya datang dari pemotongan
+        per-timestamp di ``remaining()``/``claim()``, bukan dari sini.
+        """
         claimed = float(sum(self._claims.values()))
         drift = abs(claimed + self.residual() - self.l_total())
         if drift > CLOSURE_TOLERANCE_KWH:
