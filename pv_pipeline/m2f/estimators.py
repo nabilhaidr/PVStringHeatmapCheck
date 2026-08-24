@@ -29,3 +29,26 @@ def claim_availability_outage(
             f"[m2f] panjang down_mask {mask.shape} != ledger {remaining.shape}"
         )
     return ledger.claim("availability_outage", np.where(mask, remaining, 0.0))
+
+
+def claim_dc_cable_fault(
+    ledger: LossLedger,
+    *,
+    deficit_kwh: np.ndarray,
+) -> float:
+    """Klaim defisit arus terhadap sibling/partner pada jendela ter-flag.
+
+    Counterfactual: string yang sehat akan mengalirkan arus setara median
+    sibling se-inverter (atau median partner se-MPPT). Selisihnya, dikali
+    tegangan dan durasi, adalah energi yang hilang akibat fault DC.
+
+    ``deficit_kwh`` berasal dari :func:`pv_pipeline.m2f.deficit.deficit_to_kwh`
+    atas gabungan artefak keempat detektor m2b.
+    """
+    deficit = np.asarray(deficit_kwh, dtype=float)
+    remaining = ledger.remaining()
+    if deficit.shape != remaining.shape:
+        raise ValueError(
+            f"[m2f] panjang deficit_kwh {deficit.shape} != ledger {remaining.shape}"
+        )
+    return ledger.claim("dc_cable_fault", np.maximum(deficit, 0.0))

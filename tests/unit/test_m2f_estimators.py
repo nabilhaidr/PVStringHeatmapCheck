@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pv_pipeline.m2f.estimators import claim_availability_outage
+from pv_pipeline.m2f.estimators import claim_availability_outage, claim_dc_cable_fault
 from pv_pipeline.m2f.ledger import LossLedger
 
 
@@ -50,3 +50,31 @@ def test_down_mask_length_mismatch_raises():
     led = _ledger([2.0, 2.0], [0.0, 0.0])
     with pytest.raises(ValueError, match="panjang"):
         claim_availability_outage(led, down_mask=np.array([True]))
+
+
+def test_dc_cable_fault_claims_the_deficit():
+    led = _ledger([3.0, 3.0], [1.0, 3.0])
+    claimed = claim_dc_cable_fault(led, deficit_kwh=np.array([2.0, 0.0]))
+    assert claimed == pytest.approx(2.0)
+
+
+def test_dc_cable_fault_claims_only_what_availability_left_behind():
+    # WHY: string mati lalu ditandai fault pada timestamp yang sama. Tanpa
+    # ledger, keduanya mengklaim energi yang sama dan total loss jadi 2x.
+    led = _ledger([2.0, 2.0], [0.0, 0.0])
+    claim_availability_outage(led, down_mask=np.array([True, False]))
+    claimed = claim_dc_cable_fault(led, deficit_kwh=np.array([2.0, 2.0]))
+    assert claimed == pytest.approx(2.0)
+    led.assert_closure()
+
+
+def test_dc_cable_fault_deficit_larger_than_remaining_is_capped():
+    led = _ledger([1.0], [0.5])
+    claimed = claim_dc_cable_fault(led, deficit_kwh=np.array([10.0]))
+    assert claimed == pytest.approx(0.5)
+
+
+def test_dc_cable_fault_length_mismatch_raises():
+    led = _ledger([1.0, 1.0], [0.0, 0.0])
+    with pytest.raises(ValueError, match="panjang"):
+        claim_dc_cable_fault(led, deficit_kwh=np.array([1.0]))
