@@ -52,3 +52,19 @@ def claim_dc_cable_fault(
             f"[m2f] panjang deficit_kwh {deficit.shape} != ledger {remaining.shape}"
         )
     return ledger.claim("dc_cable_fault", np.maximum(deficit, 0.0))
+
+
+def claim_soiling(ledger: LossLedger, *, p_loss: float) -> float:
+    """Klaim fraksi ``p_loss`` dari sisa rugi yang belum dijelaskan.
+
+    ``p_loss`` adalah fraksi rugi soiling insolation-weighted dari rdtools SRR
+    (``M2aSoiling`` artifact ``MonthlySoilingLoss.p_loss_pct / 100``).
+
+    Prioritas keempat, setelah availability dan fault: SRR menyerap apa saja
+    yang menurun perlahan, jadi ia hanya boleh melihat energi yang belum
+    diklaim kategori berprioritas lebih tinggi.
+    """
+    p = float(p_loss)
+    if not (0.0 <= p <= 1.0):
+        raise ValueError(f"[m2f] p_loss harus di [0, 1], dapat {p}.")
+    return ledger.claim("soiling", ledger.remaining() * p)

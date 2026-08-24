@@ -3,7 +3,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pv_pipeline.m2f.estimators import claim_availability_outage, claim_dc_cable_fault
+from pv_pipeline.m2f.estimators import (
+    claim_availability_outage,
+    claim_dc_cable_fault,
+    claim_soiling,
+)
 from pv_pipeline.m2f.ledger import LossLedger
 
 
@@ -78,3 +82,43 @@ def test_dc_cable_fault_length_mismatch_raises():
     led = _ledger([1.0, 1.0], [0.0, 0.0])
     with pytest.raises(ValueError, match="panjang"):
         claim_dc_cable_fault(led, deficit_kwh=np.array([1.0]))
+
+
+def test_soiling_claims_fraction_of_remaining():
+    led = _ledger([10.0], [6.0])
+    claimed = claim_soiling(led, p_loss=0.25)
+    assert claimed == pytest.approx(1.0)
+
+
+def test_soiling_claims_after_higher_priority_categories():
+    # WHY: SRR menyerap apa saja yang turun perlahan. Kalau soiling mengklaim
+    # sebelum fault, rugi fault dihitung sebagai rugi soiling dan ROI cleaning
+    # jadi overstated -- padahal angka itu dasar keputusan biaya.
+    led = _ledger([10.0, 10.0], [0.0, 8.0])
+    claim_dc_cable_fault(led, deficit_kwh=np.array([10.0, 0.0]))
+    claimed = claim_soiling(led, p_loss=0.5)
+    assert claimed == pytest.approx(1.0)
+    led.assert_closure()
+
+
+def test_soiling_with_zero_p_loss_claims_nothing():
+    led = _ledger([10.0], [5.0])
+    assert claim_soiling(led, p_loss=0.0) == pytest.approx(0.0)
+
+
+def test_soiling_p_loss_out_of_range_raises():
+    led = _ledger([10.0], [5.0])
+    with pytest.raises(ValueError, match="p_loss"):
+        claim_soiling(led, p_loss=1.5)
+    with pytest.raises(ValueError, match="p_loss"):
+        claim_soiling(led, p_loss=-0.1)
+
+
+def test_fully_explained_string_leaves_soiling_at_zero():
+    # WHY: proksi untuk tes anti-double-count di spec. Ketika kategori
+    # berprioritas lebih tinggi sudah menjelaskan seluruh rugi, soiling tidak
+    # boleh mengklaim apa pun -- berapa pun p_loss dari SRR.
+    led = _ledger([4.0, 4.0], [0.0, 4.0])
+    claim_dc_cable_fault(led, deficit_kwh=np.array([4.0, 0.0]))
+    assert claim_soiling(led, p_loss=0.9) == pytest.approx(0.0)
+    assert led.residual() == pytest.approx(0.0)
