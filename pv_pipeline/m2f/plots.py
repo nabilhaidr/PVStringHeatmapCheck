@@ -1,8 +1,11 @@
 """Grafik M2f: waterfall rugi dan diagram Pareto.
 
 Fungsi mengembalikan ``matplotlib.figure.Figure`` dan TIDAK menulis file --
-``savefig`` adalah tanggung jawab pemanggil (notebook). Pola sama dengan
-``pv_pipeline/viz.py``.
+``savefig`` adalah tanggung jawab pemanggil (notebook). Parameter
+``close_after_show`` meniru pola ``pv_pipeline/viz.py`` (hemat memori untuk
+batch): beda dari ``viz.py``, fungsi di sini tidak pernah memanggil
+``plt.show()`` sendiri -- konvensinya murni mengembalikan Figure, showing
+tetap tanggung jawab pemanggil juga.
 """
 from __future__ import annotations
 
@@ -32,47 +35,55 @@ _EMPTY_MESSAGE = "tidak ada data"
 def build_waterfall_table(
     totals: Dict[str, Optional[float]],
     attribution_order: List[str],
+    *,
+    e_expected_kwh: float,
 ) -> pd.DataFrame:
     """Susun tabel waterfall: terminal, kategori berurutan prioritas, terminal.
 
     Urutan mengikuti ``attribution_order``, BUKAN besaran. Urutan prioritas
     adalah inti metodenya dan harus terbaca dari grafik.
 
-    ``delta_kwh`` pada baris ``E_expected`` berisi tinggi batang awal (total
-    seluruh klaim + residual); pada baris ``E_actual`` berisi 0.0 karena
-    tingginya dihitung sebagai sisa berjalan saat menggambar.
+    ``delta_kwh`` pada baris ``E_expected`` berisi ``e_expected_kwh`` (energi
+    ekspektasi riil, BUKAN jumlah klaim -- versi lama memakai sum(klaim)
+    sebagai tinggi batang, yang membuat E_actual selalu jatuh ke 0.0 karena
+    dikonstruksi sebagai identitas aljabar, bukan energi aktual sungguhan).
+    ``delta_kwh`` pada baris ``E_actual`` berisi ``e_expected_kwh`` dikurangi
+    total delta seluruh kategori -- energi aktual riil.
     """
-    claimed = [
-        float(totals[cat])
-        for cat in attribution_order
-        if totals.get(cat) is not None
-    ]
     rows = [{
         "label": "E_expected",
-        "delta_kwh": float(sum(claimed)),
+        "delta_kwh": float(e_expected_kwh),
         "kind": "terminal",
     }]
+    total_delta = 0.0
     for cat in attribution_order:
         val = totals.get(cat)
         if val is None:
             continue
         val = float(val)
+        total_delta += val
         rows.append({
             "label": cat,
             "delta_kwh": val,
             "kind": "gain" if val < 0.0 else "loss",
         })
-    rows.append({"label": "E_actual", "delta_kwh": 0.0, "kind": "terminal"})
+    rows.append({
+        "label": "E_actual",
+        "delta_kwh": float(e_expected_kwh) - total_delta,
+        "kind": "terminal",
+    })
     return pd.DataFrame(rows, columns=WATERFALL_COLUMNS)
 
 
-def _empty_figure(title: str) -> Figure:
+def _empty_figure(title: str, *, close_after_show: bool = False) -> Figure:
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.text(0.5, 0.5, _EMPTY_MESSAGE, ha="center", va="center", fontsize=14)
     ax.set_title(title)
     ax.set_xticks([])
     ax.set_yticks([])
     fig.tight_layout()
+    if close_after_show:
+        plt.close(fig)
     return fig
 
 
@@ -81,11 +92,21 @@ def build_loss_waterfall_figure(
     *,
     scope: str,
     period_label: str,
+    close_after_show: bool = False,
 ) -> Figure:
-    """Waterfall dari E_expected ke E_actual, berurutan prioritas atribusi."""
+    """Waterfall dari E_expected ke E_actual, berurutan prioritas atribusi.
+
+    close_after_show : bool
+        Bila True, panggil ``plt.close(fig)`` sebelum kembali -- mencegah
+        figure menumpuk di registry global pyplot saat dipanggil dalam loop
+        batch notebook (banyak WB/period). Figure yang dikembalikan tetap
+        dapat dipakai penuh (mis. ``fig.savefig(...)``) walau sudah
+        di-close -- ``plt.close`` hanya melepas referensinya dari pyplot,
+        bukan menghapus objeknya.
+    """
     title = f"Waterfall rugi energi DC - {scope} - {period_label}"
     if waterfall_df is None or waterfall_df.empty:
-        return _empty_figure(title)
+        return _empty_figure(title, close_after_show=close_after_show)
 
     labels = waterfall_df["label"].tolist()
     deltas = waterfall_df["delta_kwh"].to_numpy(dtype=float)
@@ -128,6 +149,8 @@ def build_loss_waterfall_figure(
         fontsize=7, color="0.35",
     )
     fig.tight_layout()
+    if close_after_show:
+        plt.close(fig)
     return fig
 
 
@@ -136,11 +159,18 @@ def build_pareto_figure(
     *,
     scope: str,
     period_label: str,
+    close_after_show: bool = False,
 ) -> Figure:
-    """Batang kWh menurun + garis kumulatif % + garis ambang 80%."""
+    """Batang kWh menurun + garis kumulatif % + garis ambang 80%.
+
+    close_after_show : bool
+        Bila True, panggil ``plt.close(fig)`` sebelum kembali -- sama seperti
+        pada :func:`build_loss_waterfall_figure`, mencegah figure menumpuk
+        di memori saat dipanggil dalam loop batch.
+    """
     base_title = f"Pareto rugi energi DC - {scope} - {period_label}"
     if pareto_df is None or pareto_df.empty:
-        return _empty_figure(base_title)
+        return _empty_figure(base_title, close_after_show=close_after_show)
 
     residual = pareto_df.loc[pareto_df["category"] == "unexplained", "pct"]
     residual_pct = float(residual.iloc[0]) if len(residual) else 0.0
@@ -178,4 +208,6 @@ def build_pareto_figure(
         xy=(0.02, 0.94), xycoords="axes fraction", fontsize=9,
     )
     fig.tight_layout()
+    if close_after_show:
+        plt.close(fig)
     return fig
