@@ -43,7 +43,7 @@ def claim_dc_cable_fault(
     tegangan dan durasi, adalah energi yang hilang akibat fault DC.
 
     ``deficit_kwh`` berasal dari :func:`pv_pipeline.m2f.deficit.deficit_to_kwh`
-    atas gabungan artefak keempat detektor m2b.
+    atas gabungan artefak ketiga detektor m2b.
     """
     deficit = np.asarray(deficit_kwh, dtype=float)
     remaining = ledger.remaining()
@@ -54,11 +54,20 @@ def claim_dc_cable_fault(
     return ledger.claim("dc_cable_fault", np.maximum(deficit, 0.0))
 
 
-def claim_soiling(ledger: LossLedger, *, p_loss: float) -> float:
-    """Klaim fraksi ``p_loss`` dari sisa rugi yang belum dijelaskan.
+def claim_soiling(
+    ledger: LossLedger,
+    *,
+    p_loss: float,
+    e_expected_kwh_per_ts: np.ndarray,
+) -> float:
+    """Klaim ``p_loss * e_expected_kwh_per_ts`` sebagai rugi soiling.
 
     ``p_loss`` adalah fraksi rugi soiling insolation-weighted dari rdtools SRR
-    (``M2aSoiling`` artifact ``MonthlySoilingLoss.p_loss_pct / 100``).
+    (``M2aSoiling`` artifact ``MonthlySoilingLoss.p_loss_pct / 100``) --
+    fraksi dari energi BASELINE (clean, ``E_expected``), BUKAN fraksi dari
+    sisa yang belum terklaim di ledger. Counterfactual absolutnya adalah
+    ``p_loss * e_expected_kwh_per_ts`` per timestamp; ledger yang memotongnya
+    ke sisa yang tersedia, sama seperti dua estimator lain di modul ini.
 
     Prioritas keempat, setelah availability dan fault: SRR menyerap apa saja
     yang menurun perlahan, jadi ia hanya boleh melihat energi yang belum
@@ -67,4 +76,11 @@ def claim_soiling(ledger: LossLedger, *, p_loss: float) -> float:
     p = float(p_loss)
     if not (0.0 <= p <= 1.0):
         raise ValueError(f"[m2f] p_loss harus di [0, 1], dapat {p}.")
-    return ledger.claim("soiling", ledger.remaining() * p)
+    e_expected = np.asarray(e_expected_kwh_per_ts, dtype=float)
+    remaining = ledger.remaining()
+    if e_expected.shape != remaining.shape:
+        raise ValueError(
+            f"[m2f] panjang e_expected_kwh_per_ts {e_expected.shape} != "
+            f"ledger {remaining.shape}"
+        )
+    return ledger.claim("soiling", p * e_expected)
