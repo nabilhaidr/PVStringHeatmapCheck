@@ -120,3 +120,88 @@ def test_nan_in_expected_is_rejected_at_construction():
 def test_nan_in_actual_is_rejected_at_construction():
     with pytest.raises(ValueError, match="NaN"):
         _ledger([1.0, 2.0, 3.0], [0.5, np.nan, 1.0])
+
+
+def test_day_is_normalized_to_midnight_by_constructor():
+    # WHY: spec sebelumnya cuma mendokumentasikan "dinormalisasi oleh caller"
+    # tanpa menegakkannya -- day non-midnight yang lolos bisa membuat dua
+    # ledger untuk hari yang sama dianggap berbeda saat dikelompokkan.
+    led = LossLedger(
+        string_id="WB03-INV01-PV5",
+        day=pd.Timestamp("2026-05-13 14:30:00"),
+        e_expected=np.array([1.0]),
+        e_actual=np.array([0.0]),
+    )
+    assert led.day == pd.Timestamp("2026-05-13")
+
+
+def test_claim_accepts_series_aligned_on_ledger_index():
+    idx = pd.date_range("2026-05-13 00:00", periods=2, freq="1h")
+    led = LossLedger(
+        string_id="WB03-INV01-PV5",
+        day=pd.Timestamp("2026-05-13"),
+        e_expected=np.array([2.0, 2.0]),
+        e_actual=np.array([0.0, 0.0]),
+        index=idx,
+    )
+    amount = pd.Series([1.0, 1.0], index=idx)
+    claimed = led.claim("availability_outage", amount)
+    assert claimed == pytest.approx(2.0)
+
+
+def test_claim_rejects_series_with_shuffled_index():
+    # WHY: dua Series panjang sama tapi urutan timestamp berbeda akan
+    # ter-align diam-diam secara POSISIONAL kalau ledger cuma mengecek
+    # .shape -- energi jam 00:00 bisa "pindah" ke jam 01:00 tanpa terdeteksi.
+    idx = pd.date_range("2026-05-13 00:00", periods=2, freq="1h")
+    led = LossLedger(
+        string_id="WB03-INV01-PV5",
+        day=pd.Timestamp("2026-05-13"),
+        e_expected=np.array([2.0, 2.0]),
+        e_actual=np.array([0.0, 0.0]),
+        index=idx,
+    )
+    shuffled = pd.Series([1.0, 1.0], index=idx[::-1])
+    with pytest.raises(ValueError, match="sejajar"):
+        led.claim("availability_outage", shuffled)
+
+
+def test_claim_rejects_series_with_disjoint_index():
+    idx = pd.date_range("2026-05-13 00:00", periods=2, freq="1h")
+    led = LossLedger(
+        string_id="WB03-INV01-PV5",
+        day=pd.Timestamp("2026-05-13"),
+        e_expected=np.array([2.0, 2.0]),
+        e_actual=np.array([0.0, 0.0]),
+        index=idx,
+    )
+    other_idx = pd.date_range("2026-05-14 00:00", periods=2, freq="1h")
+    disjoint = pd.Series([1.0, 1.0], index=other_idx)
+    with pytest.raises(ValueError, match="sejajar"):
+        led.claim("availability_outage", disjoint)
+
+
+def test_claim_series_without_ledger_index_raises():
+    led = _ledger([2.0, 2.0], [0.0, 0.0])  # dibuat tanpa parameter `index`
+    amount = pd.Series(
+        [1.0, 1.0], index=pd.date_range("2026-05-13", periods=2, freq="1h")
+    )
+    with pytest.raises(ValueError, match="index"):
+        led.claim("availability_outage", amount)
+
+
+def test_claim_still_accepts_bare_array_positionally():
+    led = _ledger([2.0, 2.0], [0.0, 0.0])
+    claimed = led.claim("availability_outage", np.array([1.0, 1.0]))
+    assert claimed == pytest.approx(2.0)
+
+
+def test_claim_raises_on_nan_instead_of_coercing_to_zero():
+    # WHY: NaN pada klaim berarti string tidak bisa dievaluasi (mis. kolom
+    # tegangan hilang upstream). np.nan_to_num(nan=0.0) yang lama akan
+    # melaporkan "dicek, aman (0.0 kWh)" padahal sebenarnya "tidak bisa
+    # dicek" -- fail loud, sama seperti constructor menolak NaN di
+    # e_expected/e_actual.
+    led = _ledger([2.0, 2.0], [0.0, 0.0])
+    with pytest.raises(ValueError, match="NaN"):
+        led.claim("dc_cable_fault", np.array([np.nan, 1.0]))

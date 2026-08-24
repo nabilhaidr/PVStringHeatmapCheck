@@ -37,9 +37,14 @@ class LossLedger:
     string_id : str
         Identitas string, mis. ``"WB03-INV01-PV5"``.
     day : pd.Timestamp
-        Tanggal (dinormalisasi ke tengah malam oleh caller).
+        Tanggal (dinormalisasi ke tengah malam oleh konstruktor ini).
     e_expected, e_actual : np.ndarray
         Energi per timestamp (kWh), panjang sama.
+    index : pd.DatetimeIndex, optional
+        Timestamp per elemen ``e_expected``/``e_actual``. Bila diberikan,
+        ``claim()`` menerima ``pd.Series`` dan memvalidasi indexnya sejajar
+        dengan ini -- tanpanya, dua Series panjang sama tapi urutan/isi
+        timestamp berbeda bisa ter-align diam-diam secara posisional.
     """
 
     def __init__(
@@ -48,6 +53,7 @@ class LossLedger:
         day: pd.Timestamp,
         e_expected: np.ndarray,
         e_actual: np.ndarray,
+        index: Optional[pd.DatetimeIndex] = None,
     ):
         expected = np.asarray(e_expected, dtype=float)
         actual = np.asarray(e_actual, dtype=float)
@@ -66,24 +72,43 @@ class LossLedger:
                 "seharusnya sudah di-fillna(0.0) sebelum sampai ke ledger."
             )
         self.string_id = string_id
-        self.day = day
+        self.day = pd.Timestamp(day).normalize()
         self.e_expected = expected
         self.e_actual = actual
         # Hanya rugi positif yang dapat diklaim. Timestamp dengan
         # over-performance tidak menyediakan energi untuk diklaim siapa pun.
         self._remaining = np.maximum(expected - actual, 0.0)
         self._claims: Dict[str, float] = {}
+        if index is None:
+            self.index: Optional[pd.DatetimeIndex] = None
+        else:
+            index = pd.DatetimeIndex(index)
+            if len(index) != len(expected):
+                raise ValueError(
+                    f"[m2f] panjang index {len(index)} != e_expected "
+                    f"{len(expected)} untuk {string_id} {self.day}."
+                )
+            self.index = index
 
     def l_total(self) -> float:
         """Total rugi (kWh). Boleh negatif bila string melebihi ekspektasi."""
-        return float(np.nansum(self.e_expected) - np.nansum(self.e_actual))
+        # np.nansum sebelumnya di sini murni defensif -- constructor sudah
+        # menolak NaN di atas, jadi cabang itu tidak pernah tercapai.
+        # Disederhanakan supaya tidak ada dua penjaga yang bertentangan makna
+        # (fail-loud di constructor vs diam-diam menelan NaN di sini).
+        return float(self.e_expected.sum() - self.e_actual.sum())
 
     def remaining(self) -> np.ndarray:
         """Energi belum terklaim per timestamp (kWh), selalu >= 0."""
         return self._remaining.copy()
 
-    def claim(self, category: str, amount_kwh_per_ts: np.ndarray) -> float:
+    def claim(self, category: str, amount_kwh_per_ts) -> float:
         """Klaim energi untuk ``category``, dipotong ke sisa per timestamp.
+
+        ``amount_kwh_per_ts`` boleh berupa ``pd.Series`` (indexnya divalidasi
+        sejajar dengan ``self.index`` -- lihat parameter ``index`` di
+        constructor) atau array biasa (diperlakukan posisional, seperti
+        sebelumnya).
 
         Returns
         -------
@@ -103,8 +128,36 @@ class LossLedger:
                 f"[m2f] {category!r} bukan kategori yang dikenal (lihat "
                 "CLAIMABLE_CATEGORIES); klaim ditolak untuk cegah energi hilang diam-diam."
             )
-        amount = np.asarray(amount_kwh_per_ts, dtype=float)
-        amount = np.nan_to_num(amount, nan=0.0, posinf=0.0, neginf=0.0)
+        if isinstance(amount_kwh_per_ts, pd.Series):
+            if self.index is None:
+                raise ValueError(
+                    f"[m2f] klaim {category!r} berupa pd.Series tapi ledger "
+                    f"{self.string_id} {self.day} dibuat tanpa `index` -- tidak "
+                    "ada acuan untuk memvalidasi alignment timestamp."
+                )
+            if not amount_kwh_per_ts.index.equals(self.index):
+                raise ValueError(
+                    f"[m2f] index klaim {category!r} untuk {self.string_id} "
+                    f"{self.day} tidak sejajar dengan index ledger; klaim "
+                    "ditolak untuk cegah dua Series panjang sama tapi "
+                    "timestamp berbeda ter-align diam-diam secara posisional."
+                )
+            amount = amount_kwh_per_ts.to_numpy(dtype=float)
+        else:
+            amount = np.asarray(amount_kwh_per_ts, dtype=float)
+        # NaN berarti string ini tidak bisa dievaluasi sama sekali (mis.
+        # kolom tegangan hilang upstream di deficit_to_kwh). Coercion
+        # nan_to_num(nan=0.0) di sini dulu akan melaporkan "dicek, aman"
+        # padahal sebenarnya "tidak bisa dicek" -- raise, seperti constructor
+        # sudah menolak NaN di e_expected/e_actual (lihat baris atas).
+        if np.any(np.isnan(amount)):
+            raise ValueError(
+                f"[m2f] NaN pada klaim {category!r} untuk {self.string_id} "
+                f"{self.day}: string tidak bisa dievaluasi untuk kategori ini; "
+                "ini harus dilaporkan 'tidak terukur', bukan disamarkan jadi "
+                "0.0 kWh."
+            )
+        amount = np.nan_to_num(amount, posinf=0.0, neginf=0.0)
         if np.any(amount < 0.0):
             raise ValueError(
                 f"[m2f] klaim negatif untuk {category!r}; klaim harus >= 0."
