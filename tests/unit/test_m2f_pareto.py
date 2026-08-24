@@ -67,6 +67,22 @@ def test_all_zero_losses_give_zero_pct_not_nan():
     assert table["pct"].sum() == pytest.approx(0.0)
 
 
+def test_vital_few_survives_when_unexplained_dominates():
+    # WHY: konfigurasi v1 -- unexplained menyerap shading, low-irradiance,
+    # microcrack, bifacial, dan ground-fault sekaligus, jadi residual > 80%
+    # adalah keadaan YANG DIHARAPKAN, bukan yang patologis. Kalau cum_pct
+    # dihitung atas SEMUA baris (termasuk unexplained), unexplained yang jadi
+    # baris pertama (90%) langsung menembus ambang 80% dan satu-satunya
+    # kategori actionable (dc_cable_fault) tidak pernah sempat masuk --
+    # vital_few kosong permanen padahal ada rugi actionable yang bisa
+    # ditindak.
+    table = build_pareto_table(
+        _totals(dc_cable_fault=10.0, unexplained=90.0)
+    ).set_index("category")
+    assert bool(table.loc["dc_cable_fault", "vital_few"]) is True
+    assert bool(table.loc["unexplained", "vital_few"]) is False
+
+
 def test_negative_residual_does_not_break_percentages():
     # String melebihi ekspektasi -> residual negatif. Persentase dihitung
     # terhadap total rugi POSITIF supaya tetap terbaca.
