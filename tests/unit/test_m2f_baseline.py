@@ -59,6 +59,8 @@ def test_actual_energy_treats_nan_as_zero():
     idx = pd.date_range("2026-05-13 12:00", periods=3, freq="5min")
     power = pd.Series([12.0, np.nan, 6.0], index=idx)
     out = compute_actual_energy_kwh(power)
+    assert not out.isna().any(), "NaN tidak boleh muncul di output; harus diisi 0.0"
+    assert out.iloc[1] == pytest.approx(0.0), "NaN pada posisi tengah harus menjadi 0.0"
     assert out.sum() == pytest.approx(18.0 * DEFAULT_FREQ_HOURS)
 
 
@@ -83,3 +85,30 @@ def test_calibrate_bifacial_gain_refuses_thin_sample():
     actual = pd.Series([105.0, 105.0], index=["a", "b"])
     with pytest.raises(ValueError, match="minimal 3 string"):
         calibrate_bifacial_gain(expected, actual, min_strings=3)
+
+
+def test_expected_energy_fillna_guards_against_nan_poa_tcell(spec):
+    # WHY: NaN POA atau Tcell tidak boleh menghasilkan NaN di output.
+    # LossLedger.\_\_init\_\_ menolak NaN dalam e_expected; guard harus
+    # mengganti NaN menjadi 0.0 agar ledger tidak rusak.
+    idx = pd.date_range("2026-05-13 12:00", periods=3, freq="5min")
+    poa = pd.Series([800.0, np.nan, 600.0], index=idx)
+    tcell = pd.Series([40.0, 40.0, np.nan], index=idx)
+    out_poa = compute_expected_energy_kwh(poa, tcell, spec, "WB03")
+    out_tcell = compute_expected_energy_kwh(poa, tcell, spec, "WB03")
+    assert not out_poa.isna().any(), "NaN POA harus diisi 0.0, bukan dibiarkan NaN"
+    assert not out_tcell.isna().any(), "NaN Tcell harus diisi 0.0, bukan dibiarkan NaN"
+    assert out_poa.iloc[1] == pytest.approx(0.0)
+    assert out_tcell.iloc[2] == pytest.approx(0.0)
+
+
+def test_expected_energy_clips_negative_poa(spec):
+    # WHY: POA negatif tidak mungkin fisik; harus di-clip ke 0.0 agar
+    # tidak menghasilkan energi negatif di ledger.
+    idx = pd.date_range("2026-05-13 12:00", periods=2, freq="5min")
+    poa = pd.Series([-100.0, 800.0], index=idx)
+    tcell = pd.Series([30.0, 40.0], index=idx)
+    out = compute_expected_energy_kwh(poa, tcell, spec, "WB03")
+    assert not out.isna().any(), "output tidak boleh ada NaN"
+    assert (out >= 0.0).all(), "semua energi harus >= 0.0; tidak boleh negatif"
+    assert out.iloc[0] == pytest.approx(0.0), "POA negatif harus di-clip menjadi 0.0"
