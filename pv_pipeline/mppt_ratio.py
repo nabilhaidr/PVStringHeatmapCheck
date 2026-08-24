@@ -86,6 +86,11 @@ class M2bMpptRatio(SubModule):
         return [poa_cfg.get("default_source", "auto")]
 
     def run(self, combined_df: pd.DataFrame, config: dict) -> List[M2Finding]:
+        # m2f: reset di awal run() -- self.artifacts["StringStatus"] di bawah
+        # sudah di-ASSIGN ulang tiap run(), tapi deficit_frames di-EXTEND;
+        # tanpa reset ini, run() kedua pada instance yang sama menggandakan
+        # deficit_frames walau artefaknya sendiri tidak berubah.
+        self.deficit_frames = []
         cfg = config.get("m2b_mppt_ratio", {}) or {}
         if not bool(cfg.get("enabled", True)):
             return []

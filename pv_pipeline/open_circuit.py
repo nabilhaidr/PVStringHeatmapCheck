@@ -138,6 +138,11 @@ class M2bOpenCircuit(SubModule):
         return [poa_cfg.get("default_source", "auto")]
 
     def run(self, combined_df: pd.DataFrame, config: dict) -> List[M2Finding]:
+        # m2f: reset di awal run() -- self.artifacts["StringStatus"] di bawah
+        # sudah di-ASSIGN ulang tiap run(), tapi deficit_frames di-EXTEND;
+        # tanpa reset ini, run() kedua pada instance yang sama menggandakan
+        # deficit_frames walau artefaknya sendiri tidak berubah.
+        self.deficit_frames = []
         cfg = config.get("m2b_open_circuit", {}) or {}
         poa_threshold = float(cfg.get("poa_threshold_wm2", DEFAULT_POA_THRESHOLD_WM2))
         poa_floor = float(cfg.get("poa_floor_wm2", DEFAULT_POA_FLOOR_WM2))
