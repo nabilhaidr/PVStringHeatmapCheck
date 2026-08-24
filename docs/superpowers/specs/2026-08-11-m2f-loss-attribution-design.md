@@ -4,6 +4,20 @@
 **Status:** Disetujui untuk perencanaan implementasi
 **Lokasi output:** `outputs/` (workbook + PNG)
 
+> **Catatan status (2026-08-25):** Task 1-8 dari
+> `docs/superpowers/plans/2026-08-20-m2f-loss-attribution.md` sudah shipped
+> dan lulus tes (`pv_pipeline/m2f/ledger.py`, `baseline.py`, `deficit.py`,
+> `estimators.py`, `pareto.py`, `plots.py`, plus perubahan aditif di
+> `peer_zscore.py`/`open_circuit.py`/`mppt_ratio.py`). Dokumen ini sudah
+> disinkronkan ke kode yang shipped, termasuk beberapa koreksi yang
+> ditemukan review setelah draft desain awal ini (`ground_fault` dikeluarkan,
+> formula soiling, dsb -- lihat bagian terkait di bawah). **Task 9
+> (`pv_pipeline/m2f/report.py`, orchestrator) BELUM dikerjakan**, tertunda
+> menunggu `raw data input/PV Module Temperature PLTS IKN.xlsx`: tanpa
+> berkas itu `CellTempProvider` raise `FileNotFoundError`, yang akan membuat
+> tes orchestrator gagal, atau -- lebih berbahaya -- lulus vakum lewat jalur
+> penanganan-kegagalan-provider tanpa benar-benar menguji closure.
+
 ## Tujuan
 
 Mengkuantifikasi berapa kWh energi yang hilang **per penyebab** pada sisi DC,
@@ -124,38 +138,73 @@ diklaim tidak dapat diklaim lagi oleh kategori berprioritas lebih rendah.
 | # | Kategori | Counterfactual | Sumber detektor |
 |---|---|---|---|
 | 1 | `availability_outage` | `E_expected` sepanjang interval mati | `availability.py` |
-| 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `ground_fault`, `mppt_ratio` |
+| 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `mppt_ratio` |
 | 3 | `shading` | median sibling **per jam** pada jam ter-flag | `m2a/shading` |
-| 4 | `soiling` | `p_loss` * energi tersisa setelah 1-3 | `m2a/soiling` |
+| 4 | `soiling` | `p_loss * E_expected` (energi baseline bersih per timestamp, dipotong ke sisa ledger) | `m2a/soiling` |
 | 5 | `low_irradiance_eff` | defisit ter-fit pada pita POA [50,250] | `m2a/low_irradiance` |
 | 6 | `microcrack`, `bifacial_underperf` | -- | `None` |
-| 7 | `unexplained` | sisa ledger | -- |
+| 7 | `unexplained` | sisa ledger (termasuk `ground_fault`, lihat di bawah) | -- |
+
+**`ground_fault` DIKELUARKAN dari atribusi energi di v1** -- keputusan owner,
+bukan celah yang belum sempat dikerjakan. `ground_fault.py` sempat mendapat
+artefak deret waktu (lingkup awal kategori 2) lalu di-revert ke keadaan
+pre-M2f-nya. Alasannya dua:
+
+- Fault ground adalah kejadian **inverter-level**: saat satu inverter kena
+  ground fault, seluruh string di inverter itu ikut terdampak, sehingga
+  counterfactual within-inverter (median arus sibling se-inverter, yang
+  dipakai kategori 2 untuk tiga detektor lain) **degenerate** -- tidak ada
+  "sibling sehat" di inverter yang sama untuk dibandingkan.
+- Alternatifnya, counterfactual fleet-median lintas-inverter, mencampur dua
+  plant (WB01-02 vs WB03-10) dengan **tilt berbeda** dan **24 vs 26 modul per
+  string** -- bukan counterfactual yang valid untuk salah satu plant.
+
+Rugi `ground_fault` karena itu jatuh ke `unexplained` di v1, konsisten dengan
+perlakuan `shading`/`low_irradiance_eff` (v2) dan `microcrack`/
+`bifacial_underperf` (v3).
 
 Alasan urutan, bukan selera:
 
 - **Availability lebih dulu.** Saat string mati, tidak ada rugi lain yang
   berlaku pada jendela itu.
-- **Fault keras sebelum yang lunak.** Open circuit dan ground fault mengunci
-  energinya sendiri.
+- **Fault keras sebelum yang lunak.** Open circuit mengunci energinya sendiri
+  lebih dulu dari rugi yang turun perlahan.
 - **Shading sebelum soiling.** SRR menyerap apa saja yang turun perlahan. Bila
   dibalik, rugi shading akan diklaim sebagai rugi soiling dan ROI cleaning
   menjadi *overstated* -- padahal angka itulah dasar keputusan biaya.
 
 ## Prasyarat: artefak deret waktu di detektor
 
-Kategori 2, 3, dan 5 membutuhkan array per-timestamp yang saat ini dihitung di
-dalam detektor tetapi **tidak dipersistensi** -- hanya skor akhirnya yang
-keluar. Tiap detektor berikut perlu tambahan satu artifact deret waktu berisi
-nilai aktual, nilai counterfactual, dan mask interval ter-flag:
+Kategori 2 (v1) serta 3 dan 5 (v2) membutuhkan array per-timestamp yang
+dihitung di dalam detektor tetapi sebelumnya **tidak dipersistensi** -- hanya
+skor akhirnya yang keluar. v1 menyentuh **tiga** detektor, masing-masing
+mendapat satu artifact deret waktu berisi nilai aktual, nilai counterfactual,
+dan mask interval ter-flag:
 
-`peer_zscore.py`, `open_circuit.py`, `ground_fault.py`, `mppt_ratio.py`,
-`m2a/shading.py`, `m2a/low_irradiance.py`.
+`peer_zscore.py`, `open_circuit.py`, `mppt_ratio.py`.
+
+`m2a/shading.py` dan `m2a/low_irradiance.py` tetap v2 dan tidak disentuh.
+`ground_fault.py` **tidak** mendapat artefak ini -- lihat penjelasan di
+"Ledger klaim dan urutan prioritas" di atas: fault-nya inverter-level,
+sehingga baik counterfactual within-inverter maupun fleet-median tidak valid.
+`ground_fault.py` di-revert ke keadaan pre-M2f-nya.
 
 Perubahan per file kecil dan aditif (tidak mengubah findings atau severity yang
-ada), tetapi menyentuh enam file. Ini bagian dari lingkup.
-
-`m2a/soiling.py` tidak memerlukan perubahan: `energy_lost_kwh_est` dan
+ada). `m2a/soiling.py` tidak memerlukan perubahan: `energy_lost_kwh_est` dan
 `energy_recovered_kwh_per_day` per string sudah tersedia.
+
+**Artefak ini TIDAK masuk `self.artifacts`.** `self.artifacts` adalah channel
+Excel `M2Engine.write_xlsx_multi`, tanpa try/except pada penulisannya. Pada
+volume produksi (`emit_all_sources: true`, 5 POA source, ribuan string,
+ratusan timestamp per hari) volume defisit per detektor bisa mendekati atau
+melampaui **1.048.576 baris** -- limit satu sheet pandas/Excel -- dan
+menggagalkan seluruh workbook harian, bukan cuma sheet ini. Artefak ini
+karena itu ships sebagai `self.deficit_frames: List[pd.DataFrame]`, channel
+terpisah di tiap detektor (di-reset di awal `run()`, di-`extend()` di akhir
+loop per string), digabung lewat
+`pv_pipeline.m2f.deficit.reduce_deficit_frames` (union lintas detektor,
+maksimum elemen-per-elemen supaya dua detektor yang menandai fisik yang sama
+tidak melipatgandakan energinya) sebelum diklaim ke ledger.
 
 ## Struktur modul
 
@@ -163,10 +212,17 @@ ada), tetapi menyentuh enam file. Ini bagian dari lingkup.
       __init__.py
       baseline.py     # E_expected per (string,ts) + kalibrasi bifacial per WB
       ledger.py       # LossLedger: klaim, tegakkan closure, residual
+      deficit.py      # skema artefak defisit dari 3 detektor m2b +
+                       # reduce_deficit_frames (union lintas detektor, max
+                       # bukan sum, reindex ke timeline ledger)
       estimators.py   # satu fungsi per kategori -> klaim ke ledger
-      pareto.py       # ranking desc, kumulatif %, garis 80%, vital-few
-      plots.py        # figure waterfall + figure Pareto
+      pareto.py       # build_pareto_table: ranking desc, kumulatif %,
+                       # garis 80%, vital-few
+      plots.py        # build_waterfall_table (tabel, BUKAN di pareto.py)
+                       # + figure waterfall + figure Pareto
       report.py       # xlsx multi-sheet via pola M2Engine.write_xlsx_multi
+                       # -- lihat catatan status di akhir dokumen ini, belum
+                       # dikerjakan
 
 ## Model data hasil
 
@@ -267,7 +323,11 @@ Tes menguji maksud, bukan sekadar perilaku (Rule 9).
   bukan `0.0`, dan tidak mengurangi residual.
 - **Grafik**: mengembalikan `Figure` tanpa menulis file; jumlah batang
   waterfall sama dengan jumlah kategori ditambah dua terminal; garis kumulatif
-  Pareto berakhir di 100%; data kosong menghasilkan figure, bukan exception.
+  Pareto berakhir di 100% dari porsi *actionable* (bukan dari total baris --
+  `cum_pct` dihitung hanya atas kategori actionable sejak review Task 7 di
+  plan; ia TIDAK mencapai 100% dari total ketika `unexplained` bukan nol, dan
+  di v1 residual besar adalah keadaan yang diharapkan); data kosong
+  menghasilkan figure, bukan exception.
 
 ## Pentahapan
 
@@ -288,8 +348,12 @@ Tes menguji maksud, bukan sekadar perilaku (Rule 9).
    agregat site.
 5. Kedua grafik tergenerasi untuk scope `site` dan `wb`, dan tetap
    menghasilkan figure pada input kosong.
-6. Enam detektor mendapat artefak deret waktu tanpa perubahan pada findings
-   atau severity yang sudah ada -- diverifikasi lewat suite tes existing.
+6. Tiga detektor (`peer_zscore`, `open_circuit`, `mppt_ratio`) mendapat
+   artefak deret waktu tanpa perubahan pada findings atau severity yang sudah
+   ada -- diverifikasi lewat suite tes existing. `shading` dan
+   `low_irradiance` tetap v2 (belum disentuh); `ground_fault` dikeluarkan
+   sepenuhnya dari atribusi energi (lihat "Ledger klaim dan urutan
+   prioritas").
 
 ## Asumsi dan risiko terbuka
 
