@@ -36,8 +36,9 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
-from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
+from pv_pipeline.m2f.deficit import build_deficit_frame
 from pv_pipeline.open_circuit import (
+    _debounced_qualifying_mask,
     _find_shutdown_col,
     _wb_from_inverter_id,
     count_debounced_events,
@@ -66,6 +67,11 @@ class M2bMpptRatio(SubModule):
     def __init__(self, poa=None):
         super().__init__()
         self.poa = poa
+        # m2f: deret waktu defisit per POA source/string, TIDAK masuk
+        # self.artifacts -- itu channel Excel (M2Engine.write_xlsx_multi)
+        # tanpa try/except, dan volume defisit (5 source x ribuan string x
+        # ratusan timestamp) jauh melampaui limit baris sheet.
+        self.deficit_frames: List[pd.DataFrame] = []
 
     def _ensure_poa(self, config: dict) -> None:
         if self.poa is None:
@@ -342,20 +348,25 @@ class M2bMpptRatio(SubModule):
 
                         # m2f: counterfactual = median arus partner se-MPPT per
                         # timestamp (partner_median_ts, sudah dihitung di atas).
-                        # flag_mask = qualifying (mask penuh, sebelum debounce --
-                        # sama seperti n_qualifying_steps di StringStatus).
+                        # flag_mask = qualifying yang SUDAH lolos debounce (bukan
+                        # qualifying mentah) -- production debounce_steps=20
+                        # (~100 menit), jadi dip 5-menit terisolasi di cloud edge
+                        # tidak boleh diklaim kWh-nya walau n_events==0/emitted
+                        # ==False. Konsisten dengan open_circuit.py.
                         v_col_mr = f"PV{pv_n} input voltage(V)"
                         if v_col_mr in group_clean.columns:
                             v_string_mr = pd.to_numeric(group_clean[v_col_mr], errors="coerce")
                         else:
                             v_string_mr = pd.Series(np.nan, index=ts_clean)
+                        flag_mask_mr = _debounced_qualifying_mask(qualifying, debounce_steps)
                         deficit_rows.append(build_deficit_frame(
                             timestamps=ts_clean,
+                            poa_source=poa_source,
                             inverter_id=str(inverter_id),
                             pv_string=f"PV{pv_n}",
                             actual_kw=(I_string * v_string_mr / 1000.0).to_numpy(),
                             counterfactual_kw=(partner_median_ts * v_string_mr / 1000.0).to_numpy(),
-                            flagged=qualifying.to_numpy(),
+                            flagged=flag_mask_mr,
                         ))
 
                         artifact_rows.append({
@@ -377,10 +388,7 @@ class M2bMpptRatio(SubModule):
         if artifact_rows:
             self.artifacts["StringStatus"] = pd.DataFrame(artifact_rows)
 
-        if deficit_rows:
-            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
-                deficit_rows, ignore_index=True
-            )
+        self.deficit_frames.extend(deficit_rows)
         return findings
 
 

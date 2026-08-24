@@ -12,9 +12,8 @@ import numpy as np
 import pandas as pd
 
 
-TIMESERIES_DEFICIT_SHEET: str = "TimeseriesDeficit"
-
 DEFICIT_COLUMNS: List[str] = [
+    "poa_source",
     "timestamp",
     "inverter_id",
     "pv_string",
@@ -26,16 +25,23 @@ DEFICIT_COLUMNS: List[str] = [
 
 def build_deficit_frame(
     timestamps,
+    poa_source: str,
     inverter_id: str,
     pv_string: str,
     actual_kw: np.ndarray,
     counterfactual_kw: np.ndarray,
     flagged: np.ndarray,
 ) -> pd.DataFrame:
-    """Rakit satu frame defisit dengan skema tetap ``DEFICIT_COLUMNS``."""
+    """Rakit satu frame defisit dengan skema tetap ``DEFICIT_COLUMNS``.
+
+    ``poa_source`` wajib disertakan -- setiap detektor loop di 5 POA source
+    dan flag mask-nya berbeda per source, jadi tanpa kolom ini
+    ``(inverter_id, pv_string, timestamp)`` bukan key unik.
+    """
     idx = pd.DatetimeIndex(timestamps)
     frame = pd.DataFrame(
         {
+            "poa_source": str(poa_source),
             "timestamp": idx,
             "inverter_id": str(inverter_id),
             "pv_string": str(pv_string),

@@ -5,16 +5,16 @@ import pytest
 
 from pv_pipeline.m2f.baseline import DEFAULT_FREQ_HOURS
 from pv_pipeline.m2f.deficit import (
-    DEFICIT_COLUMNS,
     build_deficit_frame,
     deficit_to_kwh,
 )
 
 
-def _frame(actual, counterfactual, flagged):
+def _frame(actual, counterfactual, flagged, poa_source="pyranometer"):
     idx = pd.date_range("2026-05-13 12:00", periods=len(actual), freq="5min")
     return build_deficit_frame(
         timestamps=idx,
+        poa_source=poa_source,
         inverter_id="WB03-INV01",
         pv_string="PV5",
         actual_kw=np.array(actual, dtype=float),
@@ -24,8 +24,20 @@ def _frame(actual, counterfactual, flagged):
 
 
 def test_frame_has_exact_schema():
+    # WHY: dibandingkan ke daftar literal, bukan ke DEFICIT_COLUMNS itu sendiri
+    # -- kalau dibandingkan ke konstanta yang sama yang dipakai
+    # build_deficit_frame untuk mem-filter kolom, tes ini tidak pernah bisa
+    # gagal walau skema berubah diam-diam.
     frame = _frame([1.0], [2.0], [True])
-    assert list(frame.columns) == DEFICIT_COLUMNS
+    assert list(frame.columns) == [
+        "poa_source",
+        "timestamp",
+        "inverter_id",
+        "pv_string",
+        "actual_kw",
+        "counterfactual_kw",
+        "flagged",
+    ]
 
 
 def test_deficit_counts_only_flagged_timestamps():

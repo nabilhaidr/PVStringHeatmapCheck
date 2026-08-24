@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
-from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
+from pv_pipeline.m2f.deficit import build_deficit_frame
 
 
 DEFAULT_POA_THRESHOLD_WM2: float = 200.0
@@ -119,6 +119,11 @@ class M2bOpenCircuit(SubModule):
     def __init__(self, poa=None):
         super().__init__()
         self.poa = poa
+        # m2f: deret waktu defisit per POA source/string, TIDAK masuk
+        # self.artifacts -- itu channel Excel (M2Engine.write_xlsx_multi)
+        # tanpa try/except, dan volume defisit (5 source x ribuan string x
+        # ratusan timestamp) jauh melampaui limit baris sheet.
+        self.deficit_frames: List[pd.DataFrame] = []
 
     def _ensure_poa(self, config: dict) -> None:
         if self.poa is None:
@@ -383,6 +388,7 @@ class M2bOpenCircuit(SubModule):
                     flag_mask_oc = _debounced_qualifying_mask(qualifying, debounce_steps)
                     deficit_rows.append(build_deficit_frame(
                         timestamps=ts_clean,
+                        poa_source=poa_source,
                         inverter_id=str(inverter_id),
                         pv_string=f"PV{pv_n}",
                         actual_kw=(I_string * v_string_oc / 1000.0).to_numpy(),
@@ -474,10 +480,7 @@ class M2bOpenCircuit(SubModule):
             # Wave 8: rename ke StringStatus + tambah status column (NORMAL | open_circuit).
             self.artifacts["StringStatus"] = pd.DataFrame(artifact_rows)
 
-        if deficit_rows:
-            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
-                deficit_rows, ignore_index=True
-            )
+        self.deficit_frames.extend(deficit_rows)
         return findings
 
 

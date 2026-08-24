@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
-from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
+from pv_pipeline.m2f.deficit import build_deficit_frame
 from pv_pipeline.voc_estimator import estimate_voc_at_low_current
 
 
@@ -89,6 +89,11 @@ class M2bPeerZScore(SubModule):
         self.poa = poa
         self.panel = panel
         self.cell_temp = cell_temp
+        # m2f: deret waktu defisit per POA source/string, TIDAK masuk
+        # self.artifacts -- itu channel Excel (M2Engine.write_xlsx_multi)
+        # tanpa try/except, dan volume defisit (5 source x ribuan string x
+        # ratusan timestamp) jauh melampaui limit baris sheet.
+        self.deficit_frames: List[pd.DataFrame] = []
 
     def _ensure_providers(self, config: dict) -> None:
         if self.poa is None:
@@ -441,9 +446,14 @@ class M2bPeerZScore(SubModule):
                         i_counterfactual_pz = pd.Series(np.nan, index=ts_clean)
                     i_string_pz = i_per_string_pz[pv_n]
                     v_string_pz = v_per_string_pz[pv_n]
-                    flag_mask_pz = mask_poa.values & bool(flagged)
+                    # m2f: pakai should_emit_per_spec (flagged AND voc_ok), bukan
+                    # flagged saja -- voc_ok adalah gate konfirmasi spec 4.2.3
+                    # untuk menolak false positive; string yang dilaporkan NORMAL
+                    # tidak boleh diklaim kWh-nya.
+                    flag_mask_pz = mask_poa.values & bool(should_emit_per_spec)
                     deficit_rows.append(build_deficit_frame(
                         timestamps=ts_clean,
+                        poa_source=poa_source,
                         inverter_id=str(inverter_id),
                         pv_string=f"PV{pv_n}",
                         actual_kw=(i_string_pz * v_string_pz / 1000.0).to_numpy(),
@@ -555,10 +565,7 @@ class M2bPeerZScore(SubModule):
             # Wave 8: rename ke StringStatus + tambah status column (NORMAL | high_R).
             self.artifacts["StringStatus"] = pd.DataFrame(artifact_rows)
 
-        if deficit_rows:
-            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
-                deficit_rows, ignore_index=True
-            )
+        self.deficit_frames.extend(deficit_rows)
         return findings
 
 

@@ -33,7 +33,6 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
-from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
 from pv_pipeline.voc_estimator import estimate_voc_at_low_current
 
 
@@ -222,7 +221,6 @@ class M2bGroundFault(SubModule):
         artifact_rows: List[dict] = []
         # Wave 8: per-PV-string status (NORMAL atau ground_fault).
         string_status_rows: List[dict] = []
-        deficit_rows: list = []
 
         all_ts = pd.to_datetime(combined_df["Start Time"], errors="coerce")
         latest_ts = all_ts.max() if not all_ts.dropna().empty else datetime.utcnow()
@@ -238,21 +236,6 @@ class M2bGroundFault(SubModule):
             return []
         v_gnd_fleet_median = float(v_gnd_all.median())
         v_gnd_fleet_std = float(v_gnd_all.std()) if v_gnd_all.std() > 0 else 1.0
-
-        # m2f: median arus fleet (semua inverter, semua PV string) per timestamp
-        # -- counterfactual utk TimeseriesDeficit. Dihitung sekali di sini (sama
-        # pola dgn fleet V_to_ground di atas), bukan per-inverter, karena fault
-        # ini inverter-level (bukan per-string peer comparison).
-        _i_cols_fleet_gf = [
-            f"PV{n} input current(A)" for n in range(1, pv_max + 1)
-            if f"PV{n} input current(A)" in combined_df.columns
-        ]
-        if _i_cols_fleet_gf:
-            _fleet_I_gf = combined_df[_i_cols_fleet_gf].apply(pd.to_numeric, errors="coerce")
-            _fleet_I_gf.index = pd.to_datetime(combined_df["Start Time"], errors="coerce")
-            i_fleet_median_by_ts = _fleet_I_gf.stack().groupby(level=0).median()
-        else:
-            i_fleet_median_by_ts = pd.Series(dtype=float)
 
         for poa_source in sources:
             for inverter_id, group in combined_df.groupby("Inverter_ID"):
@@ -421,13 +404,6 @@ class M2bGroundFault(SubModule):
                 status_str = "ground_fault" if triggered else "NORMAL"
                 trig_str = "+".join(triggered) if triggered else ""
                 conf_pct = self._confidence_for(triggered) if triggered else 0.0
-                # m2f: flag_mask = trigger absolute ATAU adaptive (bukan spec_4.2.3
-                # -- itu sinyal per-string terpisah, sudah punya worst_pv_string
-                # sendiri). Dibatasi ke daylight_mask karena stats V_gnd yang
-                # menentukan trigger ini dihitung hanya dari sampel daylight.
-                _flag_scalar_gf = bool(flagged_absolute or flagged_adaptive)
-                _flag_mask_gf = daylight_mask.values & _flag_scalar_gf
-                _i_fleet_aligned_gf = i_fleet_median_by_ts.reindex(ts_clean)
                 for pv_n in range(1, pv_max + 1):
                     # Wave 11 hotfix #10: skip empty PV slots dari analisis.
                     if pv_n in _inv_empty_set_gf:
@@ -436,22 +412,6 @@ class M2bGroundFault(SubModule):
                     if v_col not in group_clean.columns:
                         continue
                     pv_label = f"PV{pv_n}"
-
-                    i_col_gf = f"PV{pv_n} input current(A)"
-                    if i_col_gf in group_clean.columns:
-                        i_string_gf = pd.to_numeric(group_clean[i_col_gf], errors="coerce")
-                    else:
-                        i_string_gf = pd.Series(np.nan, index=ts_clean)
-                    v_string_gf = pd.to_numeric(group_clean[v_col], errors="coerce")
-                    deficit_rows.append(build_deficit_frame(
-                        timestamps=ts_clean,
-                        inverter_id=str(inverter_id),
-                        pv_string=pv_label,
-                        actual_kw=(i_string_gf * v_string_gf / 1000.0).to_numpy(),
-                        counterfactual_kw=(_i_fleet_aligned_gf * v_string_gf / 1000.0).to_numpy(),
-                        flagged=_flag_mask_gf,
-                    ))
-
                     string_status_rows.append({
                         "poa_source": poa_source,
                         "inverter_id": str(inverter_id),
@@ -612,11 +572,6 @@ class M2bGroundFault(SubModule):
         if string_status_rows:
             # Wave 8: per-PV-string status sheet (NORMAL | ground_fault).
             self.artifacts["StringStatus"] = pd.DataFrame(string_status_rows)
-
-        if deficit_rows:
-            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
-                deficit_rows, ignore_index=True
-            )
         return findings
 
 
