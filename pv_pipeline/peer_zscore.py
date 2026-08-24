@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
+from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
 from pv_pipeline.voc_estimator import estimate_voc_at_low_current
 
 
@@ -165,6 +166,7 @@ class M2bPeerZScore(SubModule):
 
         findings: List[M2Finding] = []
         artifact_rows: List[dict] = []
+        deficit_rows: list = []
 
         # Wave 11 hotfix #6: track WHY each iteration continues (for diagnostic
         # purposes). User sees these counts di GateFailureSummary artifact
@@ -305,6 +307,11 @@ class M2bPeerZScore(SubModule):
                 # Build per-string R_str (median across daylight timestamps).
                 r_str_per_string: Dict[int, float] = {}
                 voc_actual_per_string: Dict[int, float] = {}
+                # m2f: simpan V/I per-timestamp per string (hanya utk string yg
+                # lolos ke r_str_per_string) supaya counterfactual sibling median
+                # bisa dihitung di loop kedua tanpa re-parse kolom.
+                i_per_string_pz: Dict[int, pd.Series] = {}
+                v_per_string_pz: Dict[int, pd.Series] = {}
                 for pv_n in range(1, pv_max + 1):
                     # Wave 11 hotfix #10: skip empty PV slots dari analisis.
                     if pv_n in _inv_empty_set_pz:
@@ -323,6 +330,8 @@ class M2bPeerZScore(SubModule):
                     if len(R_valid) < min_daylight_samples // 2:
                         continue
                     r_str_per_string[pv_n] = float(R_valid.median())
+                    i_per_string_pz[pv_n] = I
+                    v_per_string_pz[pv_n] = V
 
                     voc_actual_per_string[pv_n] = estimate_voc_at_low_current(V, I)
 
@@ -417,6 +426,30 @@ class M2bPeerZScore(SubModule):
                                 "solar_elevation_min_deg": solar_elev_min_deg,
                             },
                         ))
+
+                    # m2f: counterfactual = median arus sibling (strings lain di
+                    # inverter yg sama, exclude diri sendiri) per timestamp.
+                    # flag_mask = mask_poa AND flagged -- z-score dihitung dari
+                    # median R_str di jendela daylight (mask_poa), jadi defisit
+                    # energi hanya diklaim pada jam2 yg berkontribusi ke z itu.
+                    _sibling_ids_pz = [k for k in i_per_string_pz if k != pv_n]
+                    if _sibling_ids_pz:
+                        i_counterfactual_pz = pd.concat(
+                            [i_per_string_pz[k] for k in _sibling_ids_pz], axis=1
+                        ).median(axis=1)
+                    else:
+                        i_counterfactual_pz = pd.Series(np.nan, index=ts_clean)
+                    i_string_pz = i_per_string_pz[pv_n]
+                    v_string_pz = v_per_string_pz[pv_n]
+                    flag_mask_pz = mask_poa.values & bool(flagged)
+                    deficit_rows.append(build_deficit_frame(
+                        timestamps=ts_clean,
+                        inverter_id=str(inverter_id),
+                        pv_string=f"PV{pv_n}",
+                        actual_kw=(i_string_pz * v_string_pz / 1000.0).to_numpy(),
+                        counterfactual_kw=(i_counterfactual_pz * v_string_pz / 1000.0).to_numpy(),
+                        flagged=flag_mask_pz,
+                    ))
 
                     artifact_rows.append({
                         "poa_source": poa_source,
@@ -521,6 +554,11 @@ class M2bPeerZScore(SubModule):
         if artifact_rows:
             # Wave 8: rename ke StringStatus + tambah status column (NORMAL | high_R).
             self.artifacts["StringStatus"] = pd.DataFrame(artifact_rows)
+
+        if deficit_rows:
+            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
+                deficit_rows, ignore_index=True
+            )
         return findings
 
 

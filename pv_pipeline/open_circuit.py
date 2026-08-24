@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
+from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
 
 
 DEFAULT_POA_THRESHOLD_WM2: float = 200.0
@@ -85,6 +86,29 @@ def count_debounced_events(boolean_series: pd.Series, min_consecutive: int) -> T
         n_events += 1
         total_steps += cur
     return n_events, total_steps
+
+
+def _debounced_qualifying_mask(qualifying: pd.Series, min_consecutive: int) -> np.ndarray:
+    """m2f: mask boolean penuh (True hanya di langkah milik run >= min_consecutive).
+
+    Sengaja dipisah dari ``count_debounced_events`` (dipakai juga oleh
+    mppt_ratio.py) supaya signature/nilai baliknya tidak berubah. Logic run-
+    detection identik dengan ``count_debounced_events`` -- hanya beda output
+    (posisi per-timestamp, bukan hitungan).
+    """
+    arr = qualifying.astype(bool).to_numpy()
+    out = np.zeros(len(arr), dtype=bool)
+    cur = 0
+    for i, v in enumerate(arr):
+        if v:
+            cur += 1
+        else:
+            if cur >= min_consecutive:
+                out[i - cur:i] = True
+            cur = 0
+    if cur >= min_consecutive:
+        out[len(arr) - cur:len(arr)] = True
+    return out
 
 
 class M2bOpenCircuit(SubModule):
@@ -167,6 +191,7 @@ class M2bOpenCircuit(SubModule):
 
         findings: List[M2Finding] = []
         artifact_rows: List[dict] = []
+        deficit_rows: list = []
 
         # Wave 11 hotfix #10: load empty_pv_map ONCE supaya main loop bisa
         # skip empty PV slots (PV slot kosong by design per strings.yaml).
@@ -347,6 +372,24 @@ class M2bOpenCircuit(SubModule):
                             },
                         ))
 
+                    # m2f: counterfactual = I_q95 sibling per timestamp (sudah
+                    # dihitung di atas per spec 4.2.3). flag_mask = event yang
+                    # sudah lolos debounce (mask penuh, bukan cuma count).
+                    v_col_oc = f"PV{pv_n} input voltage(V)"
+                    if v_col_oc in group_clean.columns:
+                        v_string_oc = pd.to_numeric(group_clean[v_col_oc], errors="coerce")
+                    else:
+                        v_string_oc = pd.Series(np.nan, index=ts_clean)
+                    flag_mask_oc = _debounced_qualifying_mask(qualifying, debounce_steps)
+                    deficit_rows.append(build_deficit_frame(
+                        timestamps=ts_clean,
+                        inverter_id=str(inverter_id),
+                        pv_string=f"PV{pv_n}",
+                        actual_kw=(I_string * v_string_oc / 1000.0).to_numpy(),
+                        counterfactual_kw=(I_q95_per_ts * v_string_oc / 1000.0).to_numpy(),
+                        flagged=flag_mask_oc,
+                    ))
+
                     artifact_rows.append({
                         "poa_source": poa_source,
                         "inverter_id": str(inverter_id),
@@ -430,6 +473,11 @@ class M2bOpenCircuit(SubModule):
         if artifact_rows:
             # Wave 8: rename ke StringStatus + tambah status column (NORMAL | open_circuit).
             self.artifacts["StringStatus"] = pd.DataFrame(artifact_rows)
+
+        if deficit_rows:
+            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
+                deficit_rows, ignore_index=True
+            )
         return findings
 
 

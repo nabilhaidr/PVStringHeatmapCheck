@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from pv_pipeline.core import M2Finding, Severity, SubModule
+from pv_pipeline.m2f.deficit import TIMESERIES_DEFICIT_SHEET, build_deficit_frame
 from pv_pipeline.open_circuit import (
     _find_shutdown_col,
     _wb_from_inverter_id,
@@ -154,6 +155,7 @@ class M2bMpptRatio(SubModule):
 
         findings: List[M2Finding] = []
         artifact_rows: List[dict] = []
+        deficit_rows: list = []
 
         for poa_source in sources:
             for inverter_id, group in combined_df.groupby("Inverter_ID"):
@@ -338,6 +340,24 @@ class M2bMpptRatio(SubModule):
                                 },
                             ))
 
+                        # m2f: counterfactual = median arus partner se-MPPT per
+                        # timestamp (partner_median_ts, sudah dihitung di atas).
+                        # flag_mask = qualifying (mask penuh, sebelum debounce --
+                        # sama seperti n_qualifying_steps di StringStatus).
+                        v_col_mr = f"PV{pv_n} input voltage(V)"
+                        if v_col_mr in group_clean.columns:
+                            v_string_mr = pd.to_numeric(group_clean[v_col_mr], errors="coerce")
+                        else:
+                            v_string_mr = pd.Series(np.nan, index=ts_clean)
+                        deficit_rows.append(build_deficit_frame(
+                            timestamps=ts_clean,
+                            inverter_id=str(inverter_id),
+                            pv_string=f"PV{pv_n}",
+                            actual_kw=(I_string * v_string_mr / 1000.0).to_numpy(),
+                            counterfactual_kw=(partner_median_ts * v_string_mr / 1000.0).to_numpy(),
+                            flagged=qualifying.to_numpy(),
+                        ))
+
                         artifact_rows.append({
                             "poa_source": poa_source,
                             "inverter_id": str(inverter_id),
@@ -356,6 +376,11 @@ class M2bMpptRatio(SubModule):
 
         if artifact_rows:
             self.artifacts["StringStatus"] = pd.DataFrame(artifact_rows)
+
+        if deficit_rows:
+            self.artifacts[TIMESERIES_DEFICIT_SHEET] = pd.concat(
+                deficit_rows, ignore_index=True
+            )
         return findings
 
 
