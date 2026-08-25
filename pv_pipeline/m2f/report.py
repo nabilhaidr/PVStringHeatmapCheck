@@ -8,8 +8,18 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+# _classify_status dipakai apa adanya (bukan disalin) supaya M2f dan
+# M2eAvailability tidak pernah berbeda pendapat soal status inverter mana yang
+# berarti DOWN. Ia empat arah: DOWN / ON / TRANSITIONAL / UNKNOWN, dengan
+# prioritas down > on > transitional.
+from pv_pipeline.availability import _classify_status
 from pv_pipeline.cell_temp import CellTempProvider
-from pv_pipeline.core import M2Finding, Severity, SubModule
+from pv_pipeline.core import (
+    M2Finding,
+    Severity,
+    SubModule,
+    load_empty_pv_map,
+)
 from pv_pipeline.m2f.baseline import (
     DEFAULT_FREQ_HOURS,
     compute_actual_energy_kwh,
@@ -30,14 +40,18 @@ from pv_pipeline.m2f.pareto import build_pareto_table
 from pv_pipeline.m2f.plots import build_waterfall_table
 from pv_pipeline.panel_spec import PanelSpec
 from pv_pipeline.poa.provider import POAProvider
-from pv_pipeline.transformations import add_inverter_id, add_pv_power_columns
+from pv_pipeline.transformations import (
+    PV_POWER_RE,
+    add_inverter_id,
+    add_pv_power_columns,
+)
 
 
 PER_STRING_COLUMNS: List[str] = ["string_id", "day", "category", "loss_kwh"]
 CLOSURE_COLUMNS: List[str] = [
     "string_id", "day", "l_total_kwh", "claimed_kwh",
     "residual_kwh", "residual_pct", "poa_coverage_pct", "tcell_coverage_pct",
-    "skipped_reason",
+    "poa_source", "skipped_reason",
 ]
 BIFACIAL_COLUMNS: List[str] = ["wb_id", "g_bifacial", "n_strings", "n_days"]
 
@@ -73,13 +87,18 @@ def _index_deficit_frames(
     return out
 
 
-def _down_mask(status: pd.Series, on_grid_keywords: List[str]) -> pd.Series:
-    """Timestamp yang statusnya tidak mengandung satupun kata kunci on-grid."""
-    text = status.astype(str).str.lower()
-    on_grid = pd.Series(False, index=text.index)
-    for keyword in on_grid_keywords:
-        on_grid |= text.str.contains(keyword, regex=False, na=False)
-    return ~on_grid
+def _down_mask(status: pd.Series, status_map: dict) -> pd.Series:
+    """Timestamp yang statusnya diklasifikasikan DOWN -- HANYA itu.
+
+    Status kosong/NaN (UNKNOWN) dan status peralihan (TRANSITIONAL, termasuk
+    ``"no sunlight"`` yang muncul di fajar/senja saat E_expected masih > 0)
+    TIDAK dihitung DOWN. ``~on_grid`` akan menyapu keduanya menjadi outage,
+    dan karena availability berprioritas pertama dan mengklaim seluruh sisa,
+    itu akan melaparkan dc_cable_fault dan soiling serta menggeser seluruh
+    waterfall. Ketiadaan bukan kematian: lihat pv_pipeline/availability.py
+    baris 75-79, aturan yang sama berlaku di sini.
+    """
+    return status.map(lambda value: _classify_status(value, status_map) == "DOWN")
 
 
 def _skipped_closure_row(
@@ -87,6 +106,7 @@ def _skipped_closure_row(
     day: pd.Timestamp,
     *,
     reason: str,
+    poa_source: str,
     poa_coverage_pct: float = _NAN,
     tcell_coverage_pct: float = _NAN,
 ) -> dict:
@@ -104,6 +124,7 @@ def _skipped_closure_row(
         "residual_pct": _NAN,
         "poa_coverage_pct": poa_coverage_pct,
         "tcell_coverage_pct": tcell_coverage_pct,
+        "poa_source": poa_source,
         "skipped_reason": reason,
     }
 
@@ -146,22 +167,23 @@ class M2fLossAttribution(SubModule):
         poa_source: str = str(cfg.get("poa_source", "pyranometer_per_ws"))
         coverage_min = float(cfg.get("poa_coverage_min_pct", 80.0)) / 100.0
         warn_pct = float(cfg.get("residual_warn_pct", 30.0))
-        on_grid_keywords = [
-            str(k).lower()
-            for k in (
-                ((config.get("m2e") or {}).get("inverter_status_map") or {})
-                .get("on_grid_keywords") or []
-            )
-        ]
+        status_map: dict = (
+            (config.get("m2e") or {}).get("inverter_status_map") or {}
+        )
+        # Tanpa down_keywords, "mati" tidak bisa dibedakan dari "hidup" --
+        # kategorinya dilewati sepenuhnya, bukan diklaim 0.0.
+        can_classify_status = bool(status_map.get("down_keywords"))
 
         df = combined_df
         if "Inverter_ID" not in df.columns:
             df = add_inverter_id(df)
-        if not any(str(c).endswith(" Power(kW)") for c in df.columns):
+        if not any(PV_POWER_RE.search(str(c)) for c in df.columns):
             df, _ = add_pv_power_columns(df)
 
         providers, provider_error = self._load_providers(config)
         frames_by_string = _index_deficit_frames(deficit_frames, poa_source)
+        # Slot PV kosong by design, sama sumbernya dengan ketiga detektor m2b.
+        empty_pv_map = load_empty_pv_map(config)
 
         per_string_rows: List[dict] = []
         closure_rows: List[dict] = []
@@ -175,15 +197,33 @@ class M2fLossAttribution(SubModule):
         site_e_expected_kwh: float = 0.0
         site_l_total_kwh: float = 0.0
 
-        for string_id, wb_id, day, group, pv_label in self._iter_string_days(df):
+        for string_id, wb_id, day, group, power_col in self._iter_string_days(
+            df, empty_pv_map,
+        ):
             if providers is None:
-                closure_rows.append(
-                    _skipped_closure_row(string_id, day, reason=provider_error)
-                )
+                closure_rows.append(_skipped_closure_row(
+                    string_id, day,
+                    reason=provider_error, poa_source=poa_source,
+                ))
                 continue
 
             idx = pd.DatetimeIndex(group.index)
-            poa = providers["poa"].get_poa(idx, wb_id)
+            # source=poa_source EKSPLISIT. Default get_poa adalah "auto", yang
+            # mengisi tiap NaN dari rantai fallback sampai ke pvlib clear-sky
+            # -- cakupan lalu terbaca ~100% walau tidak ada satu pun pembacaan
+            # pyranometer, sehingga gate cakupan di bawah tidak pernah menyala.
+            # Beda dari detektor m2b yang membandingkan string dengan sibling
+            # (bias POA saling meniadakan), M2f membandingkan dengan baseline
+            # fisika ABSOLUT: POA clear-sky di hari mendung menggelembungkan
+            # E_expected, menggelembungkan L_total, dan selisihnya jatuh ke
+            # unexplained. Closure tetap lolos; angkanya saja yang salah.
+            poa = providers["poa"].get_poa(idx, wb_id, source=poa_source)
+            # CATATAN: get_tcell masih memakai "auto", yang rantai fallbacknya
+            # berakhir di SAPM (Tcell MODEL, bukan terukur). Lubangnya lebih
+            # sempit daripada POA -- SAPM sendiri butuh berkas POA/ambient/
+            # angin dan mengembalikan NaN bila tidak ada, jadi gate cakupan di
+            # bawah tetap menyala saat data benar-benar kosong. Menjadikannya
+            # dapat dikonfigurasi setara poa_source adalah pekerjaan terpisah.
             tcell = providers["tcell"].get_tcell(idx, wb_id)
             # Ambang cakupan, BUKAN isna().all(): cakupan sebagian lolos gate
             # "semua NaN", lalu compute_expected_energy_kwh mem-fillna(0.0)
@@ -195,6 +235,7 @@ class M2fLossAttribution(SubModule):
                 closure_rows.append(_skipped_closure_row(
                     string_id, day,
                     reason="poa_or_tcell_missing",
+                    poa_source=poa_source,
                     poa_coverage_pct=poa_coverage * 100.0,
                     tcell_coverage_pct=tcell_coverage * 100.0,
                 ))
@@ -204,7 +245,7 @@ class M2fLossAttribution(SubModule):
             e_exp = compute_expected_energy_kwh(
                 poa, tcell, providers["spec"], wb_id, bifacial_gain=g,
             )
-            e_act = compute_actual_energy_kwh(group[f"{pv_label} Power(kW)"])
+            e_act = compute_actual_energy_kwh(group[power_col])
             # HANYA string-hari yang benar-benar diproses; yang di-skip di atas
             # tidak boleh menyumbang E_expected ke waterfall site.
             site_e_expected_kwh += float(e_exp.sum())
@@ -219,27 +260,25 @@ class M2fLossAttribution(SubModule):
                 if category == "unexplained":
                     continue
                 if category == "availability_outage":
-                    # Tanpa peta status (config m2e absen), "mati" tidak bisa
-                    # dibedakan dari "hidup" -- jangan klaim apa pun.
-                    if not on_grid_keywords or "Inverter status" not in group.columns:
+                    if not can_classify_status or "Inverter status" not in group.columns:
                         continue
-                    down = _down_mask(group["Inverter status"], on_grid_keywords)
+                    down = _down_mask(group["Inverter status"], status_map)
                     claim_availability_outage(ledger, down_mask=down.to_numpy())
                 elif category == "dc_cable_fault":
                     string_frames = frames_by_string.get(string_id)
                     if not string_frames:
                         continue
+                    # reduce_deficit_frames sudah me-reindex ke `index=idx`
+                    # (index-aware, bukan posisional), jadi hasilnya sejajar
+                    # dengan ledger. Timestamp yang tak bisa dievaluasi tetap
+                    # NaN dan gagal keras di pemeriksaan NaN LossLedger.claim().
                     reduced = reduce_deficit_frames(
                         string_frames,
                         poa_source=poa_source,
                         index=idx,
                         freq_hours=DEFAULT_FREQ_HOURS,
                     )
-                    # reindex index-aware (bukan slicing posisional) supaya
-                    # ketidaksejajaran timestamp gagal keras di sini.
-                    claim_dc_cable_fault(
-                        ledger, deficit_kwh=reduced.reindex(idx, fill_value=0.0),
-                    )
+                    claim_dc_cable_fault(ledger, deficit_kwh=reduced)
                 elif category == "soiling":
                     month_key = day.strftime("%Y-%m")
                     if month_key not in p_loss_by_month:
@@ -271,6 +310,9 @@ class M2fLossAttribution(SubModule):
                 "residual_pct": (residual / l_total * 100.0) if l_total > 0 else _NAN,
                 "poa_coverage_pct": poa_coverage * 100.0,
                 "tcell_coverage_pct": tcell_coverage * 100.0,
+                # Dicatat supaya baseline yang berdiri di atas irradiance
+                # MODEL tidak tersaji seolah-olah hasil pengukuran.
+                "poa_source": poa_source,
                 "skipped_reason": None,
             })
 
@@ -339,6 +381,7 @@ class M2fLossAttribution(SubModule):
                 "unexplained_kwh": round(float(residual_kwh), 3),
                 "l_total_kwh": round(site_l_total_kwh, 3),
                 "e_expected_kwh": round(site_e_expected_kwh, 3),
+                "poa_source": poa_source,
                 "n_string_days_scored": len(wb_rows),
                 "n_string_days_skipped": len(closure_rows) - len(wb_rows),
             },
@@ -366,27 +409,47 @@ class M2fLossAttribution(SubModule):
             return None, f"provider_unavailable: {err}"
 
     @staticmethod
-    def _iter_string_days(df: pd.DataFrame):
-        """Yield (string_id, wb_id, day, group, pv_label) per string per hari.
+    def _iter_string_days(df: pd.DataFrame, empty_pv_map: Dict[str, List[int]]):
+        """Yield (string_id, wb_id, day, group, power_col) per string per hari.
 
         ``group`` ber-index DatetimeIndex terurut, siap dipakai provider POA.
+        ``power_col`` adalah nama kolom daya yang sebenarnya di ``df``;
+        ``string_id`` memakai label PV yang sudah dinormalisasi (``PV5``)
+        supaya cocok dengan ``pv_string`` yang ditulis detektor m2b, walau
+        kolom aslinya beda konvensi huruf.
+
+        Slot PV yang terdaftar di ``empty_pv_map`` dilewati. Huawei melaporkan
+        0 V / 0 A -- BUKAN NaN -- untuk input MPPT yang tidak terpasang, jadi
+        penjaga all-NaN di bawah tidak pernah menangkapnya. Tanpa filter ini
+        tiap slot hantu mendapat E_expected satu string penuh melawan aktual
+        ~0: rugi 100% palsu yang menggelembungkan E_expected site, waterfall,
+        residual Pareto, dan n_strings di M2f_BifacialCalib. Ketiga detektor
+        m2b sudah menyaring hal yang sama lewat core.load_empty_pv_map.
         """
         frame = df.copy()
         frame["_ts"] = pd.to_datetime(frame["Start Time"], errors="coerce")
         frame = frame.dropna(subset=["_ts", "Inverter_ID"])
-        power_cols = [c for c in frame.columns if str(c).endswith(" Power(kW)")]
+        power_cols: List[tuple] = []
+        for col in frame.columns:
+            match = PV_POWER_RE.search(str(col))
+            if match:
+                power_cols.append((col, int(match.group(1))))
         for inverter_id, inv_rows in frame.groupby("Inverter_ID", sort=True):
             wb_id = str(inverter_id)[:4].upper()
+            empty_slots = {
+                int(n) for n in empty_pv_map.get(str(inverter_id).upper(), [])
+            }
             for day, day_rows in inv_rows.groupby(inv_rows["_ts"].dt.normalize()):
                 ordered = day_rows.sort_values("_ts").set_index("_ts")
-                for col in power_cols:
-                    pv_label = str(col).replace(" Power(kW)", "")
+                for col, pv_n in power_cols:
+                    if pv_n in empty_slots:
+                        continue
                     if ordered[col].notna().sum() == 0:
                         continue
                     yield (
-                        f"{inverter_id}-{pv_label}",
+                        f"{inverter_id}-PV{pv_n}",
                         wb_id,
                         pd.Timestamp(day),
                         ordered,
-                        pv_label,
+                        col,
                     )
