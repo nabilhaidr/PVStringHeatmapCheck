@@ -348,10 +348,19 @@ m2f:
   poa_coverage_min_pct: 80.0
   # POA source yang dipakai menyaring TimeseriesDeficit gabungan dari 3
   # detektor m2b sebelum diklaim ke dc_cable_fault (lihat
-  # reduce_deficit_frames). Nilainya HARUS salah satu identifier di
-  # poa.sources_to_emit di atas -- itulah yang ditulis detektor m2b ke kolom
-  # poa_source. Source yang tidak cocok dengan frame manapun diperlakukan
-  # sama dengan "tidak ada frame": dc_cable_fault tetap None, bukan 0.0.
+  # reduce_deficit_frames).
+  #
+  # KENDALA: nilainya HARUS salah satu source identifier milik POAProvider
+  # (pv_pipeline/poa/provider.py -> ALL_SOURCES), yaitu persis salah satu dari
+  # poa.sources_to_emit di atas: pyranometer_per_ws | pyranometer_avg |
+  # pvlib_clearsky_ineichen | pvlib_clearsky_simplified_solis |
+  # pvlib_clearsky_haurwitz. Itulah nilai yang ditulis detektor m2b ke kolom
+  # poa_source tiap frame defisit. Nama karangan seperti "pyranometer" TIDAK
+  # cocok dengan frame manapun.
+  #
+  # Source yang tidak cocok diperlakukan sama dengan "tidak ada frame":
+  # dc_cable_fault tetap None ("tidak pernah diukur"), bukan 0.0 ("diukur,
+  # aman") -- supaya salah ketik di sini tidak menyamar jadi laporan bersih.
   poa_source: "pyranometer_per_ws"
   # Residual di atas ambang ini memicu finding INFO "weak_attribution".
   # Residual besar TIDAK berarti bug di v1: unexplained menyerap shading,

@@ -147,14 +147,34 @@ def _mk_finding(sub_module, sev=Severity.HIGH, inv="WB05-INV01", pv="PV3"):
 
 
 def test_default_submodule_to_cfg_key_covers_all_detectors():
-    """Mapping harus include 8 detector aktif (M2b x4 + M2_iforest + M2a x3)."""
+    """Mapping harus include 9 submodule: 8 detector + 1 mesin atribusi.
+
+    Delapan detector (M2b x4 + M2_iforest + M2a x3) MENGHASILKAN finding dari
+    data mentah. ``M2f_loss_attribution`` BUKAN detector: ia mengonsumsi
+    keluaran detector (deficit_frames dari tiga detektor M2b, p_loss bulanan
+    dari M2a_soiling) lalu mengatribusikan rugi energi ke kategori penyebab.
+    Ia terdaftar di peta yang sama karena filter_findings_by_exclude_flag
+    bekerja atas NAMA submodule, bukan atas jenisnya.
+
+    Entri M2f itu no-op hari ini: section `m2f` di config/m2_config.yaml tidak
+    menyetel `exclude_from_findings_sheet`, jadi filter_findings_by_exclude_flag
+    (pv_pipeline/core.py:184) tidak pernah bertindak atasnya. Didaftarkan demi
+    konsistensi, dan supaya mekanisme exclude langsung berfungsi bila nanti ada
+    yang membutuhkannya.
+
+    Kesetaraan set PERSIS di bawah disengaja: tiap anggota baru harus menjadi
+    tindakan sadar, bukan menyelinap masuk.
+    """
     from pv_pipeline.core import DEFAULT_SUBMODULE_TO_CFG_KEY
-    expected = {
+    expected_detectors = {
         "M2_iforest", "M2a_shading", "M2a_low_irradiance", "M2a_soiling",
         "M2b_peer_zscore", "M2b_open_circuit", "M2b_ground_fault",
         "M2b_mppt_ratio",
     }
+    expected_attribution = {"M2f_loss_attribution"}
+    expected = expected_detectors | expected_attribution
     assert set(DEFAULT_SUBMODULE_TO_CFG_KEY.keys()) == expected
+    assert DEFAULT_SUBMODULE_TO_CFG_KEY["M2f_loss_attribution"] == "m2f"
     # iforest -> m2_iforest cfg key
     assert DEFAULT_SUBMODULE_TO_CFG_KEY["M2_iforest"] == "m2_iforest"
 

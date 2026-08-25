@@ -135,6 +135,13 @@ DEFAULT_SUBMODULE_TO_CFG_KEY: Dict[str, str] = {
     "M2b_open_circuit":   "m2b_open_circuit",
     "M2b_ground_fault":   "m2b_ground_fault",
     "M2b_mppt_ratio":     "m2b_mppt_ratio",
+    # M2f bukan detector: ia mesin atribusi rugi yang MENGONSUMSI keluaran
+    # detector. Entri ini no-op hari ini -- section `m2f` di
+    # config/m2_config.yaml tidak menyetel `exclude_from_findings_sheet`, jadi
+    # filter_findings_by_exclude_flag (baris ~184) tidak pernah menyentuhnya.
+    # Didaftarkan demi konsistensi, dan supaya mekanisme exclude langsung
+    # berfungsi bila nanti ada yang membutuhkannya.
+    "M2f_loss_attribution": "m2f",
 }
 
 
