@@ -4,19 +4,30 @@
 **Status:** Disetujui untuk perencanaan implementasi
 **Lokasi output:** `outputs/` (workbook + PNG)
 
-> **Catatan status (2026-08-25):** Task 1-8 dari
-> `docs/superpowers/plans/2026-08-20-m2f-loss-attribution.md` sudah shipped
-> dan lulus tes (`pv_pipeline/m2f/ledger.py`, `baseline.py`, `deficit.py`,
-> `estimators.py`, `pareto.py`, `plots.py`, plus perubahan aditif di
-> `peer_zscore.py`/`open_circuit.py`/`mppt_ratio.py`). Dokumen ini sudah
-> disinkronkan ke kode yang shipped, termasuk beberapa koreksi yang
-> ditemukan review setelah draft desain awal ini (`ground_fault` dikeluarkan,
-> formula soiling, dsb -- lihat bagian terkait di bawah). **Task 9
-> (`pv_pipeline/m2f/report.py`, orchestrator) BELUM dikerjakan**, tertunda
-> menunggu `raw data input/PV Module Temperature PLTS IKN.xlsx`: tanpa
-> berkas itu `CellTempProvider` raise `FileNotFoundError`, yang akan membuat
-> tes orchestrator gagal, atau -- lebih berbahaya -- lulus vakum lewat jalur
-> penanganan-kegagalan-provider tanpa benar-benar menguji closure.
+> **Catatan status (2026-08-26):** Task 1-9 dari
+> `docs/superpowers/plans/2026-08-20-m2f-loss-attribution.md` seluruhnya
+> sudah shipped dan lulus tes (commit `2e83b36`, `3b0504b`, `955dc4a`).
+> `pv_pipeline/m2f/report.py` ada, `M2fLossAttribution` terdaftar di
+> `DEFAULT_SUBMODULE_TO_CFG_KEY` (`pv_pipeline/core.py`), dan section `m2f`
+> sudah ada di `config/m2_config.yaml`.
+>
+> Blocker Tcell yang disebut catatan lama TIDAK hilang karena berkasnya
+> datang -- `raw data input/PV Module Temperature PLTS IKN.xlsx` masih tidak
+> ada di working tree. Ia diselesaikan dengan cara lain: `_load_providers`
+> di-monkeypatch di `tests/unit/test_m2f_report.py` supaya tes menembus jalur
+> ledger sungguhan, bukan lulus vakum lewat jalur `provider_unavailable`.
+> Ini keputusan owner yang disengaja, bukan celah yang kebetulan menutup --
+> kode produksi TIDAK punya cabang khusus tes. Konsekuensinya jujur dan harus
+> dipahami: **selama tidak ada berkas POA maupun Tcell nyata di tree, M2f
+> melewati SETIAP string** dengan `skipped_reason="poa_or_tcell_missing"`
+> pada cakupan 0,0% -- itu hasil yang BENAR (membuat kekosongan data
+> terlihat, alih-alih menyamarkannya sebagai rugi nol), tapi artinya modul
+> ini belum menghasilkan satu angka pun sampai berkas pengukuran nyata tiba.
+>
+> Review sebelum merge menutup tiga cacat batas-input di `report.py`
+> (`955dc4a`) -- lihat "Penanganan kegagalan" di bawah. Satu follow-up
+> didefer: `get_tcell` masih memakai `source="auto"` -- lihat "Asumsi dan
+> risiko terbuka".
 
 ## Tujuan
 
@@ -220,9 +231,9 @@ tidak melipatgandakan energinya) sebelum diklaim ke ledger.
                        # garis 80%, vital-few
       plots.py        # build_waterfall_table (tabel, BUKAN di pareto.py)
                        # + figure waterfall + figure Pareto
-      report.py       # xlsx multi-sheet via pola M2Engine.write_xlsx_multi
-                       # -- lihat catatan status di akhir dokumen ini, belum
-                       # dikerjakan
+      report.py       # orchestrator M2fLossAttribution(SubModule): ledger per
+                       # (string, hari), xlsx multi-sheet via pola
+                       # M2Engine.write_xlsx_multi
 
 ## Model data hasil
 
@@ -291,9 +302,30 @@ Section `m2f` baru di `config/m2_config.yaml`:
 - `enabled` (default `false`, opt-in mengikuti pola detektor lain)
 - `attribution_order` -- daftar kategori; eksplisit supaya urutan prioritas
   dapat diaudit dan diuji, bukan tersembunyi di kode
-- `bifacial_gain_per_wb` -- hasil kalibrasi
-- `clearsky_kt_min` -- ambang hari clear-sky untuk kalibrasi
+- `bifacial_gain_per_wb` -- hasil kalibrasi, kosong = gain 1.0
+- `poa_coverage_min_pct` (default `80.0`) -- ambang cakupan POA/Tcell untuk
+  memproses satu (string, hari); di bawah ini string-hari itu di-skip dengan
+  `skipped_reason="poa_or_tcell_missing"` alih-alih diam-diam diisi 0 di
+  timestamp yang bolong
+- `poa_source` (default `"pyranometer_per_ws"`) -- source POA yang dipakai
+  eksplisit (bukan `"auto"`) untuk `get_poa`, dan untuk menyaring frame
+  defisit gabungan 3 detektor m2b sebelum diklaim ke `dc_cable_fault`.
+  Nilainya wajib salah satu source identifier `POAProvider.ALL_SOURCES`
+  (`pv_pipeline/poa/provider.py`)
 - `residual_warn_pct` -- ambang residual yang memicu finding INFO
+- `deficit_frames` -- list `pd.DataFrame`, gabungan `self.deficit_frames` dari
+  `peer_zscore`/`open_circuit`/`mppt_ratio`; kosong/`None` berarti
+  `dc_cable_fault` TIDAK PERNAH diklaim (tetap `None`, bukan `0.0`)
+- `p_loss_by_month` -- fraksi rugi soiling per bulan (`YYYY-MM -> 0..1`) dari
+  artifact `M2aSoiling`; bulan yang absen dari dict ini berarti soiling TIDAK
+  PERNAH diklaim untuk bulan itu
+
+`clearsky_kt_min`, yang disebut draft desain awal dokumen ini, tidak pernah
+dibaca `report.py`: kalibrasi bifacial (`calibrate_bifacial_gain`, di
+`baseline.py`) dipanggil terpisah dari `run()` atas data yang sudah disaring
+pemanggilnya sendiri ke hari clear-sky, bukan lewat threshold di config. Key
+itu karena itu dibuang dari `config/m2_config.yaml` -- tidak ada kode yang
+membacanya.
 
 ## Penanganan kegagalan
 
@@ -303,6 +335,45 @@ Section `m2f` baru di `config/m2_config.yaml`:
   dan kontribusinya jatuh ke `unexplained`, konsisten dengan perlakuan M2c/M2d.
 - Residual melebihi `residual_warn_pct`: emit `M2Finding` severity INFO dengan
   `fault_type="weak_attribution"`. Ini metrik kualitas, bukan kegagalan.
+
+**Tiga cacat batas-input ditemukan review sebelum merge dan ditutup di
+`955dc4a`.** Ketiganya masuk kategori yang sama: energi salah secara senyap,
+lolos dari `assert_closure` karena closure hanya menegakkan bahwa klaim +
+residual = `L_total` -- ia tidak tahu bila `L_total` itu sendiri sudah salah
+dihitung sejak awal.
+
+- **Slot PV kosong.** `_iter_string_days` sekarang konsultasi
+  `core.load_empty_pv_map` sebelum meng-yield satu (string, hari). Huawei
+  melaporkan **0 V / 0 A -- bukan NaN** -- pada input MPPT yang tidak
+  terpasang, jadi penjaga all-NaN yang lama tidak pernah menyala untuk slot
+  hantu. Tanpa filter ini tiap slot kosong mendapat `E_expected` satu string
+  penuh melawan aktual ~0: rugi 100% palsu yang menggelembungkan
+  `E_expected` site, waterfall, residual Pareto, dan `n_strings` di
+  `M2f_BifacialCalib`.
+- **Klasifikasi DOWN.** `_down_mask` sekarang memakai ulang
+  `availability._classify_status` dan hanya mengklaim timestamp yang
+  hasilnya `"DOWN"`. Sebelumnya `~on_grid` menyapu status UNKNOWN dan
+  TRANSITIONAL ke dalam DOWN juga -- dan `transitional_keywords` memuat
+  `"no sunlight"`, status batas fajar/senja yang sah, bukan outage. Karena
+  `availability_outage` mengklaim paling dulu dan mengambil seluruh sisa
+  ledger pada intervalnya, kesalahan ini akan melaparkan `dc_cable_fault` dan
+  `soiling` serta menggeser seluruh waterfall.
+- **`poa_source` implisit.** `get_poa` sekarang dipanggil dengan
+  `source=poa_source` dari config, bukan default `"auto"`. Rantai fallback
+  `"auto"` berakhir di clear-sky pvlib, sehingga irradiance MODEL diam-diam
+  menggantikan pengukuran yang hilang dan `poa_coverage_pct` bisa melaporkan
+  100,0% pada hari tanpa satu pun pembacaan nyata -- gate cakupan di atas
+  tidak pernah menyala padahal seharusnya. `poa_source` yang benar-benar
+  dipakai sekarang direkam sebagai kolom di `M2f_Closure`.
+
+**Follow-up yang didefer, bukan ditutup:** `get_tcell` masih memakai
+`source="auto"` -- lubang yang sama kelasnya dengan `poa_source` di atas,
+tapi lebih sempit. Rantai fallback `"auto"`-nya berakhir di Tcell model SAPM,
+dan SAPM sendiri butuh POA + suhu ambient + kecepatan angin lalu mengembalikan
+NaN bila salah satu tidak ada -- karena tidak ada berkas cuaca di tree hari
+ini, gate cakupan tetap menyala dengan benar untuk sekarang. Lubangnya baru
+terbuka bila berkas cuaca datang sementara Tcell terukur belum. Rekomendasi:
+`tcell_source` yang dapat dikonfigurasi, simetris dengan `poa_source`.
 
 ## Strategi pengujian
 
@@ -357,6 +428,17 @@ Tes menguji maksud, bukan sekadar perilaku (Rule 9).
 
 ## Asumsi dan risiko terbuka
 
+Seluruh Task 1-9 sudah shipped, tapi itu berarti kodenya siap dijalankan --
+bukan bahwa angkanya siap dipakai. Workbook belum layak untuk keputusan
+biaya sampai risiko di bawah ditutup dengan data nyata.
+
+- **Belum ada satu angka pun.** Tanpa berkas POA/Tcell nyata di
+  `raw data input/`, M2f melewati seluruh string (`poa_or_tcell_missing`,
+  cakupan 0,0%). Ini bukan bug -- lihat "Catatan status" di atas -- tapi
+  berarti `M2f_Waterfall`/`M2f_Pareto` kosong sampai berkas itu tiba.
+- **`get_tcell` masih `source="auto"`.** Follow-up yang didefer, dijelaskan
+  di "Penanganan kegagalan" -- rekomendasi `tcell_source` yang dapat
+  dikonfigurasi, simetris dengan `poa_source`.
 - **Gain bifacial belum terverifikasi.** Besarannya baru dapat dikalibrasi
   saat run pertama dengan data POA nyata. Bila `L_total` string sehat tetap
   jauh dari nol setelah kalibrasi, baseline perlu ditinjau ulang sebelum

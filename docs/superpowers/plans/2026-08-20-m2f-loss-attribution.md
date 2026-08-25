@@ -10,19 +10,26 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-11-m2f-loss-attribution-design.md`
 
-> **Status (2026-08-25):** Task 1-8 sudah shipped dan lulus tes
+> **Status (2026-08-26):** Task 1-9 SELURUHNYA sudah shipped dan lulus tes
 > (`pv_pipeline/m2f/ledger.py`, `baseline.py`, `deficit.py`, `estimators.py`,
-> `pareto.py`, `plots.py`, plus perubahan aditif di `peer_zscore.py`,
-> `open_circuit.py`, `mppt_ratio.py`). Dokumen ini sudah disinkronkan ke kode
-> yang shipped -- termasuk beberapa defek yang ditemukan review setelah draft
-> awal tiap task (ditandai catatan "2026-08-25" di tiap task terkait). **Task
-> 9 (`report.py`, orchestrator) BELUM dikerjakan** dan tertunda menunggu
-> `raw data input/PV Module Temperature PLTS IKN.xlsx`: tanpa berkas itu,
-> `CellTempProvider` raise `FileNotFoundError`, yang akan membuat tes Task 9
-> gagal -- atau, lebih berbahaya, lulus VAKUM lewat jalur
-> `provider_unavailable` tanpa benar-benar menguji closure. Lihat catatan di
-> kepala Task 9 untuk detail dan lima kendala tambahan hasil review yang
-> harus dipenuhi implementasi itu.
+> `pareto.py`, `plots.py`, `report.py`, plus perubahan aditif di
+> `peer_zscore.py`, `open_circuit.py`, `mppt_ratio.py`). `M2fLossAttribution`
+> terdaftar di `DEFAULT_SUBMODULE_TO_CFG_KEY` (`pv_pipeline/core.py`) dan
+> section `m2f` sudah ada di `config/m2_config.yaml`. Commit: `2e83b36`
+> (orchestrator, config, workbook), `3b0504b` (registrasi
+> `DEFAULT_SUBMODULE_TO_CFG_KEY`), `955dc4a` (tiga perbaikan batas-input hasil
+> review).
+>
+> Blocker Tcell yang disebut catatan lama TIDAK hilang karena berkasnya
+> datang -- `raw data input/PV Module Temperature PLTS IKN.xlsx` masih tidak
+> ada di working tree. Ia diselesaikan dengan `_load_providers` di-monkeypatch
+> di tes (keputusan owner, bukan celah -- kode produksi tidak punya cabang
+> khusus tes), dan konsekuensinya jujur: **tanpa berkas POA/Tcell nyata, M2f
+> melewati SETIAP string** dengan `poa_or_tcell_missing` pada cakupan 0,0%.
+> Detail lengkap, tiga cacat batas-input yang ditutup review (`955dc4a`), tiga
+> deviasi terotorisasi dari rencana Task 9 di bawah, dan satu follow-up yang
+> didefer (`tcell_source`) ada di kotak status kepala Task 9 dan di "Catatan
+> verifikasi setelah rencana selesai" di akhir dokumen ini.
 
 ## Global Constraints
 
@@ -2088,28 +2095,88 @@ git commit -m "feat(m2f): grafik waterfall dan diagram Pareto"
 
 ### Task 9: Orchestrator M2fLossAttribution, config, dan workbook
 
-> **STATUS (2026-08-25): BELUM DIKERJAKAN.** Task 1-8 sudah shipped dan
-> ter-commit (`pv_pipeline/m2f/ledger.py`, `baseline.py`, `deficit.py`,
-> `estimators.py`, `pareto.py`, `plots.py` semuanya ada dan lulus tes).
-> `report.py` sengaja ditunda: `M2fLossAttribution._load_providers` akan
-> memanggil `CellTempProvider.from_geometry_yaml(...)`, dan `CellTempProvider`
-> **raise `FileNotFoundError`** tanpa berkas
-> `raw data input/PV Module Temperature PLTS IKN.xlsx` -- yang tidak ada di
-> working tree saat catatan ini ditulis. Tanpa berkas itu, tes Step 1 di
-> bawah akan GAGAL (bukan lulus) pada setiap kasus yang seharusnya menembus
-> `_load_providers`, ATAU -- lebih berbahaya -- lulus VAKUM lewat jalur
-> `provider_unavailable` (seluruh string tercatat `skipped_reason`, closure
-> "berlaku" karena tidak ada baris yang dicek sama sekali). Penulis Task 9
-> WAJIB memverifikasi berkas itu tersedia (atau mem-mock `CellTempProvider`
-> secara eksplisit di tes) sebelum mempercayai hasil PASS/FAIL suite ini.
+> **STATUS (2026-08-26): SHIPPED.** `pv_pipeline/m2f/report.py` ada, lulus
+> tes, dan `M2fLossAttribution` terdaftar di `DEFAULT_SUBMODULE_TO_CFG_KEY`
+> (`pv_pipeline/core.py`) serta section `m2f` di `config/m2_config.yaml`.
+> Commit: `2e83b36` (orchestrator awal), `3b0504b` (registrasi), `955dc4a`
+> (tiga perbaikan batas-input hasil review, lihat di bawah).
 >
-> Bagian di bawah ini masih berupa RENCANA (belum kode yang shipped) --
-> beda dari Task 1-8 di atas, yang blok kodenya sudah diperbarui mengikuti
-> hasil review dan boleh disalin langsung. Rencana Task 9 di bawah SUDAH
-> dikoreksi mengikuti review yang sama terhadap draft-draft sebelumnya, dan
-> memuat lima kendala tambahan (lihat kotak "Kendala WAJIB" di bawah) yang
-> tidak ada di draft plan yang lebih tua -- ini poin paling penting di
-> seluruh dokumen ini karena kode ini akan benar-benar ditulis dari sini.
+> **Blocker `CellTempProvider.from_geometry_yaml` tidak hilang karena
+> berkasnya datang.** `raw data input/PV Module Temperature PLTS IKN.xlsx`
+> masih tidak ada di working tree. Jalan keluarnya: `_load_providers`
+> di-monkeypatch di `tests/unit/test_m2f_report.py` (lihat `_install_providers`
+> di kepala berkas itu) supaya suite tes menembus jalur ledger sungguhan,
+> bukan lulus vakum lewat jalur `provider_unavailable`. Ini keputusan owner
+> yang disengaja untuk tes -- kode produksi `_load_providers` di bawah TIDAK
+> punya cabang khusus tes, tetap raise ke `provider_unavailable` di jalur
+> nyata. Konsekuensinya jujur: **tanpa berkas POA/Tcell nyata di tree, M2f
+> melewati SETIAP string** dengan `skipped_reason="poa_or_tcell_missing"`
+> pada cakupan 0,0% -- hasil yang BENAR (kekosongan data jadi terlihat,
+> bukan tersamar jadi rugi nol), tapi berarti modul ini belum menghasilkan
+> satu angka pun sampai berkas itu tiba.
+>
+> **Bagian "RENCANA" di bawah (kerangka kode, kendala WAJIB, langkah 1-8,
+> Step 1-6) adalah draft SEBELUM implementasi final, dipertahankan sebagai
+> catatan sejarah keputusan.** `pv_pipeline/m2f/report.py` yang shipped
+> adalah kebenaran; draft di bawah benar pada hampir semua hal tapi berbeda
+> pada tiga keputusan yang diotorisasi review, dan review pra-merge menutup
+> tiga cacat lagi yang draft ini tidak antisipasi:
+>
+> - **Tiga deviasi terotorisasi dari rencana:**
+>   1. Pengelompokan defisit per string (`f"{inverter_id}-{pv_string}"`)
+>      terjadi di `_index_deficit_frames` (`report.py`), BUKAN di dalam
+>      `deficit_to_kwh`/`reduce_deficit_frames` seperti tersirat di "Isi
+>      bagian bertanda" langkah 5 di bawah. `reduce_deficit_frames` HANYA
+>      menyaring kolom `poa_source`, lalu mengambil maksimum elemen-per-elemen
+>      lintas frame -- ia tidak tahu apa-apa soal `inverter_id`/`pv_string`.
+>      Tanpa pengelompokan eksplisit di `report.py` sebelum reduce, defisit
+>      satu string akan terklaim ke string LAIN pada timestamp yang sama.
+>   2. Default config `poa_source` adalah `"pyranometer_per_ws"`, bukan
+>      `"pyranometer"` seperti di draft yaml Step 4 di bawah. `"pyranometer"`
+>      tidak cocok dengan identifier apa pun yang ditulis detektor m2b ke
+>      kolom `poa_source` frame defisit (lihat `POAProvider.ALL_SOURCES`) --
+>      dipakai apa adanya, ia akan membuat `dc_cable_fault` tetap `None`
+>      selamanya walau `deficit_frames` terisi.
+>   3. `clearsky_kt_min` DIBUANG dari config, bukan diisi `0.9` seperti draft
+>      yaml Step 4. Tidak ada kode di `report.py` yang membacanya -- kalibrasi
+>      bifacial (`calibrate_bifacial_gain`) dipanggil terpisah dari `run()`
+>      atas data yang sudah disaring ke hari clear-sky oleh pemanggilnya
+>      sendiri.
+> - **Tiga cacat batas-input ditutup review, `955dc4a`** -- ketiganya
+>   menghasilkan energi salah secara senyap, jenis kesalahan yang lolos dari
+>   `assert_closure` karena closure hanya menegakkan klaim + residual =
+>   `L_total`, bukan bahwa `L_total` itu sendiri dihitung dari input yang
+>   benar:
+>   1. `_iter_string_days` sekarang konsultasi `core.load_empty_pv_map`
+>      sebelum yield. Huawei melaporkan 0 V / 0 A -- bukan NaN -- untuk slot
+>      MPPT kosong, jadi penjaga all-NaN draft lama tidak pernah menyala:
+>      tiap slot hantu akan dinilai kehilangan satu string penuh energi.
+>   2. `_down_mask` sekarang memakai ulang `availability._classify_status`
+>      dan hanya mengklaim status `"DOWN"`, bukan `~on_grid` seperti tersirat
+>      langkah 5 di bawah. `~on_grid` menyapu UNKNOWN dan TRANSITIONAL
+>      (termasuk `"no sunlight"`, status batas fajar/senja yang sah) ke
+>      dalam outage juga, dan karena `availability_outage` mengklaim paling
+>      dulu, itu akan melaparkan `dc_cable_fault` dan `soiling`.
+>   3. `get_poa` sekarang dipanggil dengan `source=poa_source` eksplisit,
+>      bukan default `"auto"` seperti draft langkah 4 di bawah. Rantai
+>      `"auto"` berakhir di clear-sky pvlib -- irradiance MODEL diam-diam
+>      mengisi pengukuran yang hilang dan `poa_coverage_pct` bisa melaporkan
+>      100% pada hari tanpa satu pun pembacaan nyata. `poa_source` yang
+>      benar-benar dipakai sekarang direkam sebagai kolom baru di
+>      `M2f_Closure`.
+> - **Follow-up yang didefer, bukan ditutup:** `get_tcell` masih
+>   `source="auto"`. Lubang sekelas poin 3 di atas tapi lebih sempit -- SAPM
+>   (ujung rantai fallback Tcell) butuh POA + ambient + angin dan
+>   mengembalikan NaN tanpa itu, jadi gate cakupan masih menyala dengan benar
+>   selama tidak ada berkas cuaca di tree. Lubangnya baru terbuka bila berkas
+>   cuaca datang sementara Tcell terukur belum. Rekomendasi: `tcell_source`
+>   yang dapat dikonfigurasi, simetris dengan `poa_source`.
+>
+> `CLOSURE_COLUMNS` yang shipped juga bertambah satu kolom dari draft di
+> bawah: `poa_source` (poin defek #3 di atas). `poa_coverage_pct` dan
+> `tcell_coverage_pct` sudah ada di draft sejak awal (kendala WAJIB #4) dan
+> tidak berubah -- lihat kode aktual di `pv_pipeline/m2f/report.py` untuk
+> skema final, bukan blok kode di bawah.
 
 Menyatukan semuanya menjadi `SubModule` yang bisa dijalankan `M2Engine`.
 
@@ -2126,7 +2193,7 @@ Menyatukan semuanya menjadi `SubModule` yang bisa dijalankan `M2Engine`.
   - `M2fLossAttribution(SubModule)` dengan `name = "M2f_loss_attribution"`
   - `M2fLossAttribution.run(combined_df: pd.DataFrame, config: dict) -> List[M2Finding]`
   - `M2fLossAttribution._load_providers(config) -> Tuple[Optional[dict], Optional[str]]`
-  - `M2fLossAttribution._iter_string_days(df) -> Iterator[Tuple[str, str, pd.Timestamp, pd.DataFrame, str]]`
+  - `M2fLossAttribution._iter_string_days(df, empty_pv_map) -> Iterator[Tuple[str, str, pd.Timestamp, pd.DataFrame, str]]` (parameter `empty_pv_map` ditambah shipped -- lihat defek batas-input #1 di kotak status di atas)
   - `PER_STRING_COLUMNS`, `CLOSURE_COLUMNS`, `BIFACIAL_COLUMNS`
   - `artifacts`: `M2f_Waterfall`, `M2f_Pareto`, `M2f_PerString`, `M2f_Closure`, `M2f_BifacialCalib`
 
@@ -2335,7 +2402,7 @@ PER_STRING_COLUMNS: List[str] = ["string_id", "day", "category", "loss_kwh"]
 CLOSURE_COLUMNS: List[str] = [
     "string_id", "day", "l_total_kwh", "claimed_kwh",
     "residual_kwh", "residual_pct", "poa_coverage_pct", "tcell_coverage_pct",
-    "skipped_reason",
+    "poa_source", "skipped_reason",
 ]
 BIFACIAL_COLUMNS: List[str] = ["wb_id", "g_bifacial", "n_strings", "n_days"]
 
@@ -2456,7 +2523,7 @@ Isi bagian bertanda dengan urutan berikut (angka mengacu ke komentar
    - `ledger = LossLedger(string_id, day, e_exp.to_numpy(), e_act.to_numpy(), index=idx)` -- **`index=idx` WAJIB** (kendala #1); tanpanya `LossLedger.claim()` tidak punya acuan untuk memvalidasi `pd.Series` yang di-passing di langkah 5.
 5. Klaim berurutan `cfg["attribution_order"]`, lewati entri `"unexplained"`:
    - `availability_outage`: `down_mask` = baris yang kolom `Inverter status`-nya tidak mengandung kata kunci on-grid (gunakan `config["m2e"]["inverter_status_map"]["on_grid_keywords"]`, bandingkan lowercase substring). Selalu dipanggil -- kolom ini selalu ada di `combined_df`.
-   - `dc_cable_fault`: **Kendala #2** -- bila `deficit_frames` (dari `cfg.get("deficit_frames")`, list gabungan `self.deficit_frames` ketiga detektor m2b yang diteruskan pemanggil) kosong/`None`, **JANGAN panggil `claim_dc_cable_fault` sama sekali** untuk string manapun; kategori tetap `None`. Bila ada, panggil `reduce_deficit_frames(deficit_frames, poa_source=poa_source, index=idx, freq_hours=DEFAULT_FREQ_HOURS)` -- Series ini SUDAH di-reindex ke `idx` dan sudah mengambil MAKSIMUM lintas ketiga detektor (double-count-safe), tidak perlu filter `inverter_id`/`pv_string` manual lagi karena itu bagian dari `deficit_to_kwh` yang dipanggil di dalamnya per frame. Lalu `claim_dc_cable_fault(ledger, deficit_kwh=reduced)`.
+   - `dc_cable_fault`: **Kendala #2** -- bila `deficit_frames` (dari `cfg.get("deficit_frames")`, list gabungan `self.deficit_frames` ketiga detektor m2b yang diteruskan pemanggil) kosong/`None`, **JANGAN panggil `claim_dc_cable_fault` sama sekali** untuk string manapun; kategori tetap `None`. Bila ada, panggil `reduce_deficit_frames(deficit_frames, poa_source=poa_source, index=idx, freq_hours=DEFAULT_FREQ_HOURS)` -- Series ini SUDAH di-reindex ke `idx` dan sudah mengambil MAKSIMUM lintas ketiga detektor (double-count-safe). **KOREKSI (2026-08-26, deviasi terotorisasi #1 -- lihat kotak status di atas):** klaim di atas bahwa filter `inverter_id`/`pv_string` "bagian dari `deficit_to_kwh`" SALAH. `reduce_deficit_frames` HANYA menyaring kolom `poa_source`; ia tidak tahu apa-apa soal `inverter_id`/`pv_string`. Filter per-string WAJIB terjadi di `report.py` SEBELUM memanggil `reduce_deficit_frames` -- kode shipped melakukannya lewat `_index_deficit_frames`, yang mengelompokkan frame per `f"{inverter_id}-{pv_string}"` terlebih dulu. Tanpa langkah ini, defisit satu string akan terklaim ke string lain pada timestamp yang sama. Lalu `claim_dc_cable_fault(ledger, deficit_kwh=reduced)`.
    - `soiling`: **Kendala #3** -- `month_key = day.strftime("%Y-%m")`; bila `month_key not in p_loss_by_month`, **JANGAN panggil `claim_soiling`**; kategori tetap `None`. Bila ada, `claim_soiling(ledger, p_loss=p_loss_by_month[month_key], e_expected_kwh_per_ts=e_exp.to_numpy())`.
 6. `ledger.assert_closure()`. Kumpulkan `ledger.totals()` ke akumulator site-level (merge per kategori: `None` hanya bertahan bila SEMUA string-hari yang diproses melaporkan `None` untuk kategori itu; kalau ada satu saja yang mengklaim, jumlahkan yang bukan `None` dan perlakukan `None` lain sebagai 0 kontribusi -- bukan gugurkan seluruh site jadi `None`) dan ke `per_string_rows`.
 7. Rakit artifact:
@@ -2493,7 +2560,10 @@ m2f:
   # WAJIB diisi setelah run pertama dengan data POA nyata; tanpa ini
   # E_expected under-estimate karena hanya memakai POA depan.
   bifacial_gain_per_wb: {}
-  clearsky_kt_min: 0.9
+  # KOREKSI (2026-08-26): `clearsky_kt_min` yang ada di draft ini sebelumnya
+  # DIBUANG di kode shipped -- tidak ada yang membacanya. Kalibrasi bifacial
+  # (`calibrate_bifacial_gain`) dipanggil terpisah dari `run()`, atas data
+  # yang sudah disaring ke hari clear-sky oleh pemanggilnya sendiri.
   # Ambang cakupan POA/Tcell (%) untuk memproses satu (string, hari). Di
   # bawah ini, string-hari itu di-skip dengan skipped_reason=
   # "poa_or_tcell_missing" alih-alih diam-diam diisi 0 di timestamp yang
@@ -2503,7 +2573,11 @@ m2f:
   # 3 detektor m2b sebelum diklaim ke dc_cable_fault (lihat
   # reduce_deficit_frames, Task 3). Harus konsisten dengan source yang
   # dipakai poa_provider.get_poa di atas.
-  poa_source: "pyranometer"
+  # KOREKSI (2026-08-26, deviasi terotorisasi #2): default shipped adalah
+  # "pyranometer_per_ws", bukan "pyranometer" di bawah -- "pyranometer"
+  # tidak cocok dengan identifier apa pun di POAProvider.ALL_SOURCES, jadi
+  # dipakai apa adanya ia akan membuat dc_cable_fault tetap None selamanya.
+  poa_source: "pyranometer_per_ws"
   # Residual di atas ambang ini memicu finding INFO "weak_attribution".
   # Residual besar TIDAK berarti bug di v1 -- lihat "Kendala WAJIB" #6.
   residual_warn_pct: 30.0
@@ -2533,24 +2607,21 @@ from pv_pipeline.m2f.report import M2fLossAttribution
 
 dan masukkan `"M2fLossAttribution"` ke `__all__`.
 
-- [ ] **Step 5: Jalankan tes M2f dan seluruh suite**
+- [ ] **Step 5: Jalankan tes M2f dan seluruh suite** -- SHIPPED (2026-08-26)
 
-Run: `python -m pytest tests/unit/test_m2f_report.py -v`
-Expected: PASS, 6 tes -- TAPI verifikasi dulu bahwa tes-tes ini benar-benar
-menembus jalur provider (bukan lolos vakum lewat `provider_unavailable`
-karena `raw data input/PV Module Temperature PLTS IKN.xlsx` hilang; lihat
-catatan blocker di kepala Task 9). Angka "6 tes" ini aspirasional dari draft
-di atas, bukan hasil run yang sudah diverifikasi -- `report.py` belum ada.
+`python -m pytest tests/unit/test_m2f_report.py -v` -> PASS, **38 tes** (bukan
+6 seperti angka aspirasional draft lama). `_load_providers` di-monkeypatch
+lewat `_install_providers` (lihat kotak status di kepala Task 9) supaya
+suite ini benar-benar menembus jalur ledger sungguhan, bukan lolos vakum
+lewat `provider_unavailable`; jalur `provider_unavailable` itu sendiri diuji
+terpisah dan eksplisit (`test_provider_unavailable_marks_every_string_skipped`,
+`test_load_providers_reports_error_instead_of_raising`) supaya cabangnya
+tetap tercakup.
 
-Run: `python -m pytest tests/ -q`
-Expected: PASS — seluruh suite existing tetap hijau. Baseline HEAD saat
-catatan ini ditulis (`b5bd9dc`, Task 1-8 shipped, Task 9 belum) adalah
-**956 tes** di `tests/unit/`; jumlah setelah Task 9 akan lebih besar dari
-itu (bukan "58 tes M2f dari baseline sebelum Task 1" seperti draft lama --
-angka itu sudah tidak akurat karena Task 1-8 sendiri menambah lebih dari 58
-tes lewat review berturut-turut; lihat jumlah tes per-task yang sudah
-dikoreksi di atas: ledger 20, baseline 10, deficit 14 + 2, estimators 17,
-pareto 8, plots 9 = 80 tes M2f dari Task 1-8 saja, di luar Task 9).
+`python -m pytest tests/unit/ -q` -> PASS, **997 tes** pada HEAD `955dc4a`
+(Task 1-9 seluruhnya shipped). Bukan "956 tes, Task 9 belum" seperti draft
+lama -- 997 adalah hasil setelah Task 9 dan ketiga perbaikan batas-input
+`955dc4a` ditambahkan, bukan proyeksi.
 
 - [ ] **Step 6: Commit**
 
@@ -2563,8 +2634,10 @@ git commit -m "feat(m2f): orchestrator M2fLossAttribution, config, dan workbook"
 
 ## Catatan verifikasi setelah rencana selesai
 
-Rencana ini menghasilkan modul yang lulus tes sintetis, tetapi **belum** terverifikasi terhadap data nyata. Sebelum angkanya dipakai untuk keputusan biaya, jalankan sekali dengan `raw data input/` terisi dan periksa:
+**Task 1-9 seluruhnya shipped** -- modul lulus 997 tes sintetis di `tests/unit/` pada HEAD `955dc4a`, tetapi **belum** terverifikasi terhadap data nyata, dan hari ini **belum menghasilkan satu angka pun**: tanpa berkas POA/Tcell nyata di `raw data input/`, setiap string dilewati dengan `poa_or_tcell_missing` pada cakupan 0,0% (lihat kotak status kepala Task 9). Workbook karena itu belum layak dipakai untuk keputusan biaya. Sebelum angkanya dipakai, jalankan sekali dengan `raw data input/` terisi dan periksa:
 
 1. **Hipotesis gain bifacial.** Jalankan `calibrate_bifacial_gain` atas string sehat di hari clear-sky, lalu isi `m2f.bifacial_gain_per_wb`. Bila hasilnya jauh dari 1.0 (mis. di atas 1,10 atau di bawah 0,95), baseline perlu ditinjau ulang sebelum waterfall dipakai — lihat spec bagian "Asumsi dan risiko terbuka".
 2. **Besar residual.** `unexplained` yang mendominasi Pareto berarti v1 belum cukup; itu argumen untuk menjalankan v2 (`shading`, `low_irradiance_eff`), bukan alasan menyembunyikan bucketnya.
 3. **Tilt WB01-WB02.** `config/site_geometry.yaml:28` hanya mengonfirmasi WB03-WB10 pada 10 derajat. Bila WB01-02 berbeda, `E_expected` untuk 49 inverter bias, dan gain bifacial hasil kalibrasi akan menyerap bias itu secara keliru.
+4. **Kalibrasi pyranometer belum diketahui.** Error POA mengalir langsung ke `E_expected`, penyebut seluruh persentase loss di waterfall. Belum ada verifikasi kalibrasi terhadap alat ukur referensi.
+5. **`tcell_source` belum ada -- follow-up yang didefer, bukan ditutup.** `get_tcell` masih `source="auto"`; gate cakupan menyala dengan benar hari ini karena SAPM (ujung rantai fallback) butuh berkas cuaca yang juga belum ada. Begitu berkas cuaca (ambient + angin) tiba sementara Tcell terukur belum, lubang yang sama kelasnya dengan `poa_source` (lihat kotak status kepala Task 9) akan terbuka tanpa terlihat. Tambahkan `tcell_source` yang dapat dikonfigurasi, simetris dengan `poa_source`, sebelum itu terjadi.
