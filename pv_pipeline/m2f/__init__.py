@@ -8,10 +8,12 @@ from pv_pipeline.m2f.ledger import (
     LOCKED_CATEGORIES,
     LossLedger,
 )
+from pv_pipeline.m2f.report import M2fLossAttribution
 
 __all__ = [
     "CLAIMABLE_CATEGORIES",
     "CLOSURE_TOLERANCE_KWH",
     "LOCKED_CATEGORIES",
     "LossLedger",
+    "M2fLossAttribution",
 ]

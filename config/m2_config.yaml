@@ -319,3 +319,51 @@ m2_iforest:
 m2a_shading:
   exclude_from_findings_sheet: true
   enabled: true                     # Opt-in feature flag (default OFF)
+# M2f Loss Attribution & Pareto (spec 2026-08-11).
+# Default OFF, opt-in mengikuti pola detektor lain.
+m2f:
+  enabled: false
+  # Urutan prioritas atribusi. Eksplisit di config supaya dapat diaudit dan
+  # diuji, bukan tersembunyi di kode. Shading WAJIB mendahului soiling (v2):
+  # SRR menyerap apa saja yang turun perlahan, jadi kalau dibalik, rugi
+  # shading diklaim sebagai rugi soiling dan ROI cleaning jadi overstated.
+  # ground_fault SENGAJA tidak ada di daftar ini -- lihat spec bagian
+  # "Ledger klaim dan urutan prioritas"; rugi ground_fault jatuh ke
+  # unexplained di v1.
+  attribution_order:
+    - availability_outage
+    - dc_cable_fault
+    - soiling
+    - unexplained
+  # Hasil kalibrasi dari string sehat pada hari clear-sky. Kosong = 1.0.
+  # WAJIB diisi setelah run pertama dengan data POA nyata; tanpa ini
+  # E_expected under-estimate karena hanya memakai POA depan.
+  bifacial_gain_per_wb: {}
+  clearsky_kt_min: 0.9
+  # Ambang cakupan POA/Tcell (%) untuk memproses satu (string, hari). Di
+  # bawah ini, string-hari itu di-skip dengan skipped_reason=
+  # "poa_or_tcell_missing" alih-alih diam-diam diisi 0 di timestamp yang
+  # bolong. Cakupan aktual tetap dicatat di M2f_Closure untuk string-hari
+  # yang LOLOS gate juga, supaya cakupan parsial terlihat di audit.
+  poa_coverage_min_pct: 80.0
+  # POA source yang dipakai menyaring TimeseriesDeficit gabungan dari 3
+  # detektor m2b sebelum diklaim ke dc_cable_fault (lihat
+  # reduce_deficit_frames). Nilainya HARUS salah satu identifier di
+  # poa.sources_to_emit di atas -- itulah yang ditulis detektor m2b ke kolom
+  # poa_source. Source yang tidak cocok dengan frame manapun diperlakukan
+  # sama dengan "tidak ada frame": dc_cable_fault tetap None, bukan 0.0.
+  poa_source: "pyranometer_per_ws"
+  # Residual di atas ambang ini memicu finding INFO "weak_attribution".
+  # Residual besar TIDAK berarti bug di v1: unexplained menyerap shading,
+  # low-irradiance, microcrack, bifacial dan ground-fault sekaligus.
+  residual_warn_pct: 30.0
+  # List pd.DataFrame -- gabungan self.deficit_frames dari instance
+  # peer_zscore/open_circuit/mppt_ratio yang sudah dijalankan pemanggil
+  # (notebook). None/kosong berarti dc_cable_fault TIDAK PERNAH diklaim
+  # (tetap None, bukan 0.0).
+  deficit_frames: null
+  # Fraksi rugi soiling per bulan (YYYY-MM -> 0..1), dari M2aSoiling artifact
+  # MonthlySoilingLoss.p_loss_pct / 100. Bulan yang absen dari dict ini
+  # berarti soiling TIDAK PERNAH diklaim untuk bulan itu (tetap None, bukan
+  # p_loss=0.0).
+  p_loss_by_month: {}
