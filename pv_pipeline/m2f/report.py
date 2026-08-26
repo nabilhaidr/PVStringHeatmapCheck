@@ -51,7 +51,7 @@ PER_STRING_COLUMNS: List[str] = ["string_id", "day", "category", "loss_kwh"]
 CLOSURE_COLUMNS: List[str] = [
     "string_id", "day", "l_total_kwh", "claimed_kwh",
     "residual_kwh", "residual_pct", "poa_coverage_pct", "tcell_coverage_pct",
-    "poa_source", "skipped_reason",
+    "poa_source", "tcell_source", "skipped_reason",
 ]
 BIFACIAL_COLUMNS: List[str] = ["wb_id", "g_bifacial", "n_strings", "n_days"]
 
@@ -107,6 +107,7 @@ def _skipped_closure_row(
     *,
     reason: str,
     poa_source: str,
+    tcell_source: str,
     poa_coverage_pct: float = _NAN,
     tcell_coverage_pct: float = _NAN,
 ) -> dict:
@@ -125,6 +126,7 @@ def _skipped_closure_row(
         "poa_coverage_pct": poa_coverage_pct,
         "tcell_coverage_pct": tcell_coverage_pct,
         "poa_source": poa_source,
+        "tcell_source": tcell_source,
         "skipped_reason": reason,
     }
 
@@ -165,6 +167,9 @@ class M2fLossAttribution(SubModule):
         p_loss_by_month: Dict[str, float] = dict(cfg.get("p_loss_by_month") or {})
         deficit_frames: Optional[List[pd.DataFrame]] = cfg.get("deficit_frames")
         poa_source: str = str(cfg.get("poa_source", "pyranometer_per_ws"))
+        # Default "measured_per_ws", BUKAN "auto": config yang lupa mengisi
+        # kunci ini tidak boleh diam-diam jatuh ke SAPM (Tcell MODEL).
+        tcell_source: str = str(cfg.get("tcell_source", "measured_per_ws"))
         coverage_min = float(cfg.get("poa_coverage_min_pct", 80.0)) / 100.0
         warn_pct = float(cfg.get("residual_warn_pct", 30.0))
         status_map: dict = (
@@ -204,6 +209,7 @@ class M2fLossAttribution(SubModule):
                 closure_rows.append(_skipped_closure_row(
                     string_id, day,
                     reason=provider_error, poa_source=poa_source,
+                    tcell_source=tcell_source,
                 ))
                 continue
 
@@ -218,13 +224,10 @@ class M2fLossAttribution(SubModule):
             # E_expected, menggelembungkan L_total, dan selisihnya jatuh ke
             # unexplained. Closure tetap lolos; angkanya saja yang salah.
             poa = providers["poa"].get_poa(idx, wb_id, source=poa_source)
-            # CATATAN: get_tcell masih memakai "auto", yang rantai fallbacknya
-            # berakhir di SAPM (Tcell MODEL, bukan terukur). Lubangnya lebih
-            # sempit daripada POA -- SAPM sendiri butuh berkas POA/ambient/
-            # angin dan mengembalikan NaN bila tidak ada, jadi gate cakupan di
-            # bawah tetap menyala saat data benar-benar kosong. Menjadikannya
-            # dapat dikonfigurasi setara poa_source adalah pekerjaan terpisah.
-            tcell = providers["tcell"].get_tcell(idx, wb_id)
+            # source=tcell_source EKSPLISIT, simetris dengan poa_source di atas
+            # -- default get_tcell adalah "auto", yang rantai fallbacknya
+            # berakhir di SAPM (Tcell MODEL, bukan terukur).
+            tcell = providers["tcell"].get_tcell(idx, wb_id, source=tcell_source)
             # Ambang cakupan, BUKAN isna().all(): cakupan sebagian lolos gate
             # "semua NaN", lalu compute_expected_energy_kwh mem-fillna(0.0)
             # tiap timestamp NaN -- E_expected menyusut diam-diam untuk jam
@@ -236,6 +239,7 @@ class M2fLossAttribution(SubModule):
                     string_id, day,
                     reason="poa_or_tcell_missing",
                     poa_source=poa_source,
+                    tcell_source=tcell_source,
                     poa_coverage_pct=poa_coverage * 100.0,
                     tcell_coverage_pct=tcell_coverage * 100.0,
                 ))
@@ -313,6 +317,7 @@ class M2fLossAttribution(SubModule):
                 # Dicatat supaya baseline yang berdiri di atas irradiance
                 # MODEL tidak tersaji seolah-olah hasil pengukuran.
                 "poa_source": poa_source,
+                "tcell_source": tcell_source,
                 "skipped_reason": None,
             })
 

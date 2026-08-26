@@ -74,14 +74,26 @@ class _ConstantPOA:
 
 
 class _ConstantTcell:
+    """Tcell konstan penuh-cakupan.
+
+    Merekam tiap ``source`` yang diminta di ``requested_sources``, sama
+    seperti ``_ConstantPOA``, supaya tes dapat membuktikan orchestrator
+    tidak diam-diam jatuh ke ``source="auto"``.
+    """
+
+    def __init__(self, value: float = TCELL_C):
+        self.value = value
+        self.requested_sources = []
+
     def get_tcell(self, timestamps, wb_id, source="auto"):
-        return pd.Series(TCELL_C, index=pd.DatetimeIndex(timestamps), dtype=float)
+        self.requested_sources.append(source)
+        return pd.Series(self.value, index=pd.DatetimeIndex(timestamps), dtype=float)
 
 
-def _install_providers(monkeypatch, poa=None):
+def _install_providers(monkeypatch, poa=None, tcell=None):
     providers = {
         "poa": poa if poa is not None else _ConstantPOA(),
-        "tcell": _ConstantTcell(),
+        "tcell": tcell if tcell is not None else _ConstantTcell(),
         "spec": PanelSpec.from_yaml(PANEL_SPEC_PATH),
     }
     monkeypatch.setattr(
@@ -457,6 +469,63 @@ def test_closure_records_the_poa_source_actually_used(stubbed):
     closure = sm.artifacts["M2f_Closure"]
     assert "poa_source" in closure.columns
     assert set(closure["poa_source"]) == {"pvlib_clearsky_ineichen"}
+
+
+# --------------------------------------------------------------------------
+# Sumber Tcell (bukan "auto")
+# --------------------------------------------------------------------------
+
+def test_tcell_is_requested_with_the_configured_source_not_auto(monkeypatch):
+    # WHY: default get_tcell adalah "auto", yang rantai fallbacknya berakhir
+    # di SAPM (Tcell MODEL, bukan terukur). tcell_coverage_pct lalu terbaca
+    # penuh walau tidak ada satu pun pembacaan sensor Tcell, dan baseline
+    # absolut M2f diam-diam berdiri di atas suhu model.
+    tcell = _ConstantTcell()
+    _install_providers(monkeypatch, tcell=tcell)
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(tcell_source="measured_overall_avg"))
+    assert tcell.requested_sources, "get_tcell tidak pernah dipanggil"
+    assert set(tcell.requested_sources) == {"measured_overall_avg"}
+    assert "auto" not in tcell.requested_sources
+
+
+def test_missing_tcell_source_key_defaults_to_measured_not_auto(monkeypatch):
+    # WHY: config yang lupa mengisi tcell_source tidak boleh diam-diam jatuh
+    # ke "auto" (-> SAPM, model). _config() SENGAJA tidak mengisi
+    # tcell_source, jadi tes ini menembus default produksi di report.py,
+    # bukan default milik helper tes.
+    tcell = _ConstantTcell()
+    _install_providers(monkeypatch, tcell=tcell)
+    sm = M2fLossAttribution()
+    cfg = _config()
+    assert "tcell_source" not in cfg["m2f"]
+    sm.run(_combined_df(), cfg)
+    assert set(tcell.requested_sources) == {"measured_per_ws"}
+    assert "auto" not in tcell.requested_sources
+
+
+def test_closure_records_the_tcell_source_actually_used(stubbed):
+    # WHY: bila seseorang sengaja mengonfigurasi source SAPM/auto, workbook
+    # harus mengatakannya -- bukan menyajikan Tcell model seolah terukur.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(tcell_source="measured_overall_avg"))
+    closure = sm.artifacts["M2f_Closure"]
+    assert "tcell_source" in closure.columns
+    assert set(closure["tcell_source"]) == {"measured_overall_avg"}
+
+
+def test_skipped_closure_row_also_records_tcell_source(monkeypatch):
+    # WHY: string-hari yang di-skip (cakupan di bawah ambang) tetap harus
+    # menyatakan source Tcell yang DIKONFIGURASI di M2f_Closure -- audit
+    # tidak boleh menyisakan kolom kosong hanya karena string itu tidak
+    # pernah dinilai.
+    _install_providers(monkeypatch, poa=_ConstantPOA(n_nan=4))  # cakupan 0%
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(tcell_source="measured_overall_avg"))
+    closure = sm.artifacts["M2f_Closure"]
+    row = closure.iloc[0]
+    assert row["skipped_reason"] == "poa_or_tcell_missing"
+    assert row["tcell_source"] == "measured_overall_avg"
 
 
 # --------------------------------------------------------------------------
