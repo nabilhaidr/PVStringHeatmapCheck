@@ -106,7 +106,15 @@ Setiap iterasi mengikuti alur yang sama, **de-risking sebelum membangun**:
 |---|---|---|---|
 | **M2c Microcrack** | *(belum ada)* | Tak ada modul | Butuh kampanye EL imaging (YOLOv8) + IV tracer |
 | **M2d Bifacial Backside** | *(belum ada)* | Tak ada modul | Butuh sensor rear-POA (≥4/row, IEC TS 60904-1-2) |
-| **M2f Loss Attribution** | *(belum ada)* | Tak ada modul | Pareto + SHAP loss decomposition |
+
+*(M2f Loss Attribution keluar dari tabel ini per 2026-08: modul shipped di
+`pv_pipeline/m2f/` dan terangkai lewat `notebook/m2f_loss_attribution.ipynb`.
+Catatan: implementasinya **tidak** memakai SHAP — deskripsi lama "Pareto + SHAP
+loss decomposition" keliru. SHAP menjelaskan output model dalam satuan model
+itu, dan nilai SHAP menjumlah ke `(prediksi - base value)`, bukan ke energi,
+sehingga identitas closure rusak bila dicampur ke waterfall kWh. Yang dipakai:
+atribusi sekuensial berbasis counterfactual lewat `LossLedger`. Lihat
+`docs/superpowers/specs/2026-08-11-m2f-loss-attribution-design.md`.)*
 
 ---
 
@@ -125,4 +133,4 @@ Setiap iterasi mengikuti alur yang sama, **de-risking sebelum membangun**:
 
 Sepuluh iterasi (2–11) menghasilkan: **10 detektor ter-reverse-engineer** (termasuk LSTM-AE yang kini terlatih & wired), **46-sheet workbook** reproducible, dan **11 dokumen** (10 deep-dive + overview) + ringkasan ini. Setiap angka di workbook dapat ditelusuri ke source Python, dengan status reproduksibilitas yang jujur (penuh / input-representatif / hilir-penuh / approksimasi / input-only). **Source code `pv_pipeline/*` dan `config/*` tidak pernah dimodifikasi** — hanya analisis, workbook, dan dokumentasi.
 
-Yang dapat dikerjakan berikutnya: memvalidasi detektor yang sudah ada terhadap data Huawei aktual (paste-over di sheet `Raw_Data_*` lalu recalc), memvalidasi model LSTM-AE terhadap hari-fault berlabel, atau membawa ekstensi soiling 2026-07 (`M2_RE_09` §0) ke workbook. Detektor sisa (M2c Microcrack, M2d Bifacial, M2f Loss-Attribution) butuh hardware/modul baru.
+Yang dapat dikerjakan berikutnya: memvalidasi detektor yang sudah ada terhadap data Huawei aktual (paste-over di sheet `Raw_Data_*` lalu recalc), memvalidasi model LSTM-AE terhadap hari-fault berlabel, atau membawa ekstensi soiling 2026-07 (`M2_RE_09` §0) ke workbook. Detektor sisa (M2c Microcrack, M2d Bifacial) butuh hardware baru. M2f Loss-Attribution sudah shipped per 2026-08 (§6) dan tidak lagi masuk kategori itu; yang ia tunggu adalah data pengukuran POA dan Tcell, bukan hardware baru — lihat `docs/M2f_Permintaan_Data_Pengukuran.md`.

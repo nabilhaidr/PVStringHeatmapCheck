@@ -1252,14 +1252,14 @@ The product is considered usable for engineering review when:
 - Mature soiling SRR workflow. (Done 2026-07: temperature correction, M2e availability mask, monthly loss breakdown, per-string cleaning recommendation, sawtooth replotting from workbook.)
 - Separate soiling from shading per string, below inverter-aggregate resolution. (Done 2026-08: `string_intraday_diagnostic` module, cable voltage-drop evidence, and ground-geometry evidence derived from the as-built DXF and the survey DSM. See 8.15.)
 - Add curtailment-aware gating to detector decisions.
-- Add complete loss waterfall.
+- Add complete loss waterfall. (Done 2026-08: modul `pv_pipeline/m2f/` — ledger klaim sekuensial, tabel Pareto, grafik waterfall, terangkai lewat `notebook/m2f_loss_attribution.ipynb`. Menunggu data POA/Tcell untuk menghasilkan angka.)
 
 ### Phase 3: Advanced Analytics
 
 - Train LSTM Autoencoder using healthy baseline.
 - Add bifacial gain analytics.
 - Add microcrack/degradation-specific indicators.
-- Add stronger residual attribution engine.
+- Add stronger residual attribution engine. (Sebagian 2026-08: v1 mengatribusikan availability_outage, dc_cable_fault, dan soiling; shading dan low_irradiance_eff masih jatuh ke `unexplained` — v2.)
 
 ### Phase 4: Dashboard and Operations
 
