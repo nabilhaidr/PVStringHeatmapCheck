@@ -105,9 +105,23 @@ class M2bPeerZScore(SubModule):
             panel_path = config.get("panel", {}).get("spec_path", "config/panel_spec.yaml")
             self.panel = PanelSpec.from_yaml(panel_path)
         if self.cell_temp is None:
-            from pv_pipeline.cell_temp import CellTempProvider
-            geom_path = config.get("poa", {}).get("site_geometry_path", "config/site_geometry.yaml")
-            self.cell_temp = CellTempProvider.from_geometry_yaml(geom_path)
+            # Tcell hanya refinement (usage site di run() sudah fallback ke
+            # tcell_mean=25.0 lewat try/except kalau self.cell_temp None),
+            # BUKAN input esensial seperti POA -- kalau file suhu modul
+            # absen, jangan crash detector, cukup warn dan biarkan None.
+            # Catatan: fallback 25.0 (STC) di iklim ini terlalu dingin ->
+            # voc_at_cell_temp jadi terlalu tinggi -> voc_ratio terbaca
+            # rendah -> finding high_R berisiko over-flag.
+            try:
+                from pv_pipeline.cell_temp import CellTempProvider
+                geom_path = config.get("poa", {}).get("site_geometry_path", "config/site_geometry.yaml")
+                self.cell_temp = CellTempProvider.from_geometry_yaml(geom_path)
+            except Exception as exc:
+                warnings.warn(
+                    f"[M2bPeerZScore] CellTempProvider init gagal ({exc}); "
+                    "tcell_mean fallback ke 25.0 (STC) di run().",
+                    stacklevel=2,
+                )
 
     def _resolve_sources(self, config: dict) -> List[str]:
         poa_cfg = config.get("poa", {})

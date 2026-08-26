@@ -332,3 +332,22 @@ def test_string_status_emitted_even_when_poa_fails(synthetic_combined_df_with_ou
     assert "note" in df.columns
     # InverterEvents stays absent (no triggers).
     assert "InverterEvents" not in sm.artifacts
+
+
+def test_run_survives_missing_tcell_file(
+    synthetic_combined_df_with_outlier,
+    mock_poa,
+    mock_panel,
+    m2_config_minimal,
+):
+    """CellTempProvider.from_geometry_yaml gagal (file suhu modul absen) tidak
+    boleh membuat run() crash -- _ensure_providers harus menangkap exception
+    itu, warn, dan biarkan self.cell_temp None (usage site sudah fallback ke
+    tcell_mean=25.0)."""
+    cfg = m2_config_minimal
+    cfg["poa"]["site_geometry_path"] = "config/does_not_exist_geometry.yaml"
+    sm = M2bGroundFault(poa=mock_poa, panel=mock_panel, cell_temp=None)
+    with pytest.warns(UserWarning, match="CellTempProvider init gagal"):
+        findings = sm.run(synthetic_combined_df_with_outlier, cfg)
+    assert sm.cell_temp is None
+    assert isinstance(findings, list)
