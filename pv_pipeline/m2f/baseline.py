@@ -7,6 +7,8 @@ sehat pada hari clear-sky (lihat :func:`calibrate_bifacial_gain`).
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -73,16 +75,44 @@ def calibrate_bifacial_gain(
     min_strings : int, default 3
         Jumlah string minimum. Di bawah ini kalibrasi ditolak -- gain dari
         satu-dua string adalah kebetulan, bukan kalibrasi.
+
+    Notes
+    -----
+    String yang index-nya tidak overlap antara ``expected`` dan ``actual``
+    di-drop oleh ``align(..., join="inner")`` sebelum kalibrasi dihitung.
+    Drop ini dilaporkan lewat ``warnings.warn`` (jumlah per arah) dan
+    diikutkan dalam pesan ``ValueError`` bila sampel jadi terlalu tipis --
+    supaya tidak diam-diam mengecilkan sampel kalibrasi.
     """
+    idx_expected = expected_kwh_per_string.index
+    idx_actual = actual_kwh_per_string.index
+    n_missing_in_actual = int(idx_expected.difference(idx_actual).size)
+    n_missing_in_expected = int(idx_actual.difference(idx_expected).size)
+
     expected, actual = expected_kwh_per_string.align(
         actual_kwh_per_string, join="inner"
     )
+    if n_missing_in_actual or n_missing_in_expected:
+        # Dua arah dilaporkan terpisah karena masing-masing menuduh langkah
+        # upstream yang berbeda: hilang dari actual = string belum/putus
+        # tercatat di telemetri; hilang dari expected = string belum
+        # dihitung di sisi POA/Tcell.
+        warnings.warn(
+            f"[m2f] kalibrasi bifacial: {n_missing_in_actual} string ada di "
+            f"expected tapi hilang dari actual, {n_missing_in_expected} string "
+            "ada di actual tapi hilang dari expected -- string ini di-drop "
+            "sebelum kalibrasi (index tidak overlap).",
+            stacklevel=2,
+        )
+
     valid = expected > 0.0
     n_valid = int(valid.sum())
     if n_valid < min_strings:
         raise ValueError(
             f"[m2f] kalibrasi bifacial butuh minimal {min_strings} string dengan "
-            f"expected > 0; hanya ada {n_valid}."
+            f"expected > 0; hanya ada {n_valid} (setelah align: "
+            f"{n_missing_in_actual} string hilang dari actual, "
+            f"{n_missing_in_expected} string hilang dari expected)."
         )
     ratio = actual[valid] / expected[valid]
     return float(np.median(ratio.to_numpy(dtype=float)))

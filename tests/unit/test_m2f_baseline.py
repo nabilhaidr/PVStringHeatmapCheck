@@ -1,4 +1,6 @@
 """Tes baseline M2f: konversi daya->energi dan kalibrasi gain bifacial."""
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -85,6 +87,57 @@ def test_calibrate_bifacial_gain_refuses_thin_sample():
     actual = pd.Series([105.0, 105.0], index=["a", "b"])
     with pytest.raises(ValueError, match="minimal 3 string"):
         calibrate_bifacial_gain(expected, actual, min_strings=3)
+
+
+def test_calibrate_bifacial_gain_warns_on_index_mismatch():
+    # WHY: join="inner" pada align() diam-diam membuang string yang index-nya
+    # tidak overlap. Tanpa warning, operator tidak tahu sampelnya mengecil,
+    # apalagi arah mana yang bermasalah (telemetri vs POA/Tcell).
+    expected = pd.Series(
+        [100.0, 100.0, 100.0, 100.0], index=["a", "b", "c", "d"]
+    )
+    actual = pd.Series([104.0, 106.0, 108.0, 999.0], index=["a", "b", "c", "e"])
+    with pytest.warns(UserWarning, match=r"1 string ada di expected.*1 string ada di actual"):
+        gain = calibrate_bifacial_gain(expected, actual, min_strings=2)
+    # "d" hilang dari actual, "e" hilang dari expected -> hanya a,b,c dipakai.
+    assert gain == pytest.approx(1.06)
+
+
+def test_calibrate_bifacial_gain_no_warning_when_index_matches():
+    # WHY: index sama persis berarti tidak ada string yang di-drop oleh
+    # align() -- tidak boleh ada warning palsu dalam kasus ini.
+    expected = pd.Series([100.0, 100.0, 100.0], index=["a", "b", "c"])
+    actual = pd.Series([104.0, 106.0, 108.0], index=["a", "b", "c"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        gain = calibrate_bifacial_gain(expected, actual)
+    assert gain == pytest.approx(1.06)
+
+
+def test_calibrate_bifacial_gain_zero_expected_filter_does_not_warn():
+    # WHY: filter expected > 0 itu disengaja dan sudah didokumentasikan
+    # (lihat test_calibrate_bifacial_gain_ignores_zero_expected) -- itu bukan
+    # index mismatch, jadi tidak boleh memicu warning align.
+    expected = pd.Series([100.0, 0.0, 100.0], index=["a", "b", "c"])
+    actual = pd.Series([105.0, 50.0, 105.0], index=["a", "b", "c"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        gain = calibrate_bifacial_gain(expected, actual, min_strings=2)
+    assert gain == pytest.approx(1.05)
+
+
+def test_calibrate_bifacial_gain_thin_sample_error_carries_drop_counts():
+    # WHY: "hanya ada 2" saja tidak bisa dibedakan antara "memang cuma
+    # dikasih 2 string" vs "dikasih 40 tapi 38 hilang karena index tidak
+    # overlap". Pesan error harus memisahkan dua kasus itu.
+    expected = pd.Series([100.0, 100.0, 100.0], index=["a", "b", "d"])
+    actual = pd.Series([105.0, 105.0], index=["a", "b"])
+    with pytest.warns(UserWarning):
+        with pytest.raises(
+            ValueError,
+            match=r"hanya ada 2 \(setelah align: 1 string hilang dari actual, 0 string hilang dari expected\)",
+        ):
+            calibrate_bifacial_gain(expected, actual, min_strings=3)
 
 
 def test_expected_energy_fillna_guards_against_nan_poa_tcell(spec):
