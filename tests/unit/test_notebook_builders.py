@@ -26,12 +26,22 @@ BUILDERS = {
     "_build_string_intraday_notebook": "pv_pipeline.string_intraday_diagnostic",
     "_build_drive_probe_notebook": "pv_pipeline.drive_probe",
     "_build_spatial_correlation_notebook": "pv_pipeline.spatial_correlation",
+    "_build_m2f_nb": "pv_pipeline.m2f.report",
 }
+
+# Pembangun lama tinggal di output_string/; pembangun notebook lebih baru
+# (mis. _build_daily_runfast_nb.py, _build_m2f_nb.py) tinggal di notebook/.
+# Dicoba dua-duanya supaya BUILDERS bisa memetakan pembangun dari kedua
+# folder tanpa memindahkan berkas yang sudah ada.
+_BUILDER_DIRS = ("output_string", "notebook")
 
 
 def _muat(nama: str):
-    """Impor pembangun notebook lewat path; ``output_string`` bukan paket."""
-    path = REPO / "output_string" / f"{nama}.py"
+    """Impor pembangun notebook lewat path; ``output_string``/``notebook`` bukan paket."""
+    for folder in _BUILDER_DIRS:
+        path = REPO / folder / f"{nama}.py"
+        if path.exists():
+            break
     spec = importlib.util.spec_from_file_location(nama, path)
     modul = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(modul)
