@@ -28,9 +28,7 @@ Isi:
    `daily_runfast_v1.ipynb`).
 3. **Cell 3** -- Load `config/m2_config.yaml`, aktifkan `m2f` + `m2a_soiling`
    (keduanya default OFF/opt-in di yaml), deteksi rentang tanggal data.
-4. **Cell 4** -- Jalankan 3 detektor m2b + M2aSoiling + M2eAvailability,
-   masing-masing dibungkus `try/except` supaya satu detektor gagal tidak
-   menjatuhkan yang lain.
+4. **Cell 4** -- Jalankan 3 detektor m2b + M2aSoiling + M2eAvailability.
 5. **Cell 5** -- `collect_m2f_inputs(submodules, cfg)` menjembatani
    `deficit_frames`/`p_loss_by_month` ke `M2fLossAttribution`, lalu
    `M2fLossAttribution().run(...)`.
@@ -57,15 +55,14 @@ berkas suhu modul (`PV Module Temperature PLTS IKN.xlsx`). Akibatnya:
   ter-generate lengkap dengan skema yang benar; isinya nol. Itu memang hasil
   yang jujur untuk ditampilkan mengingat data yang tersedia -- bukan bug di
   wiring ini.
-- `M2bPeerZScore` -- beda dari `M2bOpenCircuit`/`M2bMpptRatio` (yang hanya
-  butuh POA, dan gagal-lunak) serta `M2aSoiling` (yang membungkus
-  `CellTempProvider`-nya sendiri dengan `try/except`) -- memuat
-  `CellTempProvider` TANPA `try/except` di `_ensure_providers()`. `run()`-nya
-  akan RAISE `FileNotFoundError` yang sama persis. Cell 4 di bawah
-  membungkus SETIAP detektor dalam `try/except` supaya kegagalan itu
-  terlihat (dicetak apa adanya) tapi tidak menjatuhkan detektor lain di
-  daftar. `pv_pipeline/peer_zscore.py` sengaja TIDAK diubah -- itu di luar
-  cakupan wiring ini.
+- `M2bPeerZScore` -- seperti `M2aSoiling`, `_ensure_providers()` membungkus
+  konstruksi `CellTempProvider`-nya dengan `try/except`: kalau berkas suhu
+  modul absen, ia warn dan biarkan `self.cell_temp` None, lalu `run()`
+  fallback ke `tcell_mean=25.0` (STC) alih-alih RAISE `FileNotFoundError`.
+  Konsekuensinya: `voc_at_cell_temp` di 25 C jauh lebih tinggi dari suhu
+  modul riil di iklim ini, jadi `voc_ratio` terbaca rendah dan finding
+  `high_R` berisiko over-flag -- bukan bug baru, cuma sekarang bisa
+  ter-reach lewat kondisi berkas hilang ini.
 - Begitu berkas POA dan `PV Module Temperature PLTS IKN.xlsx` tersedia,
   jalankan ulang notebook ini tanpa perubahan apa pun -- workbook akan mulai
   terisi angka nyata.
@@ -191,14 +188,7 @@ print(f"[m2f-nb] combined_df shape = {combined_df.shape}")
 """
 
 CODE_CELL4 = """\
-# Cell 4 -- Jalankan 3 detektor m2b + M2aSoiling + M2eAvailability (resilient)
-#
-# M2bPeerZScore memuat CellTempProvider TANPA try/except di dalam dirinya
-# sendiri (lihat markdown Cell 0) -- tanpa berkas
-# "PV Module Temperature PLTS IKN.xlsx", run()-nya RAISE FileNotFoundError.
-# Loop di bawah membungkus SETIAP detektor dalam try/except supaya satu
-# detektor gagal tidak menjatuhkan yang lain -- kegagalannya tetap dicetak
-# apa adanya, bukan ditelan diam-diam.
+# Cell 4 -- Jalankan 3 detektor m2b + M2aSoiling + M2eAvailability
 from pv_pipeline.availability import M2eAvailability
 from pv_pipeline.m2a.soiling import M2aSoiling
 from pv_pipeline.mppt_ratio import M2bMpptRatio
@@ -211,12 +201,9 @@ submodules = [
 ]
 all_findings = []
 for sm in submodules:
-    try:
-        findings = sm.run(combined_df, cfg)
-        all_findings.extend(findings)
-        print(f"[m2f-nb] {sm.name}: {len(findings)} finding(s)")
-    except Exception as err:
-        print(f"[m2f-nb] {sm.name}: RAISED {type(err).__name__}: {err}")
+    findings = sm.run(combined_df, cfg)
+    all_findings.extend(findings)
+    print(f"[m2f-nb] {sm.name}: {len(findings)} finding(s)")
 
 # Bridge artefak legacy M2eAvailability (bukan channel self.artifacts) --
 # sama seperti Cell 4 daily_runfast_v1.ipynb.
