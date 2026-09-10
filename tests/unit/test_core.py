@@ -147,7 +147,7 @@ def _mk_finding(sub_module, sev=Severity.HIGH, inv="WB05-INV01", pv="PV3"):
 
 
 def test_default_submodule_to_cfg_key_covers_all_detectors():
-    """Mapping harus include 9 submodule: 8 detector + 1 mesin atribusi.
+    """Mapping harus include 10 submodule: 8 detector + 1 atribusi + 1 adapter.
 
     Delapan detector (M2b x4 + M2_iforest + M2a x3) MENGHASILKAN finding dari
     data mentah. ``M2f_loss_attribution`` BUKAN detector: ia mengonsumsi
@@ -155,6 +155,12 @@ def test_default_submodule_to_cfg_key_covers_all_detectors():
     dari M2a_soiling) lalu mengatribusikan rugi energi ke kategori penyebab.
     Ia terdaftar di peta yang sama karena filter_findings_by_exclude_flag
     bekerja atas NAMA submodule, bukan atas jenisnya.
+
+    ``M2g_visual_cv`` jenis ketiga lagi: ADAPTER. Ia tidak menghitung apa pun
+    dari telemetri, melainkan menerjemahkan tabel kontrak yang dihasilkan
+    repositori CV terpisah menjadi M2Finding. Dibedakan di sini supaya jelas
+    bahwa satu-satunya sumber angkanya berada DI LUAR repo ini, dan karena itu
+    hanya ia yang bisa gagal akibat kontrak antar-repo yang berubah.
 
     Entri M2f itu no-op hari ini: section `m2f` di config/m2_config.yaml tidak
     menyetel `exclude_from_findings_sheet`, jadi filter_findings_by_exclude_flag
@@ -172,9 +178,11 @@ def test_default_submodule_to_cfg_key_covers_all_detectors():
         "M2b_mppt_ratio",
     }
     expected_attribution = {"M2f_loss_attribution"}
-    expected = expected_detectors | expected_attribution
+    expected_adapter = {"M2g_visual_cv"}
+    expected = expected_detectors | expected_attribution | expected_adapter
     assert set(DEFAULT_SUBMODULE_TO_CFG_KEY.keys()) == expected
     assert DEFAULT_SUBMODULE_TO_CFG_KEY["M2f_loss_attribution"] == "m2f"
+    assert DEFAULT_SUBMODULE_TO_CFG_KEY["M2g_visual_cv"] == "m2g_visual_cv"
     # iforest -> m2_iforest cfg key
     assert DEFAULT_SUBMODULE_TO_CFG_KEY["M2_iforest"] == "m2_iforest"
 

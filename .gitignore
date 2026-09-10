@@ -67,3 +67,9 @@ Thumbs.db
 *.swp
 ~$*
 tempCodeRunnerFile.py
+
+# Program CV/ML drone -- pindah ke repo cv-drone-plts. Folder ini tinggal di
+# sini sebagai penyimpanan aset misi (465 MB untuk 41 bingkai uji saja; satu
+# misi Tingkat A penuh 100-300 GB) dan salinan dokumen NSSE-CV. Tidak boleh
+# masuk repo ini -- kode dan dokumennya sudah di-commit di cv-drone-plts.
+CVML Inspeksi & O&M PLTS IKN Drone DJI Mini 5 Pro/

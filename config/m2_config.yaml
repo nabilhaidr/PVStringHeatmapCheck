@@ -388,3 +388,33 @@ m2f:
   # berarti soiling TIDAK PERNAH diklaim untuk bulan itu (tetap None, bukan
   # p_loss=0.0).
   p_loss_by_month: {}
+
+# ---------------------------------------------------------------------------
+# M2g -- indeks soiling dari citra udara (pv_pipeline/m2g/visual_cv.py)
+#
+# Pemrosesan citranya TIDAK ada di repo ini; ia tinggal di repositori CV yang
+# terpisah. Yang menyeberang hanya kontrak tabel berkolom
+# (inverter_id, pv, date, soiling_index, confidence, source_image).
+#
+# M2g TIDAK mengklaim energi hilang ke m2f.LossLedger. Kategori `soiling` di
+# sana sudah punya estimator berbasis besaran listrik; klaim kedua dari citra
+# akan menghitung ganda rugi yang sama.
+# ---------------------------------------------------------------------------
+m2g_visual_cv:
+  # MATI secara default, dan ini disengaja: selama tabel kontraknya belum ada,
+  # menyalakannya hanya akan membuat setiap run gagal membaca berkas.
+  enabled: false
+  table_path: "outputs/cv_soiling_index.csv"
+  # Otoritas identitas string. Baris CV yang pasangan (inverter_id, pv)-nya
+  # tidak ada di sini DITOLAK, tidak ditebak -- kekeliruan penomoran di sisi CV
+  # menghasilkan nama yang tetap terlihat sah.
+  string_geometry_path: "config/string_geometry.csv"
+  # Di bawah ini baris dibuang dan dicatat ke artifact VisualCVRejected.
+  min_confidence: 0.60
+  # Ambang indeks (0..1, makin besar makin kotor) -> severity. BELUM
+  # terkalibrasi ke rugi listrik: angka ini hanya mengurutkan prioritas
+  # pembersihan. Setel ulang setelah percobaan cuci-dan-ukur (Roadmap NSSE-CV
+  # aktivitas 1A.8), bukan sebelumnya.
+  index_medium: 0.35
+  index_high: 0.55
+  index_critical: 0.75

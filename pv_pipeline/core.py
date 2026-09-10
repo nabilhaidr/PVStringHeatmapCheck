@@ -142,6 +142,7 @@ DEFAULT_SUBMODULE_TO_CFG_KEY: Dict[str, str] = {
     # Didaftarkan demi konsistensi, dan supaya mekanisme exclude langsung
     # berfungsi bila nanti ada yang membutuhkannya.
     "M2f_loss_attribution": "m2f",
+    "M2g_visual_cv":        "m2g_visual_cv",
 }
 
 
