@@ -146,11 +146,26 @@ def build_cable_metrics(cable_map: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_st_to_pv(cable_map: pd.DataFrame) -> Dict[Tuple[int, int, int], Tuple[int, Optional[int]]]:
-    """Dict (wb, inv, st) -> (pv, mppt)."""
-    return {
-        (int(r.wb), int(r.inv), int(r.st)): (int(r.pv), int(r.mppt))
-        for r in cable_map.itertuples(index=False)
-    }
+    """Dict (wb, inv, st) -> (pv, mppt).
+
+    Satu ST dengan dua tujuan (konduktor +/- yang tidak sepakat) tetap
+    memakai baris terakhir, tapi diperingatkan: memilih salah satunya tanpa
+    bukti luar adalah keputusan yang harus terlihat, bukan diam.
+    """
+    out: Dict[Tuple[int, int, int], Tuple[int, Optional[int]]] = {}
+    duplicates: List[Tuple[int, int, int]] = []
+    for r in cable_map.itertuples(index=False):
+        key = (int(r.wb), int(r.inv), int(r.st))
+        if key in out:
+            duplicates.append(key)
+        out[key] = (int(r.pv), int(r.mppt))
+    if duplicates:
+        warnings.warn(
+            f"[cleaning_report] {len(set(duplicates))} string punya >1 tujuan "
+            f"di DC cable list; baris terakhir dipakai: {sorted(set(duplicates))}.",
+            stacklevel=2,
+        )
+    return out
 
 
 def _find_header_row(df: pd.DataFrame, max_scan: int = 10) -> Optional[int]:

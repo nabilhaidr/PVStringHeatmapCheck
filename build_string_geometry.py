@@ -176,6 +176,33 @@ ASBUILT_PV_FIX = {
     (5, 19, 14): ((6, 2), (None, None)),
     (7, 17, 3): ((25, 6), (None, None)),
     (7, 17, 10): ((25, 6), (None, None)),
+    # Digit MPPT yang membantah kanal PV-nya sendiri. Satu kanal hanya duduk di
+    # satu MPPT, jadi salah satu kolom pasti keliru; telemetri 1 Des 2025 dan
+    # 13 Mei 2026 memilih MPPT-nya. Di tiap inverter ini cacah kanal berarus =
+    # cacah ST, kanal PV tercatat berarus dan hanya diklaim ST itu, dan semua
+    # kanal berarus di MPPT tercatat sudah dipakai ST lain -- memindahkan
+    # string ke sana butuh kesalahan kedua. Tegangan kanalnya selalu sama
+    # (<= 0,1 V) dengan saudara se-MPPT menurut strings.yaml, bukan menurut
+    # as-built. PV dipertahankan; MPPT mengikuti peta perangkat keras.
+    (4, 3, 4): ((6, 1), (6, 2)),
+    (4, 3, 15): ((7, 1), (7, 2)),
+    (4, 4, 17): ((17, 2), (17, 4)),
+    (4, 6, 2): ((2, 2), (2, 1)),
+    (4, 7, 5): ((5, 1), (5, 2)),
+    (4, 10, 19): ((22, 4), (22, 5)),
+    (4, 10, 20): ((21, 4), (21, 5)),
+    (4, 10, 21): ((16, 3), (16, 4)),
+    (4, 10, 22): ((18, 3), (18, 4)),
+    (4, 16, 13): ((17, 3), (17, 4)),
+    (4, 16, 14): ((18, 3), (18, 4)),
+    (5, 4, 19): ((15, 3), (15, 4)),
+    (5, 4, 20): ((17, 3), (17, 4)),
+    (5, 6, 23): ((23, 4), (23, 5)),
+    (5, 7, 4): ((5, 1), (5, 2)),
+    # Konduktor ST13+ menulis M3PV11, ST13- menulis M1PV11; build_st_to_pv
+    # meneruskan baris terakhir. Bukan baris tersalin ganda (butir 2.3).
+    (5, 7, 13): ((11, 1), (11, 3)),
+    (7, 14, 8): ((16, 6), (16, 4)),
 }
 
 # Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)

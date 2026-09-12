@@ -17,6 +17,7 @@ import pytest
 
 from build_string_geometry import (
     OUT_PATH,
+    STRINGS_YAML,
     cross_slope_deg,
     disprove_empty_channel,
     empty_pv_channels,
@@ -406,6 +407,66 @@ def test_strings_without_pv_are_exactly_the_decided_ones():
 
     assert set(zip(kosong["inverter_id"], kosong["st"])) == PV_KOSONG_DIPUTUSKAN
     assert kosong["mppt"].isna().all()
+
+
+# --- digit MPPT yang membantah kanal PV-nya sendiri ---------------------------
+
+# (wb, inv, st) -> (pv, mppt) tercatat di as-built, per 2026-09-12. Kanal PV-nya
+# terbukti telemetri; digit MPPT-nya bertentangan dengan peta perangkat keras.
+MPPT_TERCATAT_SALAH = {
+    (4, 3, 4): (6, 1), (4, 3, 15): (7, 1), (4, 4, 17): (17, 2),
+    (4, 6, 2): (2, 2), (4, 7, 5): (5, 1),
+    (4, 10, 19): (22, 4), (4, 10, 20): (21, 4),
+    (4, 10, 21): (16, 3), (4, 10, 22): (18, 3),
+    (4, 16, 13): (17, 3), (4, 16, 14): (18, 3),
+    (5, 4, 19): (15, 3), (5, 4, 20): (17, 3), (5, 6, 23): (23, 4),
+    (5, 7, 4): (5, 1), (5, 7, 13): (11, 1), (7, 14, 8): (16, 6),
+}
+
+
+def _mppt_330ktl():
+    """PV -> MPPT SUN2000-330KTL-H1 (WB03-WB10), dari acuannya di strings.yaml."""
+    import yaml
+
+    with open(STRINGS_YAML, encoding="utf-8") as handle:
+        peta = yaml.safe_load(handle)["mppt_map"]["SUN2000-330KTL-H1"]["mppt"]
+    return {pv: mppt for mppt, pvs in peta.items() for pv in pvs}
+
+
+def test_contradicting_mppt_digit_yields_to_the_hardware_map_not_the_pv():
+    """Yang dikoreksi digit MPPT-nya; kanal PV-nya dipertahankan.
+
+    Satu kanal PV hanya duduk di satu MPPT, jadi tiap baris ini pasti salah di
+    salah satu kolomnya. Telemetri memilih kolomnya: kanal PV yang tercatat
+    BERARUS dan tidak diklaim ST lain, sedangkan seluruh kanal berarus di MPPT
+    yang tercatat sudah dipakai ST lain. Memindahkan string ke MPPT tercatat
+    butuh dua kesalahan sekaligus; mengoreksi digitnya cukup satu. Tegangan
+    kanal ikut memastikan: selalu sama dengan saudara se-MPPT menurut peta
+    perangkat keras, bukan saudara menurut as-built.
+
+    Kolom ini menentukan kelompok pembanding paling ketat -- string se-MPPT
+    dijejak sebagai satu titik daya maksimum. MPPT yang salah menaruh string
+    di kelompok yang tegangannya berbeda sampai 44 V.
+    """
+    peta = _mppt_330ktl()
+
+    for kunci, (pv, mppt) in MPPT_TERCATAT_SALAH.items():
+        assert fix_asbuilt_pv(kunci, pv, mppt) == (pv, peta[pv]), kunci
+
+
+def test_geometry_mppt_agrees_with_the_hardware_map_on_every_wb03_wb10_string():
+    """Artefak tidak boleh lagi membawa pasangan PV-MPPT yang mustahil.
+
+    Pasangan semacam itu tidak mungkin terpasang secara fisik, jadi setiap
+    baris yang muncul di sini adalah sengketa as-built yang lolos tanpa
+    diputuskan. WB01/WB02 dikecualikan karena memakai model lain (215KTL)
+    yang MPPT-nya diturunkan dari pv, bukan dibaca dari cable list.
+    """
+    g = pd.read_csv(OUT_PATH)
+    g = g[g["pv"].notna() & ~g["inverter_id"].str[:4].isin(["WB01", "WB02"])]
+    salah = g[g["pv"].astype(int).map(_mppt_330ktl()) != g["mppt"]]
+
+    assert salah.empty, salah[["inverter_id", "st", "pv", "mppt"]].to_string()
 
 
 # --- parsing DXF Phase One (WB01/WB02) ----------------------------------------

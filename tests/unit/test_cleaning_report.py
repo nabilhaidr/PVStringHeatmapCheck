@@ -11,6 +11,7 @@ Kenapa penting:
 """
 from __future__ import annotations
 
+import warnings
 from datetime import datetime
 
 import pandas as pd
@@ -205,6 +206,40 @@ def test_build_st_to_pv_and_daily_counts(tmp_path):
     # 2026-03-01: WB01 ST01 + WB03 ST01 + WB03 ST02 = 3 string.
     assert counts[pd.Timestamp("2026-03-01")] == 3.0
     assert counts[pd.Timestamp("2026-03-03")] == 1.0
+
+
+def test_build_st_to_pv_warns_when_one_string_has_two_destinations():
+    """Konduktor +/- satu string yang tujuannya berbeda harus BERISIK.
+
+    Di as-built, WB05INV07ST13+ menulis M3PV11 sedangkan ST13- menulis M1PV11.
+    parse_dc_cable_frame menyatukan +/- per (st, mppt, pv), jadi keduanya
+    tersisa sebagai dua baris. Tanpa peringatan, baris TERAKHIR menang diam-diam
+    dan string_geometry.csv mewarisi MPPT1 untuk kanal milik MPPT3 -- tanpa
+    ada yang tahu bahwa as-built bertentangan dengan dirinya sendiri di situ.
+    """
+    frame = pd.DataFrame({
+        "src": ["WB05INV07ST13+", "WB05INV07ST13-",
+                "WB05INV07ST14+", "WB05INV07ST14-"],
+        "dst": ["WB05INV07M3PV11", "WB05INV07M1PV11",
+                "WB05INV07M1PV4", "WB05INV07M1PV4"],
+    })
+
+    with pytest.warns(UserWarning, match=r"\(5, 7, 13\)"):
+        peta = build_st_to_pv(parse_dc_cable_frame(frame))
+
+    assert peta[(5, 7, 14)] == (4, 1)
+
+
+def test_build_st_to_pv_is_silent_when_polarities_agree():
+    """Pasangan +/- yang sepakat adalah keadaan normal 3.570 string -- diam."""
+    frame = pd.DataFrame({
+        "src": ["WB05INV07ST14+", "WB05INV07ST14-"],
+        "dst": ["WB05INV07M1PV4", "WB05INV07M1PV4"],
+    })
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert build_st_to_pv(parse_dc_cable_frame(frame)) == {(5, 7, 14): (4, 1)}
 
 
 # --- wb_filter (analysis run per kelompok WB) -----------------------------------
