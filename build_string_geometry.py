@@ -142,6 +142,42 @@ DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 # dan bisa MEMBEBASKAN string dari daftar kunjungan lapangan.
 PLACEMENT_DISPUTED = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"}
 
+# --- dua ST satu kanal PV di as-built -----------------------------------------
+# Delapan inverter mencatat dua ST berbeda pada SATU kanal PV (Koreksi As-Built
+# butir 2.1). Di tiap inverter itu telemetri memperlihatkan tepat satu kanal
+# yang berarus tetapi tidak diklaim ST mana pun, dan cacah kanal berarus sama
+# dengan cacah string -- jadi salah satu dari kedua ST pasti duduk di kanal itu.
+# Yang tersisa hanya: ST yang mana.
+#
+# Diputuskan hanya bila ada bukti kedua yang bebas dari pola urutan:
+#   WB04-INV01/06  baris ST23/ST18 membantah dirinya sendiri (M1PV6/M1PV5,
+#                  padahal PV5-PV6 milik MPPT2); baris pasangannya konsisten.
+#   WB10-INV02     ST17 tercatat MPPT2 -- itu MPPT kanal bebas PV5, bukan PV10.
+#   WB04-INV01/08/10  asimetri pagi-sore terukur cocok dengan cross-slope ST
+#                  yang diusulkan di setiap hari yang tersedia (3-4 hari,
+#                  Des 2025-Jul 2026); tukarannya selalu kalah.
+# WB04-INV08 diganti unit baru ("WB04-INV08-NEW") setelah Des 2025 dan kanal
+# bebasnya pindah PV5 -> PV9. Nilai di sini mengikuti unit yang terpasang
+# sekarang, sama seperti strings.yaml.
+#
+# Tiga sisanya hanya didukung pola urutan, dan itu bukan bukti: KEDUA ST
+# dikosongkan sampai EPC menjawab. Kuncinya nilai as-built yang dipersengketakan,
+# jadi cable list revisi yang menulis nilai lain tidak ditimpa diam-diam.
+ASBUILT_PV_FIX = {
+    # (wb, inv, st): ((pv, mppt) tercatat, (pv, mppt) dipakai)
+    (4, 1, 23): ((6, 1), (26, 6)),
+    (4, 6, 18): ((5, 1), (25, 6)),
+    (4, 8, 12): ((2, 1), (9, 2)),
+    (4, 10, 25): ((14, 3), (27, 6)),
+    (10, 2, 17): ((10, 2), (5, 2)),
+    (4, 19, 19): ((16, 4), (None, None)),
+    (4, 19, 23): ((16, 4), (None, None)),
+    (5, 19, 6): ((6, 2), (None, None)),
+    (5, 19, 14): ((6, 2), (None, None)),
+    (7, 17, 3): ((25, 6), (None, None)),
+    (7, 17, 10): ((25, 6), (None, None)),
+}
+
 # Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)
 # x 4 m utara-selatan, langkah 0,5 m. Cukup lebar untuk meredam kekasaran
 # tanah, cukup sempit untuk tetap mewakili meja itu sendiri.
@@ -344,6 +380,17 @@ def disprove_empty_channel(inverter_id: str, pv, mppt, kosong: Dict[str, set]):
     return pv, mppt
 
 
+def fix_asbuilt_pv(key, pv, mppt):
+    """Terapkan ``ASBUILT_PV_FIX`` pada (pv, mppt) as-built string ``key``.
+
+    Hanya berlaku selama as-built masih mencatat nilai yang dipersengketakan.
+    """
+    fix = ASBUILT_PV_FIX.get(key)
+    if fix is None or (pv, mppt) != fix[0]:
+        return pv, mppt
+    return fix[1]
+
+
 def phase_one_mppt_map(path: str = STRINGS_YAML) -> Dict[int, int]:
     """PV -> MPPT untuk WB01/WB02, dibaca dari ``config/strings.yaml``.
 
@@ -440,7 +487,8 @@ def main() -> None:
     kosong = empty_pv_channels()
 
     def _kanal(item: Dict):
-        pv, mppt = st_map.get((item["wb"], item["inv"], item["st"]), (None, None))
+        kunci = (item["wb"], item["inv"], item["st"])
+        pv, mppt = fix_asbuilt_pv(kunci, *st_map.get(kunci, (None, None)))
         return disprove_empty_channel(
             f"WB{item['wb']:02d}-INV{item['inv']:02d}", pv, mppt, kosong,
         )

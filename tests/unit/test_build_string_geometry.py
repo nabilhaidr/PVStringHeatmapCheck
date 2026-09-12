@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import math
 
+import pandas as pd
 import pytest
 
 from build_string_geometry import (
+    OUT_PATH,
     cross_slope_deg,
     disprove_empty_channel,
     empty_pv_channels,
+    fix_asbuilt_pv,
     parse_dxf_string_labels,
     parse_phase_one_labels,
     phase_one_mppt_map,
@@ -330,6 +333,79 @@ def test_empty_channels_are_read_from_strings_yaml():
     assert len(peta) == 194
     assert 13 in peta["WB06-INV12"]
     assert peta["WB01-INV01"] == set(range(19, 29))
+
+
+# --- dua ST satu kanal di as-built (Koreksi As-Built butir 2.1) ---------------
+
+def test_as_built_channel_is_replaced_only_while_it_still_reads_the_disputed_value():
+    """Koreksi berlaku atas nilai yang DIPERSENGKETAKAN, bukan atas nomor ST.
+
+    WB04-INV01 ST23 tercatat M1PV6 padahal PV6 milik MPPT2 -- barisnya
+    membantah dirinya sendiri. Bila EPC mengirim cable list revisi, nilai
+    barunya yang berlaku: menimpa jawaban EPC diam-diam dengan kesimpulan
+    kita jauh lebih berbahaya daripada membiarkan sengketa lama terlihat.
+    """
+    assert fix_asbuilt_pv((4, 1, 23), 6, 1) == (26, 6)
+    assert fix_asbuilt_pv((4, 1, 23), 7, 2) == (7, 2)       # revisi EPC menang
+    assert fix_asbuilt_pv((4, 1, 6), 6, 2) == (6, 2)        # pasangannya benar
+    assert fix_asbuilt_pv((4, 1, 23), None, None) == (None, None)
+
+
+def test_undecided_pair_is_blanked_not_guessed():
+    """Bila bukti tidak memilih, KEDUA ST kehilangan pv.
+
+    Salah satu dari keduanya pasti keliru (kanal bebas yang berarus tidak
+    diklaim siapa pun), tapi pola urutan saja bukan bukti. Menebak berarti
+    menyajikan temuan citra satu meja sebagai bukti untuk meja tetangganya.
+    """
+    for kunci, tercatat in [((4, 19, 19), (16, 4)), ((4, 19, 23), (16, 4)),
+                            ((5, 19, 6), (6, 2)), ((5, 19, 14), (6, 2)),
+                            ((7, 17, 3), (25, 6)), ((7, 17, 10), (25, 6))]:
+        assert fix_asbuilt_pv(kunci, *tercatat) == (None, None), kunci
+
+
+def test_filled_pv_is_unique_per_inverter_in_the_geometry_artifact():
+    """(inverter_id, pv) adalah kunci kontrak tabel ke M2g (repo cv-drone-plts).
+
+    Satu kanal PV Huawei = satu string fisik. Dua baris ber-pv sama DIGABUNG
+    oleh kontrak: temuan citra dua meja berbeda jatuh ke satu kanal telemetri.
+    pv kosong dikecualikan -- itu keputusan "belum terbukti", bukan kunci.
+    """
+    g = pd.read_csv(OUT_PATH)
+    terisi = g[g["pv"].notna()]
+    ganda = terisi[terisi.duplicated(["inverter_id", "pv"], keep=False)]
+
+    assert ganda.empty, ganda[["inverter_id", "st", "pv", "mppt"]].to_string()
+
+
+# Keputusan untuk string TANPA pv. Tiap baris sudah diuji dan gugur atau tak
+# terputuskan -- bukan terlewat. Nomor butir merujuk coba/Koreksi_AsBuilt_DC_
+# Cable_List_20260806.md; kanal penggantinya menunggu jawaban EPC.
+PV_KOSONG_DIPUTUSKAN = {
+    # 2.5 -- kanal as-built membaca 0 kW dan strings.yaml menandainya kosong.
+    ("WB03-INV05", 2), ("WB04-INV04", 15), ("WB04-INV15", 8),
+    ("WB05-INV05", 7), ("WB06-INV10", 25), ("WB06-INV12", 20),
+    ("WB07-INV08", 22), ("WB07-INV13", 19), ("WB09-INV12", 11),
+    # 2.4 -- tujuan as-built di inverter lain (WB03-INV12); parser menolaknya.
+    ("WB03-INV13", 1),
+    # 2.1 tak terputuskan -- dua ST satu kanal, bukti tidak memilih.
+    ("WB04-INV19", 19), ("WB04-INV19", 23), ("WB05-INV19", 6),
+    ("WB05-INV19", 14), ("WB07-INV17", 3), ("WB07-INV17", 10),
+}
+
+
+def test_strings_without_pv_are_exactly_the_decided_ones():
+    """String tanpa pv tidak ikut join ke telemetri maupun ke kontrak citra.
+
+    Tambahan diam-diam = string hilang dari analisis tanpa ada yang
+    memutuskan. Pengurangan diam-diam = kanal yang sudah gugur diisi lagi
+    tanpa catatan buktinya. Keduanya harus gagal keras di sini.
+    """
+    g = pd.read_csv(OUT_PATH)
+    kosong = g[g["pv"].isna()]
+
+    assert set(zip(kosong["inverter_id"], kosong["st"])) == PV_KOSONG_DIPUTUSKAN
+    assert kosong["mppt"].isna().all()
 
 
 # --- parsing DXF Phase One (WB01/WB02) ----------------------------------------
