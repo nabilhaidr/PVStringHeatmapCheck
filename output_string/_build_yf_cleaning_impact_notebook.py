@@ -184,6 +184,16 @@ REPORT = build_yf_cleaning_impact(
 )
 print("Status:", REPORT.metadata["status_counts"])
 print("Referensi:", REPORT.impact["reference_mode"].value_counts().to_dict())
+print("Campaign di luar periode data (riwayat checklist):",
+      f"{REPORT.metadata['campaigns_outside_period']:,}")
+_SKIPPED = REPORT.metadata["skipped_campaigns"]
+if _SKIPPED:
+    print(f"\\nPERINGATAN: {_SKIPPED:,} campaign di dalam periode GUGUR, "
+          f"alasan {REPORT.metadata['skipped_campaigns_by_reason']}.")
+    print(f"  insufficient_window = data Yf < {MIN_WINDOW_DAYS} hari di jendela "
+          f"{WINDOW_DAYS} hari pra/pasca (mis. tautan telemetri putus).")
+    for _wb, _per_date in REPORT.metadata["skipped_campaigns_by_wb_date"].items():
+        print(f"  {_wb}: " + ", ".join(f"{_d} ({_n})" for _d, _n in _per_date.items()))
 print("\\nRekap per campaign:")
 display(REPORT.campaigns.round(3))
 print("\\n20 string dengan uplift terbesar (paling kotor sebelum dibersihkan):")

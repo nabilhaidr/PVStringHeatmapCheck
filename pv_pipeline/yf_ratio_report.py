@@ -389,6 +389,11 @@ def build_yf_cleaning_impact(
     dalam jendela campaign. Cuaca dan drift musiman tercoret, dan karena
     kontrol tidak ikut dibersihkan uplift tidak "hilang" seperti bila
     referensinya ikut bersih.
+
+    Campaign di dalam periode data yang tidak bisa dinilai (jendela pra/pasca
+    kurang data, mis. tautan telemetri putus) dihitung per WB dan tanggal di
+    metadata ``skipped_campaigns_*``; campaign di luar periode dicatat
+    terpisah sebagai ``campaigns_outside_period``.
     """
     if long_df.empty:
         raise ValueError("long_df kosong; tidak ada data untuk dibandingkan.")
@@ -410,9 +415,12 @@ def build_yf_cleaning_impact(
         frame[["pv_string", "wb"]].drop_duplicates().itertuples(index=False)
     )
     window = pd.Timedelta(days=window_days)
+    period_start, period_end = long_df["date"].min(), long_df["date"].max()
 
     rows = []
     skipped_no_yield = 0
+    campaigns_outside_period = 0
+    skipped: list[tuple[str, pd.Timestamp, str]] = []
     for pv_string, group in cleaned.groupby("pv_string"):
         series = yf_by_string.get(pv_string)
         if series is None or series.empty:
@@ -422,6 +430,10 @@ def build_yf_cleaning_impact(
         st_value = group["st"].iloc[0] if "st" in group.columns else None
         for campaign in _campaigns(group["date"].unique(), gap_days):
             start, end = campaign[0], campaign[-1]
+            # Riwayat checklist (mis. 2025) di luar data yield: bukan gugur.
+            if end < period_start or start > period_end:
+                campaigns_outside_period += 1
+                continue
             span_start, span_end = start - window, end + window
 
             # String kontrol: tidak punya event cleaning di jendela campaign.
@@ -461,13 +473,17 @@ def build_yf_cleaning_impact(
             after_mask = (series.index > end) & (series.index <= span_end)
             rel_before = relative[before_mask].dropna()
             rel_after = relative[after_mask].dropna()
+            wb_label = inverter_id.split("-", 1)[0]
             if len(rel_before) < min_window_days or len(rel_after) < min_window_days:
+                skipped.append((wb_label, start, "insufficient_window"))
                 continue
             mean_before = float(rel_before.mean())
             mean_after = float(rel_after.mean())
             if not (np.isfinite(mean_before) and np.isfinite(mean_after)):
+                skipped.append((wb_label, start, "invalid_ratio"))
                 continue
             if mean_before <= 0 or mean_after <= 0:
+                skipped.append((wb_label, start, "invalid_ratio"))
                 continue
             rows.append({
                 "pv_string": pv_string,
@@ -490,6 +506,18 @@ def build_yf_cleaning_impact(
                 "n_reference_strings": len(reference),
             })
 
+    skipped_by_reason: dict[str, int] = {}
+    skipped_by_wb_date: dict[str, dict[str, int]] = {}
+    for wb_label, start, reason in skipped:
+        skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
+        per_date = skipped_by_wb_date.setdefault(wb_label, {})
+        day = start.strftime("%Y-%m-%d")
+        per_date[day] = per_date.get(day, 0) + 1
+    skipped_by_wb_date = {
+        wb_label: dict(sorted(per_date.items()))
+        for wb_label, per_date in sorted(skipped_by_wb_date.items())
+    }
+
     impact = pd.DataFrame(rows, columns=[
         column for column in CLEANING_COLUMNS
         if column not in {"status", "rank_uplift"}
@@ -497,7 +525,8 @@ def build_yf_cleaning_impact(
     if impact.empty:
         raise ValueError(
             "Tidak ada campaign dengan data Yf cukup di kedua sisi "
-            f"(butuh >= {min_window_days} hari sebelum dan sesudah)."
+            f"(butuh >= {min_window_days} hari sebelum dan sesudah); "
+            f"{len(skipped)} campaign dalam periode gugur: {skipped_by_wb_date}."
         )
     impact["status"] = np.where(
         impact["uplift_pct"] >= 2.0,
@@ -542,6 +571,10 @@ def build_yf_cleaning_impact(
         "cleaning_events": int(len(cleaned)),
         "cleaned_strings": int(cleaned["pv_string"].nunique()),
         "strings_without_yield_data": skipped_no_yield,
+        "campaigns_outside_period": campaigns_outside_period,
+        "skipped_campaigns": len(skipped),
+        "skipped_campaigns_by_reason": skipped_by_reason,
+        "skipped_campaigns_by_wb_date": skipped_by_wb_date,
         "evaluated_rows": int(len(impact)),
         "campaign_count": int(len(campaigns)),
         "status_counts": impact["status"].value_counts().to_dict(),

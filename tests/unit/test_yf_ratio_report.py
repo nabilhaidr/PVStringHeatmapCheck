@@ -354,6 +354,55 @@ class TestYfCleaningImpact:
         with pytest.raises(ValueError, match="mapping ST->PV"):
             build_yf_cleaning_impact(_long_frame(n_days=10), events)
 
+    def test_campaign_gugur_karena_data_putus_dihitung_per_wb_tanggal(self):
+        """Tautan telemetri putus (kasus WB01 8-26 Agt 2026) mengosongkan
+        jendela pra. Campaign itu memang tak bisa dinilai, tapi TIDAK boleh
+        lenyap tanpa jejak -- tanpa hitungan ini hasilnya terbaca seolah
+        sheet checklist-nya tidak terbaca."""
+        frame = _long_frame(n_days=20)
+        putus = (frame["pv_string"] == "WB01-INV01-PV2") & frame["date"].between(
+            "2026-06-08", "2026-06-14",
+        )
+        frame.loc[putus, "yf"] = np.nan
+        events = pd.concat([
+            _events(["WB01-INV01-PV1"], ["2026-06-10"]),
+            _events(["WB01-INV01-PV2"], ["2026-06-15"]),
+        ], ignore_index=True)
+        report = build_yf_cleaning_impact(
+            frame, events, window_days=5, min_window_days=2,
+        )
+        assert list(report.impact["pv_string"]) == ["WB01-INV01-PV1"]
+        assert report.metadata["skipped_campaigns"] == 1
+        assert report.metadata["skipped_campaigns_by_reason"] == {
+            "insufficient_window": 1,
+        }
+        assert report.metadata["skipped_campaigns_by_wb_date"] == {
+            "WB01": {"2026-06-15": 1},
+        }
+
+    def test_campaign_di_luar_periode_bukan_gugur(self):
+        """Checklist memuat riwayat bertahun-tahun. Campaign di luar rentang
+        data yield dicatat terpisah -- kalau ikut dihitung gugur, ribuan
+        campaign 2025 menenggelamkan kasus yang benar-benar perlu dilihat."""
+        report = build_yf_cleaning_impact(
+            _long_frame(n_days=20),
+            _events(["WB01-INV01-PV1"], ["2025-06-10", "2026-06-10"]),
+            window_days=5,
+        )
+        assert report.metadata["campaigns_outside_period"] == 1
+        assert report.metadata["skipped_campaigns"] == 0
+        assert report.metadata["skipped_campaigns_by_wb_date"] == {}
+
+    def test_semua_gugur_pesan_error_menyebut_jumlahnya(self):
+        """Kalau SEMUA campaign gugur, metadata tak pernah terbentuk --
+        satu-satunya tempat hitungan itu bisa terlihat adalah pesan error."""
+        with pytest.raises(ValueError, match="1 campaign dalam periode gugur"):
+            build_yf_cleaning_impact(
+                _long_frame(n_days=20),
+                _events(["WB01-INV01-PV1"], ["2026-06-01"]),
+                window_days=5, min_window_days=3,
+            )
+
 
 class TestWorkbooks:
     def test_output_path_mengikuti_rentang(self, tmp_path):
