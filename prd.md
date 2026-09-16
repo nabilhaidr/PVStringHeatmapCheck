@@ -1317,3 +1317,16 @@ Terrain does not break the tie either, and this is where WB01 differs from WB02.
 
 What would settle it is not another telemetry run but a **field check**: read the physical string labels at a few tables in the WB01 cluster, which distinguishes the two placements directly and cheaply. The visit-list document already instructs crews to trust physical labels over map points for WB01-INV07 PV4/PV5 for exactly this reason. It is one of **16 Phase One inverters whose stored placement disagrees with the EL survey by more than 5 m** (worst: WB01-INV21 at a median 50.05 m), none of which carry the cloud-shadow and terrain evidence that settled the four. That is the real open question, and it is the one already tracked here — larger than the four inverters and unchanged in nature by this correction.
 
+**First physical evidence, 2026-09-10 (recorded 2026-09-16): WB01-INV07 follows the EL placement.** The crew on the Phase One visit list photographed the stencilled label on the mounting rail of all five WB01-INV07 tables they visited — `S107-01` to `S107-05`, the Phase One form `S<block><inverter>-<string>` — and every photo carries GPS in its EXIF (`coba/Dokumentasi String/WB01-INV07-PV*`). Where on a 13.83 m Phase One table the stored anchor sits is not settled, so stamp-to-anchor distances are not used; each stamp is measured against another stamp photographed the same way, which cancels the anchor. The drone, hovering nadir over each table at 17 m, gives a second and independent GPS:
+
+| pair | measured N, E | DXF predicts | EL predicts | miss vs DXF | miss vs EL |
+|---|---|---|---|---|---|
+| S107-04 from S107-01 (phone) | +0.9, +14.9 m | -21.8, 0.0 | +0.1, +15.7 | 27.2 m | 1.1 m |
+| S107-05 from S107-02 (phone) | +3.8, +15.2 m | -21.8, 0.0 | 0.0, +15.6 | 29.8 m | 3.8 m |
+| over ST04 from over ST01 (drone) | +0.3, +15.8 m | -21.8, 0.0 | +0.1, +15.7 | 27.2 m | 0.3 m |
+| over ST05 from over ST02 (drone) | -0.1, +15.9 m | -21.8, 0.0 | 0.0, +15.6 | 26.9 m | 0.3 m |
+
+S107-01 to -03 sit where the two sources agree. Strings 4 and 5 are therefore one column east of strings 1 and 2 in the same rows — the EL layout of three rows by six columns — not three rows further south in the same column, where the DXF's six rows by three columns puts them. This is the direct discriminator the telemetry could not supply, and it breaks the wave-4 tie for WB01-INV07 in favour of EL.
+
+**Nothing is moved yet.** One of the nine tied inverters is settled, and partial relocation is exactly what raises collisions from 14 to 68. The finding does reach a second inverter: the EL survey names the tables the DXF calls WB01-INV07-ST04/05/06 as WB01-INV08-ST01/02/03 (2.0-2.2 m apart), so INV08 (wave 3) goes with INV07 if the EL layout holds. The cheapest confirmation is one more photographed label at the stored DXF-ST04 position (-0.993774, 116.635624), where EL predicts `S108-01` and the DXF `S107-04`, followed by the remaining points in `coba/titik_verifikasi_wb01.csv`. The stencils are plainly legible, so the field check proposed above is practical at crew level. Until the cluster is decided, the geometric verdicts for WB01-INV07 PV4/PV5 in the visit list were computed at the wrong tables and are unresolved input rather than evidence.
+
