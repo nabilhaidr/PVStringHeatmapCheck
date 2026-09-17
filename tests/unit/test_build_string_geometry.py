@@ -295,6 +295,56 @@ def test_geometri_inverter_yang_penempatannya_dibantah_ditulis_null(monkeypatch)
     assert tetangga["cross_slope_deg"] is not None
 
 
+# --- jendela fit bidang di pusat meja -----------------------------------------
+
+
+def _dsm_miring_sebagian(label_east, dari_m, sampai_m, lereng_deg=10.0):
+    """DSM sintetis: tanah turun ke timur ``lereng_deg`` hanya pada
+    [label + dari_m, label + sampai_m], datar di luarnya. -> (image, header)."""
+    import numpy as np
+    from PIL import Image
+
+    px = 0.25
+    origin_e, origin_n = label_east - 20.0, 9890605.0
+    east = origin_e + np.arange(240) * px                 # 60 m timur-barat
+    turun = np.clip(east - label_east, dari_m, sampai_m) - dari_m
+    z = 70.0 - turun * math.tan(math.radians(lereng_deg))
+    image = Image.fromarray(np.tile(z, (40, 1)).astype(np.float32), mode="F")   # 10 m utara-selatan
+    return image, (origin_e, origin_n, px, px)
+
+
+@pytest.mark.parametrize("wb, inv, dari_m, sampai_m", [
+    (5, 3, 0.0, 14.98),      # WB03-WB10: label di ujung barat, meja di timurnya
+    (2, 5, -6.91, 6.91),     # WB01-WB02: label di pusat meja
+], ids=["WB05-label-ujung-barat", "WB02-label-pusat"])
+def test_kemiringan_menyamping_diukur_di_meja_bukan_di_titik_label(wb, inv, dari_m, sampai_m):
+    """Jendela fit bidang harus menutup MEJA, bukan berpusat di titik label.
+
+    Foto drone 12 September memastikan titik label ``1129.dxf`` di WB03-WB10
+    berada di ujung barat meja, dan label DXF Cable Routing WB01-WB02 di
+    pusatnya (cv-drone-plts docs/uji_segmentasi_nyata_12sep.md). Jendela yang
+    berpusat di label WB03-WB10 separuhnya jatuh di barat meja; pada tanah yang
+    hanya miring di bawah meja ia melaporkan lereng setengahnya. Di data nyata,
+    separuh selisih cross-slope tetangga timur-barat -- perkiraan galat itu --
+    bermedian ~2 derajat dengan p90 5,6.
+
+    ``elev_m`` tetap elevasi DI titik label: ``tapak`` di cv-drone-plts
+    membangun pojok meja dari titik itu.
+    """
+    import numpy as np
+    import build_string_geometry as b
+
+    label_east, label_north = 459800.0, 9890600.0
+    image, header = _dsm_miring_sebagian(label_east, dari_m, sampai_m)
+    item = {"wb": wb, "inv": inv, "st": 1, "north": label_north, "east": label_east}
+
+    baris = b._geom_row(item, image, header, 1, 1)
+
+    assert baris["cross_slope_deg"] == pytest.approx(10.0, abs=0.3)
+    turun_di_label = float(np.clip(0.0, dari_m, sampai_m) - dari_m)
+    assert baris["elev_m"] == pytest.approx(70.0 - turun_di_label * math.tan(math.radians(10.0)), abs=0.02)
+
+
 # --- pemetaan kanal yang terbantah telemetri ----------------------------------
 
 

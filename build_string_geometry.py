@@ -6,8 +6,8 @@ Sumber:
    sisipnya dalam WGS 84 / UTM zone 50S. Ini satu-satunya sumber koordinat
    per string yang tersedia; gambar PDF hanya memberi patok setting-out
    per petak.
-2. ``dsm.tif`` survei topografi (0,1187 m/piksel) untuk elevasi dan bidang
-   tanah lokal di posisi tiap string.
+2. ``dsm.tif`` survei topografi (0,1187 m/piksel) untuk elevasi di titik
+   label dan bidang tanah lokal di bawah meja tiap string.
 3. ``List of DC Cables 0411.xls`` untuk memetakan nomor ST (sisi lapangan)
    ke nomor PV Huawei (sisi telemetri), supaya artefak ini bisa di-join ke
    data monitoring.
@@ -205,7 +205,7 @@ ASBUILT_PV_FIX = {
     (7, 14, 8): ((16, 6), (16, 4)),
 }
 
-# Jendela fit bidang di posisi string: 15 m timur-barat (panjang satu meja)
+# Jendela fit bidang di bawah MEJA: 15 m timur-barat (panjang satu meja)
 # x 4 m utara-selatan, langkah 0,5 m. Cukup lebar untuk meredam kekasaran
 # tanah, cukup sempit untuk tetap mewakili meja itu sendiri.
 WIN_EW_M = 7.5
@@ -213,6 +213,17 @@ WIN_NS_M = 2.0
 WIN_STEP_M = 0.5
 # rms di atas ini = permukaan tidak cukup planar (vegetasi/tanah kasar).
 MAX_PLANE_RMS_M = 0.5
+# Titik label di sepanjang meja, pecahan panjang dari ujung barat (0 = ujung
+# barat, 0,5 = pusat). Foto drone 12 September: label 1129.dxf di WB03-WB10
+# ada di ujung barat meja, label DXF Cable Routing WB01-WB02 di pusatnya
+# (cv-drone-plts docs/uji_segmentasi_nyata_12sep.md). Jendela yang berpusat di
+# label WB03-WB10 separuhnya jatuh di barat meja.
+LABEL_POSITION = {1: 0.5, 2: 0.5}
+LABEL_POSITION_DEFAULT = 0.0
+# Panjang meja timur-barat: 12 kolom modul portrait di WB01-WB02 (24 modul per
+# string), 13 di WB03-WB10 (26); modul 1,134 m, celah 0,02 m.
+TABLE_LENGTH_M = {1: 12 * 1.134 + 11 * 0.02, 2: 12 * 1.134 + 11 * 0.02}
+TABLE_LENGTH_DEFAULT_M = 13 * 1.134 + 12 * 0.02
 
 COLUMNS = [
     "inverter_id", "st", "pv", "mppt", "north", "east", "lat", "lon",
@@ -445,8 +456,14 @@ def cross_slope_deg(slope_deg: float, aspect_deg: float) -> float:
     ))
 
 
+def table_center_east(wb: int, east: float) -> float:
+    """Easting pusat meja dari easting titik label (sumbu meja timur-barat)."""
+    posisi = LABEL_POSITION.get(wb, LABEL_POSITION_DEFAULT)
+    return east + (0.5 - posisi) * TABLE_LENGTH_M.get(wb, TABLE_LENGTH_DEFAULT_M)
+
+
 def local_plane(image, header, north: float, east: float) -> Optional[Dict]:
-    """Fit bidang tanah pada jendela seukuran meja di sekitar satu string."""
+    """Fit bidang tanah pada jendela seukuran meja yang berpusat di (north, east)."""
     samples = []
     n_steps = int(round(WIN_NS_M / 1.0))
     e_steps = int(round(WIN_EW_M / WIN_STEP_M))
@@ -472,10 +489,14 @@ def _st_to_pv() -> Dict:
 
 
 def _geom_row(item: Dict, image, header, pv, mppt) -> Dict:
-    """Satu baris string_geometry.csv dari label + DSM."""
+    """Satu baris string_geometry.csv dari label + DSM.
+
+    ``elev_m`` adalah elevasi DI titik label; bidang tanah difit di bawah meja
+    (``table_center_east``).
+    """
     inverter_id = f"WB{item['wb']:02d}-INV{item['inv']:02d}"
     lat, lon = utm50s_to_latlon(item["north"], item["east"])
-    plane = local_plane(image, header, item["north"], item["east"])
+    plane = local_plane(image, header, item["north"], table_center_east(item["wb"], item["east"]))
     clean = (plane is not None and plane["rms_m"] <= MAX_PLANE_RMS_M
              and inverter_id not in PLACEMENT_DISPUTED)
     return {
