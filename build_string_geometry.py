@@ -26,6 +26,7 @@ import csv
 import math
 import os
 import re
+from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 from build_site_layout import (
@@ -155,7 +156,27 @@ DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 # -- tanpa satu pun galat, ke-72 string hanya jatuh diam-diam ke TIDAK_BERLAKU.
 # Sejak 18 Sep 2026 posisinya dibaca dari survei EL di sini, dan hilangnya
 # berkas survei itu menghentikan builder alih-alih menerbitkan posisi DXF.
-PLACEMENT_FROM_EL = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"}
+#
+# Gugus WB01 (13 inverter, 18 Sep 2026). Uji awan 16 Agu memisahkan hanya
+# gelombang 2 (INV21/18/25/01, memihak EL dua kali); gelombang 3 dan 4 seri,
+# dan PRD menahan seluruh gugus karena memindah sebagian menaikkan tabrakan
+# < 3 m dari 14 ke 68. Empat jalur bebas kini memihak EL, satu di tiap
+# gelombang:
+#   label fisik : stempel S107-04/05 di rel difoto ber-GPS di posisi EL,
+#                 24 m dari DXF (INV07, gelombang 4).
+#   log cleaning: kru mencatat string menurut label fisik; 12 Sep 19 string
+#                 INV20/21 dicuci = 19 meja biru di foto drone 0216. Posisi EL
+#                 cocok 14/14, posisi DXF 13/29 -- setara menebak (INV20
+#                 gelombang 3, INV21 gelombang 2).
+#   persegi kosong: 11 persegi DXF gugus tidak kebagian satu pun titik EL; 7
+#                 yang tertangkap kamera (0216/0217) semuanya berisi rumput.
+#   meja tak tergambar: 6 titik EL di luar persegi DXF mana pun mendarat di
+#                 meja fisik tanpa poligon di foto 0217.
+# Titik EL gugus hanya jatuh di persegi milik gugus itu sendiri, jadi inverter
+# WB01 lain tidak tersentuh.
+PLACEMENT_FROM_EL = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"} | {
+    f"WB01-INV{i:02d}" for i in (1, 2, 3, 6, 7, 8, 12, 13, 18, 19, 20, 21, 25)
+}
 
 # --- dua ST satu kanal PV di as-built -----------------------------------------
 # Delapan inverter mencatat dua ST berbeda pada SATU kanal PV (Koreksi As-Built
@@ -394,6 +415,33 @@ def relocate_to_el_survey(
         item.pop("table_east", None)
         item.pop("table_north", None)
     return labels
+
+
+def attach_relocated_table_centers(items: List[Dict],
+                                   tables: List[Tuple[float, ...]]) -> List[Dict]:
+    """Pusat meja untuk seluruh string satu gambar, sesudah relokasi EL.
+
+    String yang tidak dipindah mengambil persegi yang memuat labelnya lebih
+    dulu. String yang dipindah (``dari_el``) hanya boleh mengambil persegi yang
+    tersisa, dan hanya bila titik EL-nya jatuh di dalamnya. Dua string di satu
+    persegi adalah tabrakan; memilih salah satunya berarti menebak, jadi yang
+    dipindah dibiarkan di titik EL tanpa pusat meja -- begitu pula titik EL di
+    luar semua persegi, yang di gugus WB01 terbukti menandai meja fisik yang
+    tidak tergambar di DXF.
+    """
+    def pusat(t):
+        return (t[0] + t[1]) / 2.0, (t[2] + t[3]) / 2.0
+
+    tetap = [i for i in items if not i.get("dari_el")]
+    pindah = [i for i in items if i.get("dari_el")]
+    attach_table_centers(tetap, tables)
+    dipakai = {(i["table_east"], i["table_north"]) for i in tetap if "table_east" in i}
+    attach_table_centers(pindah, [t for t in tables if pusat(t) not in dipakai])
+    ganda = Counter((i["table_east"], i["table_north"]) for i in pindah if "table_east" in i)
+    for item in pindah:
+        if ganda.get((item.get("table_east"), item.get("table_north")), 0) > 1:
+            del item["table_east"], item["table_north"]
+    return items
 
 
 def parse_dxf_string_labels(path: str) -> List[Dict]:
@@ -703,13 +751,9 @@ def main() -> None:
         mppt_by_pv = phase_one_mppt_map()
         print(f"[string-geometry] {phase_one_path}: "
               f"{len(phase_one)} label Phase One")
-        attach_table_centers(
-            phase_one, parse_dxf_tables(phase_one_path,
-                                        PHASE_ONE_TABLE_LAYER_PREFIX),
-        )
         # Berkas survei EL hilang -> BERHENTI. Meneruskannya akan menerbitkan
-        # ke-72 string tepi utara di posisi DXF yang sudah dibantah tiga sumber,
-        # dan tidak ada kolom yang memperlihatkan bedanya.
+        # gugus WB01 dan tepi utara WB02 di posisi DXF yang sudah dibantah, dan
+        # tidak ada kolom yang memperlihatkan bedanya.
         el_path = find_raw(EL_SURVEY_NAME, required=False)
         if el_path is None:
             raise SystemExit(
@@ -718,9 +762,14 @@ def main() -> None:
             )
         posisi_el = el_survey_positions(el_path, PLACEMENT_FROM_EL)
         pindah = relocate_to_el_survey(phase_one, posisi_el)
+        attach_relocated_table_centers(
+            pindah, parse_dxf_tables(phase_one_path, PHASE_ONE_TABLE_LAYER_PREFIX),
+        )
         n_el = sum(1 for item in pindah if item.get("dari_el"))
+        n_el_meja = sum(1 for item in pindah if item.get("dari_el") and "table_east" in item)
         print(f"[string-geometry] {el_path}: {n_el} string pindah ke posisi EL "
-              f"({len(PLACEMENT_FROM_EL)} inverter yang penempatannya dibantah)")
+              f"({len(PLACEMENT_FROM_EL)} inverter yang penempatannya dibantah); "
+              f"{n_el_meja} mendapat persegi meja, {n_el - n_el_meja} tetap di titik EL")
         rows += [_geom_row(item, image, header, item["pv"],
                            mppt_by_pv.get(item["pv"]))
                  for item in phase_one]

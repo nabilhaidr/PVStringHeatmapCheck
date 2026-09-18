@@ -420,6 +420,99 @@ def test_label_di_luar_semua_persegi_tidak_diberi_pusat_meja(tmp_path):
     assert "table_north" not in keluar
 
 
+# --- relokasi ke survei EL: pusat meja untuk string yang dipindah -------------
+
+
+_MEJA_P1 = [(459800.0, 459814.4, 9890600.0, 9890604.77),     # A
+            (459815.0, 459829.4, 9890600.0, 9890604.77),     # B
+            (459830.0, 459844.4, 9890600.0, 9890604.77)]     # C
+
+
+def _p1(inv, st, east, north, **kw):
+    return {"label": "x", "wb": 1, "inv": inv, "st": st, "east": east, "north": north, **kw}
+
+
+def test_gugus_wb01_yang_bersengketa_dipindah_ke_survei_el():
+    """Ke-13 inverter gugus WB01 kini ikut PLACEMENT_FROM_EL.
+
+    Empat jalur bebas memihak EL, satu di tiap gelombang uji awan 16 Agu: label
+    fisik WB01-INV07; log cleaning 12 Sep di INV20/21 (EL 14/14, DXF 45 %);
+    ke-7 persegi DXF yang oleh foto drone 0216/0217 berisi rumput adalah persis
+    persegi yang tidak kebagian satu pun titik EL; dan 6 titik EL di luar
+    persegi DXF mana pun mendarat di meja fisik yang tidak tergambar. Aturan
+    PRD "semua atau tidak sama sekali" berlaku: memindah sebagian menaikkan
+    tabrakan 14 -> 68, jadi ketiga belasnya sekaligus.
+    """
+    import build_string_geometry as b
+
+    gugus = {f"WB01-INV{i:02d}" for i in (1, 2, 3, 6, 7, 8, 12, 13, 18, 19, 20, 21, 25)}
+    assert gugus <= b.PLACEMENT_FROM_EL
+    # inverter WB01 di luar gugus -- kontrol uji awan yang sepakat dengan EL -- tidak ikut
+    assert not {"WB01-INV17", "WB01-INV22", "WB01-INV23", "WB01-INV24"} & b.PLACEMENT_FROM_EL
+
+
+def test_string_yang_dipindah_mendapat_pusat_persegi_yang_memuat_titik_elnya():
+    """Titik EL jatuh di dalam persegi meja pada 95 % string gugus WB01 (median
+    jarak 0 m), jadi pusat persegi itulah pusat mejanya -- bukan titik EL yang
+    bisa duduk di mana saja di dalam meja 14,40 x 4,77 m."""
+    import build_string_geometry as b
+
+    tetap = _p1(9, 1, 459807.2, 9890602.4)                      # label DXF di pusat A
+    pindah = _p1(20, 4, 459836.0, 9890603.5, dari_el=True)      # EL di dalam C
+
+    b.attach_relocated_table_centers([tetap, pindah], _MEJA_P1)
+
+    assert pindah["table_east"] == pytest.approx(459837.2)
+    assert pindah["table_north"] == pytest.approx(9890602.385)
+    assert tetap["table_east"] == pytest.approx(459807.2)
+
+
+def test_persegi_milik_string_yang_tidak_dipindah_tidak_bisa_diambil():
+    """Titik EL yang jatuh di meja milik string yang TIDAK dipindah tidak
+    mengambil meja itu. Dua string di satu meja adalah tabrakan, dan memilih
+    salah satunya berarti menebak -- string yang dipindah tetap di titik EL-nya.
+    """
+    import build_string_geometry as b
+
+    tetap = _p1(9, 1, 459807.2, 9890602.4)
+    pindah = _p1(20, 4, 459803.0, 9890601.0, dari_el=True)      # EL di dalam A
+
+    b.attach_relocated_table_centers([tetap, pindah], _MEJA_P1)
+
+    assert "table_east" not in pindah
+    assert tetap["table_east"] == pytest.approx(459807.2)
+
+
+def test_dua_string_dipindah_di_satu_persegi_tidak_diberi_pusat_meja():
+    """Bila dua titik EL jatuh di persegi yang sama, keduanya dibiarkan tanpa
+    pusat meja. Di data nyata titik EL gugus WB01 yang di dalam persegi
+    semuanya unik; pagar ini menjaga agar regenerasi berikutnya tidak diam-diam
+    menaruh dua string di satu meja."""
+    import build_string_geometry as b
+
+    a = _p1(20, 4, 459836.0, 9890603.5, dari_el=True)
+    c = _p1(21, 7, 459840.0, 9890601.0, dari_el=True)           # juga di dalam C
+
+    b.attach_relocated_table_centers([a, c], _MEJA_P1)
+
+    assert "table_east" not in a
+    assert "table_east" not in c
+
+
+def test_titik_el_di_luar_semua_persegi_tetap_di_titik_el():
+    """Meja fisik yang tidak tergambar di DXF: enam titik EL gugus WB01 di luar
+    persegi mana pun mendarat di meja fisik tanpa poligon di foto 0217. Titik
+    itu tetap posisinya, tanpa pusat meja, bukan disnap ke persegi terdekat."""
+    import build_string_geometry as b
+
+    pindah = _p1(25, 3, 459870.0, 9890602.0, dari_el=True)
+
+    b.attach_relocated_table_centers([pindah], _MEJA_P1)
+
+    assert "table_east" not in pindah
+    assert (pindah["east"], pindah["north"]) == (459870.0, 9890602.0)
+
+
 # --- jendela fit bidang di pusat meja -----------------------------------------
 
 
