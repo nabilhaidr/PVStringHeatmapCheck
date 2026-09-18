@@ -19,6 +19,7 @@ from build_site_layout import (
     dsm_pixel,
     find_raw,
     fit_plane,
+    latlon_to_utm50s,
     parse_callout_pairs,
     parse_coordinate_items,
     segment_points,
@@ -195,6 +196,28 @@ def test_utm_easting_west_of_central_meridian_gives_smaller_longitude():
 
     assert lon < 117.0
     assert lon == pytest.approx(116.636, abs=0.005)
+
+
+@pytest.mark.parametrize("north, east", [
+    (9_890_241.334, 459_726.987),   # WB02-INV01-ST01 di posisi survei EL
+    (9_890_600.000, 459_800.000),   # WB05, ujung timur site
+    (10_000_000.0, 500_000.0),      # titik acuan zona
+])
+def test_latlon_kembali_ke_utm_yang_sama(north, east):
+    """Konversi balik harus membatalkan konversi maju sampai skala milimeter.
+
+    Survei EL memberi posisi dalam lat/lon sementara seluruh geometri bekerja
+    dalam UTM, jadi arah balik ini yang memindahkan 72 string Phase One yang
+    penempatan DXF-nya terbantah. Galat sub-meter di sini tidak akan terlihat
+    di kolom mana pun -- ia hanya menggeser jendela fit bidang ke tanah yang
+    salah, lalu terbit sebagai cross-slope yang tampak wajar.
+    """
+    lat, lon = utm50s_to_latlon(north, east)
+
+    got_north, got_east = latlon_to_utm50s(lat, lon)
+
+    assert got_north == pytest.approx(north, abs=0.001)
+    assert got_east == pytest.approx(east, abs=0.001)
 
 
 # --- segmentasi petak ---------------------------------------------------------

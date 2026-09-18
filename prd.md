@@ -950,13 +950,19 @@ displacement of the attached geometry - consistent with the 14-36 m offsets
 measured for *every* string of WB02-INV06, not a subset - or modules that are
 not canted as the terrain says. Until Open Question 8 settles it, the geometric
 evidence columns must not be read as evidence for Phase One's northern edge:
-they are the input to that question, not an answer to it. **Since 2026-08-13
-they are no longer emitted at all** for those four inverters - `PLACEMENT_DISPUTED`
-in `build_string_geometry.py` nulls `slope_deg`, `aspect_deg` and
-`cross_slope_deg` for their 72 strings, so the validator returns
+they are the input to that question, not an answer to it. From 2026-08-13 they
+were **not emitted at all** for those four inverters: `PLACEMENT_DISPUTED` in
+`build_string_geometry.py` nulled `slope_deg`, `aspect_deg` and
+`cross_slope_deg` for their 72 strings, so the validator returned
 `TIDAK_BERLAKU` instead of letting a wrong number pass as evidence and clear a
-string off the visit list. Coordinates, `pv` and `mppt` are kept: what is
-disputed is the label-to-position link, not the existence of the positions.
+string off the visit list. **Since 2026-09-18 the builder relocates them
+instead** (`PLACEMENT_FROM_EL`): the coordinates come from the EL survey
+(`el drone 2025/all.csv`, string centroid) and the ground plane is fitted
+there - which is what the one-off script of 2026-08-15 did directly to the CSV
+without the builder ever reproducing it. A missing EL survey file now stops the
+build rather than silently re-publishing the disputed DXF positions. Of the 72,
+69 carry a plane: three exceed the site-wide `plane_rms_m` 0.5 m gate that the
+one-off script never applied.
 
 No harm reached the field list. **None of the 35 directional verdicts in Phase
 One fall on those four inverters.** All 35 sit where cross-slope is negligible

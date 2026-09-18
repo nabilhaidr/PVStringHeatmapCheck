@@ -23,6 +23,7 @@ from build_string_geometry import (
     empty_pv_channels,
     fix_asbuilt_pv,
     parse_dxf_string_labels,
+    parse_dxf_tables,
     parse_phase_one_labels,
     phase_one_mppt_map,
     resolve_dxf_relabels,
@@ -260,39 +261,163 @@ def test_wb10_inv03_st_is_renumbered_by_spatial_order():
         assert keluar[posisi] == (10, 3, benar)
 
 
-def test_geometri_inverter_yang_penempatannya_dibantah_ditulis_null(monkeypatch):
-    """Fit bidang bersih pun DIBUANG bila penempatan stringnya sendiri dibantah.
+def test_penempatan_yang_dibantah_pindah_ke_posisi_survei_el():
+    """Keempat inverter tepi utara Phase One memakai koordinat survei EL.
 
-    Empat inverter tepi utara Phase One membawa cross-slope curam menurut label
-    DXF (sampai -15,4 deg), tetapi tiga sumber bebas menyanggahnya: survei EL
-    menempatkannya di tanah datar (|cs| <= 1,9 deg, sd <= 0,69), telemetri Juni
-    mengukur asimetri yang praktis nol pada 72 string (r = -0,020 di mana model
-    yang sama mencapai +0,699 di WB03-10), dan medan di posisi versi EL memang
-    datar. Kontrol pada tiga inverter WB03-10 yang kedua sumbernya sepakat
-    memberi sd yang sama persis, jadi selisihnya bukan artefak metode.
+    Label DXF memberi mereka cross-slope curam (sampai -15,4 deg), tetapi tiga
+    sumber bebas menyanggahnya: survei EL menempatkannya di tanah datar
+    (|cs| <= 1,9 deg, sd <= 0,69), telemetri Juni mengukur asimetri praktis nol
+    pada 72 string (r = -0,020 di mana model yang sama mencapai +0,699 di
+    WB03-10), dan medan di posisi versi EL memang datar. Kontrol pada tiga
+    inverter WB03-10 yang kedua sumbernya sepakat memberi sd yang sama persis.
 
-    Yang terbukti adalah penempatan DXF-nya SALAH -- bukan bahwa posisi EL
-    benar sampai tingkat string. Karena itu kolomnya dikosongkan, bukan diisi
-    tebakan: NULL membuat validator memulangkan TIDAK_BERLAKU, sedangkan angka
-    yang salah akan lolos sebagai bukti dan bisa membebaskan string dari daftar
-    kunjungan.
+    Ini yang dulu dikerjakan skrip sekali pakai (commit 22b059e) LANGSUNG ke
+    CSV, sehingga builder tidak pernah bisa mereproduksinya: regenerasi polos
+    memulangkan ke-72 baris ke posisi DXF tanpa satu pun galat, dan ke-72 itu
+    hanya jatuh diam-diam ke TIDAK_BERLAKU. Uji ini yang menutup jalur itu.
+    """
+    import build_string_geometry as b
+
+    labels = [
+        {"label": "x", "wb": 2, "inv": 6, "st": 1, "north": 9890228.489, "east": 459790.538},
+        {"label": "x", "wb": 2, "inv": 5, "st": 1, "north": 9890228.489, "east": 459790.538},
+    ]
+    posisi_el = {("WB02-INV06", 1): (9890241.334, 459726.987),
+                 ("WB02-INV05", 1): (9890111.111, 459111.111)}
+
+    dibantah, tetangga = b.relocate_to_el_survey(labels, posisi_el)
+
+    assert (dibantah["north"], dibantah["east"]) == (9890241.334, 459726.987)
+    assert dibantah["dari_el"] is True
+    # Bedah, bukan sapu rata: inverter tetangga tidak dibantah, jadi tidak
+    # dipindah walau survei EL memuat posisinya juga.
+    assert (tetangga["north"], tetangga["east"]) == (9890228.489, 459790.538)
+    assert "dari_el" not in tetangga
+
+
+def test_bidang_string_yang_dipindah_ke_el_tetap_diisi(monkeypatch):
+    """Sesudah pindah ke posisi EL, kolom bidang DIISI -- bukan dikosongkan.
+
+    Sampai 15 Agu 2026 kolomnya sengaja NULL karena yang terbukti hanya "DXF
+    salah", bukan "EL benar". Open Question 8 mencabut dasar itu: di posisi EL
+    medannya dibaca ulang dari dsm.tif, |cs| median 1,34 maks 3,29 deg -- rata
+    seperti sisa Phase One. Kalau NULL kembali, ke-72 string itu hilang dari
+    penilaian tanpa satu pun galat.
     """
     import build_string_geometry as b
 
     monkeypatch.setattr(b, "local_plane",
-                        lambda *a: {"slope_deg": 12.0, "aspect_deg": 90.0,
+                        lambda *a: {"slope_deg": 1.3, "aspect_deg": 90.0,
                                     "rms_m": 0.05})
     monkeypatch.setattr(b, "sample_dsm", lambda *a: 70.0)
-    titik = {"north": 9890228.489, "east": 459790.538}
+    item = {"wb": 2, "inv": 6, "st": 1, "north": 9890241.334, "east": 459726.987,
+            "dari_el": True}
 
-    dibantah = b._geom_row({"wb": 2, "inv": 6, "st": 1, **titik}, None, None, 1, 1)
-    tetangga = b._geom_row({"wb": 2, "inv": 5, "st": 1, **titik}, None, None, 1, 1)
+    baris = b._geom_row(item, None, None, 1, 1)
 
-    assert dibantah["cross_slope_deg"] is None
-    assert dibantah["slope_deg"] is None
-    assert dibantah["aspect_deg"] is None
-    # Bedah, bukan sapu rata: inverter tetangga dengan fit yang sama tetap terisi.
-    assert tetangga["cross_slope_deg"] is not None
+    assert baris["cross_slope_deg"] is not None
+    assert baris["slope_deg"] == 1.3
+
+
+def test_posisi_el_dibaca_dari_survei_dengan_preambel_bergerigi(tmp_path):
+    """Posisi EL = rata-rata lat/lon modul satu string, dari all.csv apa adanya.
+
+    Dua jebakan berkasnya ikut diuji karena keduanya gagal DIAM-DIAM: header
+    data mulai di bawah preambel ambang rating, dan nama kolomnya berawalan
+    spasi (``' Latitude'``). Tanpa keduanya ditangani, pemetaannya kosong dan
+    ke-72 string tetap di posisi DXF.
+    """
+    import build_string_geometry as b
+
+    baris = ["# preambel ambang rating"] * 33
+    baris.append("#String, Table x, Module x, Longitude, Latitude")
+    baris.append("S206_01,1,1,116.6380000,-0.9930000")
+    baris.append("S206_01,1,2,116.6380200,-0.9930200")
+    baris.append("S105_03,1,1,116.6000000,-0.9900000")
+    path = tmp_path / "all.csv"
+    path.write_text("\n".join(baris) + "\n", encoding="utf-8-sig")
+
+    posisi = b.el_survey_positions(str(path), {"WB02-INV06"})
+
+    assert set(posisi) == {("WB02-INV06", 1)}
+    north, east = posisi[("WB02-INV06", 1)]
+    lat, lon = b.utm50s_to_latlon(north, east)
+    assert lat == pytest.approx(-0.99301, abs=1e-5)
+    assert lon == pytest.approx(116.63801, abs=1e-5)
+
+
+# --- pusat meja dari persegi DXF ----------------------------------------------
+
+
+def _persegi(east_min, north_min, layer="array5-finish",
+             panjang=14.95, lebar=4.87):
+    """Satu persegi meja (LWPOLYLINE tertutup) sebagai pasangan kode DXF."""
+    sudut = [(east_min, north_min), (east_min + panjang, north_min),
+             (east_min + panjang, north_min + lebar), (east_min, north_min + lebar)]
+    ent = [(0, "LWPOLYLINE"), (8, layer), (90, 4), (70, 1)]
+    for e, n in sudut:
+        ent += [(10, e), (20, n)]
+    return ent
+
+
+def test_persegi_meja_dibaca_dari_layer_array(tmp_path):
+    """Layer ``arrayN-*`` 1129.dxf memuat satu persegi per meja, 14,95 x 4,87 m.
+
+    4,87 m adalah 4,95 m tampak-atas pada tilt 10 derajat, jadi persegi ini
+    memang tapak meja -- bukan kotak pembantu gambar.
+    """
+    path = _dxf(tmp_path, [_persegi(459800.0, 9890600.0),
+                           _persegi(459900.0, 9890600.0, layer="teks")])
+
+    meja = parse_dxf_tables(path, "array")
+
+    assert len(meja) == 1
+    assert meja[0] == pytest.approx((459800.0, 459814.95, 9890600.0, 9890604.87))
+
+
+def test_pusat_meja_datang_dari_persegi_yang_memuat_labelnya(tmp_path):
+    """Label yang bergeser DI DALAM mejanya tetap memberi pusat meja yang benar.
+
+    77 label WB03-10 duduk >10% panjang meja ke dalam (median 0,42; maksimum
+    0,98) -- terbanyak di WB08-INV07, WB05-INV11, WB03-INV08, WB05-INV04,
+    WB08-INV06. Rumus "label + setengah meja" menggeser jendela fit bidang
+    sampai 7 m ke meja SEBELAHNYA, dan itulah yang membuat poligon drone di
+    0191/0192 tampak seperti "meja tak standar".
+    """
+    from build_string_geometry import attach_table_centers, table_center_east
+
+    path = _dxf(tmp_path, [_persegi(459800.0, 9890600.0)])
+    meja = parse_dxf_tables(path, "array")
+    # label 5,2 m ke dalam meja, seperti WB05-INV04-ST06
+    label = {"wb": 5, "inv": 4, "st": 6, "east": 459805.2, "north": 9890602.4}
+
+    [keluar] = attach_table_centers([label], meja)
+
+    assert keluar["table_east"] == pytest.approx(459807.475)
+    assert keluar["table_north"] == pytest.approx(9890602.435)
+    # rumus pecahan akan menaruhnya 5,2 m terlalu ke timur
+    assert table_center_east(5, label["east"]) == pytest.approx(459812.69, abs=0.01)
+
+
+def test_label_di_luar_semua_persegi_tidak_diberi_pusat_meja(tmp_path):
+    """Label tanpa meja yang memuatnya dibiarkan TANPA pusat meja, bukan disnap.
+
+    13 label memang jatuh di luar setiap persegi; enam di antaranya 5,6-9,1 m
+    jauhnya (WB08-INV06/INV07) dan persegi terdekatnya sudah dipakai label
+    lain. Men-snap ke yang terdekat berarti menebak meja milik string lain
+    lalu menerbitkannya sebagai koordinat -- kelas kesalahan yang sama dengan
+    memilih salah satu dari dua posisi DXF pada label kembar.
+    """
+    from build_string_geometry import attach_table_centers
+
+    path = _dxf(tmp_path, [_persegi(459800.0, 9890600.0)])
+    meja = parse_dxf_tables(path, "array")
+    label = {"wb": 8, "inv": 7, "st": 1, "east": 459790.0, "north": 9890602.4}
+
+    [keluar] = attach_table_centers([label], meja)
+
+    assert "table_east" not in keluar
+    assert "table_north" not in keluar
 
 
 # --- jendela fit bidang di pusat meja -----------------------------------------
@@ -343,6 +468,38 @@ def test_kemiringan_menyamping_diukur_di_meja_bukan_di_titik_label(wb, inv, dari
     assert baris["cross_slope_deg"] == pytest.approx(10.0, abs=0.3)
     turun_di_label = float(np.clip(0.0, dari_m, sampai_m) - dari_m)
     assert baris["elev_m"] == pytest.approx(70.0 - turun_di_label * math.tan(math.radians(10.0)), abs=0.02)
+
+
+def test_jendela_bidang_mengikuti_pusat_meja_dxf_bukan_rumus_pecahan():
+    """Bila persegi DXF-nya diketahui, jendela fit bidang memakai pusat ITU.
+
+    Untuk label yang bergeser di dalam mejanya, rumus pecahan (label + 7,49 m)
+    menaruh jendela di meja sebelahnya. Di sini tanah hanya miring pada
+    [-5,2 .. +9,7] m dari label -- tepat di bawah meja yang memuat label yang
+    bergeser 5,2 m ke dalam -- dan datar di luarnya. Rumus pecahan akan
+    melaporkan kemiringan yang jauh lebih kecil karena separuh jendelanya
+    jatuh di tanah datar sebelah timur.
+    """
+    import build_string_geometry as b
+
+    label_east, label_north = 459800.0, 9890600.0
+    image, header = _dsm_miring_sebagian(label_east, -5.2, 9.7)
+    item = {"wb": 5, "inv": 4, "st": 6, "north": label_north, "east": label_east,
+            "table_east": label_east + 2.275, "table_north": label_north}
+
+    baris = b._geom_row(item, image, header, 1, 1)
+    tanpa_meja = b._geom_row({k: v for k, v in item.items()
+                              if k not in ("table_east", "table_north")},
+                             image, header, 1, 1)
+
+    assert baris["cross_slope_deg"] == pytest.approx(10.0, abs=0.3)
+    assert tanpa_meja["cross_slope_deg"] < 0.8 * baris["cross_slope_deg"]
+    # Pusat meja terbit dalam kedua satuan; tanpa meja kolomnya kosong, bukan
+    # diisi perkiraan rumus pecahan yang tidak bisa dibedakan dari hasil DXF.
+    assert baris["table_east"] == pytest.approx(item["table_east"], abs=0.001)
+    assert baris["table_lat"] == pytest.approx(
+        b.utm50s_to_latlon(item["table_north"], item["table_east"])[0], abs=1e-7)
+    assert tanpa_meja["table_east"] is None and tanpa_meja["table_lon"] is None
 
 
 # --- pemetaan kanal yang terbantah telemetri ----------------------------------

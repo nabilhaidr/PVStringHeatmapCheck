@@ -26,13 +26,14 @@ import csv
 import math
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from build_site_layout import (
     BLOCK_GAP_M,
     dsm_path,
     find_raw,
     fit_plane,
+    latlon_to_utm50s,
     open_dsm,
     sample_dsm,
     utm50s_to_latlon,
@@ -41,10 +42,17 @@ from build_site_layout import (
 RAW_DIR = "raw data input"
 DXF_NAME = "1129.dxf"
 CABLE_NAME = "List of DC Cables 0411.xls"
+EL_SURVEY_NAME = "all.csv"
 OUT_PATH = os.path.join("config", "string_geometry.csv")
 
 LABEL_RE = re.compile(r"^WB(\d{2})INV(\d{2})ST(\d+)$", re.IGNORECASE)
+EL_PHASE_ONE_RE = re.compile(r"^S([12])(\d{2})_(\d+)$")
 TEXT_ENTITIES = {"TEXT", "MTEXT", "ATTRIB"}
+# Layer tapak meja: satu LWPOLYLINE per meja.
+TABLE_LAYER_PREFIX = "array"             # 1129.dxf (WB03-WB10)
+PHASE_ONE_TABLE_LAYER_PREFIX = "_INV_"   # DXF Cable Routing (WB01/WB02)
+# Label yang tepat di garis tepi masih dihitung sebagai "di dalam" meja.
+TABLE_TOL_M = 0.3
 
 # --- Phase One (WB01/WB02) ----------------------------------------------------
 # Sumbernya gambar tray AC, bukan gambar string: 7.840 entitas teks, hanya 900
@@ -119,10 +127,8 @@ DXF_ST_SHIFT = {(6, 6): (3, -1, 23)}
 DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 
 # --- penempatan string yang dibantah bukti lain -------------------------------
-# Bukan koreksi melainkan PENOLAKAN. Label DXF menaruh keempat inverter ini di
-# lereng -- cross-slope sampai -15,4 deg -- dan tiga sumber bebas menyanggahnya,
-# tetapi tidak satu pun memberi penempatan pengganti sampai tingkat string. Yang
-# terbukti adalah "DXF salah", BUKAN "EL benar".
+# Label DXF menaruh keempat inverter ini di lereng -- cross-slope sampai
+# -15,4 deg -- dan tiga sumber bebas menyanggahnya:
 #
 #   survei EL : posisinya di tanah datar, |cs| <= 1,9 deg dan sd <= 0,69 (di
 #               posisi DXF sd 1,24-5,53). Jarak ke titik geometri terdekat cuma
@@ -137,10 +143,19 @@ DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 #               kedua posisi (8,26/8,17, 4,58/4,58, 9,07/9,07), jadi selisih di
 #               atas bukan artefak metode.
 #
-# Kolom bidangnya dikosongkan supaya validator memulangkan TIDAK_BERLAKU. Angka
-# yang salah jauh lebih berbahaya daripada kolom kosong: ia lolos sebagai bukti
-# dan bisa MEMBEBASKAN string dari daftar kunjungan lapangan.
-PLACEMENT_DISPUTED = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"}
+# Sampai 15 Agu 2026 kolom bidangnya dikosongkan, karena yang terbukti hanya
+# "DXF salah" dan bukan "EL benar". Open Question 8 mencabut dasar itu: di
+# posisi EL medannya dibaca ULANG dari dsm.tif dan ternyata rata seperti sisa
+# Phase One (|cs| median 1,34 maks 3,29 deg), sementara posisi DXF menaruh
+# keempatnya di lereng -15,4 deg. Karena itu ke-72 string PINDAH ke koordinat
+# survei EL, dan kolom bidangnya diisi di posisi itu.
+#
+# Penerapan pertamanya (commit 22b059e) lewat skrip sekali pakai LANGSUNG ke
+# CSV, sehingga builder ini memulangkannya ke posisi DXF setiap kali dijalankan
+# -- tanpa satu pun galat, ke-72 string hanya jatuh diam-diam ke TIDAK_BERLAKU.
+# Sejak 18 Sep 2026 posisinya dibaca dari survei EL di sini, dan hilangnya
+# berkas survei itu menghentikan builder alih-alih menerbitkan posisi DXF.
+PLACEMENT_FROM_EL = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"}
 
 # --- dua ST satu kanal PV di as-built -----------------------------------------
 # Delapan inverter mencatat dua ST berbeda pada SATU kanal PV (Koreksi As-Built
@@ -228,15 +243,16 @@ TABLE_LENGTH_DEFAULT_M = 13 * 1.134 + 12 * 0.02
 COLUMNS = [
     "inverter_id", "st", "pv", "mppt", "north", "east", "lat", "lon",
     "elev_m", "slope_deg", "aspect_deg", "cross_slope_deg", "plane_rms_m",
+    "table_east", "table_north", "table_lat", "table_lon",
 ]
 
 
-def _iter_dxf_text(path: str):
-    """Streaming entitas teks DXF -> {label, layer, east, north}.
+def _iter_dxf_entities(path: str, kinds):
+    """Streaming entitas DXF -> {kind, label, layer, pts: [[east, north], ...]}.
 
     Per pasangan (kode, nilai) karena DXF hasil export bisa ratusan MB --
     gambar tray AC yang satu itu 337 MB. Kode 8 = layer, 10 = easting,
-    20 = northing.
+    20 = northing; polyline mengulang 10/20 per simpul.
     """
     cur: Optional[Dict] = None
     code: Optional[str] = None
@@ -250,18 +266,134 @@ def _iter_dxf_text(path: str):
             if current_code == "0":
                 if cur:
                     yield cur
-                cur = {} if value.strip().upper() in TEXT_ENTITIES else None
+                kind = value.strip().upper()
+                cur = {"kind": kind, "pts": []} if kind in kinds else None
             elif cur is not None:
                 if current_code == "1":
                     cur["label"] = value.strip()
                 elif current_code == "8":
                     cur["layer"] = value.strip()
                 elif current_code == "10":
-                    cur["east"] = float(value)
-                elif current_code == "20":
-                    cur["north"] = float(value)
+                    cur["pts"].append([float(value), None])
+                elif current_code == "20" and cur["pts"] and cur["pts"][-1][1] is None:
+                    cur["pts"][-1][1] = float(value)
     if cur:
         yield cur
+
+
+def _iter_dxf_text(path: str):
+    """Streaming entitas teks DXF -> {label, layer, east, north}."""
+    for ent in _iter_dxf_entities(path, TEXT_ENTITIES):
+        out = {k: ent[k] for k in ("label", "layer") if k in ent}
+        if ent["pts"] and ent["pts"][0][1] is not None:
+            out["east"], out["north"] = ent["pts"][0]
+        yield out
+
+
+def parse_dxf_tables(path: str, layer_prefix: str) -> List[Tuple[float, ...]]:
+    """Tapak meja -> [(east_min, east_max, north_min, north_max), ...].
+
+    Satu LWPOLYLINE per meja: 14,95 x 4,87 m di semua 3.570 meja 1129.dxf
+    (4,87 = 4,95 m tampak-atas pada tilt 10 derajat), 14,40 x 4,77 m di 900
+    meja DXF Cable Routing. Dipakai karena TITIK LABEL tidak konsisten
+    letaknya di dalam meja, sedangkan persegi ini konsisten.
+    """
+    rects: List[Tuple[float, ...]] = []
+    for ent in _iter_dxf_entities(path, {"LWPOLYLINE"}):
+        if not ent.get("layer", "").startswith(layer_prefix):
+            continue
+        pts = [p for p in ent["pts"] if p[1] is not None]
+        if len(pts) < 4:
+            continue
+        easts = [p[0] for p in pts]
+        norths = [p[1] for p in pts]
+        rects.append((min(easts), max(easts), min(norths), max(norths)))
+    return rects
+
+
+def attach_table_centers(labels: List[Dict],
+                         tables: List[Tuple[float, ...]]) -> List[Dict]:
+    """Isi ``table_east``/``table_north`` dari persegi meja yang MEMUAT label.
+
+    Label tanpa persegi yang memuatnya dibiarkan TANPA kedua kolom itu, dan
+    ``_geom_row`` jatuh ke rumus pecahan. 13 label memang di luar setiap
+    persegi; enam di antaranya 5,6-9,1 m jauhnya (WB08-INV06/INV07) dan
+    persegi terdekatnya sudah dipakai label lain -- men-snap ke yang terdekat
+    berarti menebak meja milik string lain lalu menerbitkannya sebagai
+    koordinat.
+    """
+    bucket: Dict[int, List[Tuple[float, ...]]] = {}
+    for t in tables:
+        for k in range(int((t[2] - TABLE_TOL_M) // 10),
+                       int((t[3] + TABLE_TOL_M) // 10) + 1):
+            bucket.setdefault(k, []).append(t)
+    for item in labels:
+        east, north = item["east"], item["north"]
+        for t in bucket.get(int(north // 10), ()):
+            if (t[0] - TABLE_TOL_M <= east <= t[1] + TABLE_TOL_M
+                    and t[2] - TABLE_TOL_M <= north <= t[3] + TABLE_TOL_M):
+                item["table_east"] = (t[0] + t[1]) / 2.0
+                item["table_north"] = (t[2] + t[3]) / 2.0
+                break
+    return labels
+
+
+def el_survey_positions(path: str,
+                        inverter_ids) -> Dict[Tuple[str, int], Tuple[float, float]]:
+    """(inverter_id, st) -> (north, east) rata-rata modul di survei EL.
+
+    Hanya untuk ``inverter_ids`` yang diminta. Dua jebakan berkasnya ditangani
+    di sini karena keduanya gagal DIAM-DIAM: header data duduk di bawah
+    preambel ambang rating yang bergerigi, dan nama kolomnya berawalan spasi.
+    """
+    total: Dict[Tuple[str, int], List[float]] = {}
+    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+        for line in handle:
+            if line.startswith("#String"):
+                header = [c.strip() for c in next(csv.reader([line]))]
+                break
+        else:
+            return {}
+        for row in csv.DictReader(handle, fieldnames=header):
+            kunci = _el_key(row.get("#String", ""))
+            if kunci is None or kunci[0] not in inverter_ids:
+                continue
+            acc = total.setdefault(kunci, [0.0, 0.0, 0])
+            acc[0] += float(row["Latitude"])
+            acc[1] += float(row["Longitude"])
+            acc[2] += 1
+    return {k: latlon_to_utm50s(lat / n, lon / n)
+            for k, (lat, lon, n) in total.items()}
+
+
+def _el_key(label: str) -> Optional[Tuple[str, int]]:
+    """Label survei EL -> (inverter_id, st). Dua konvensi dalam satu berkas."""
+    label = label.strip()
+    phase_one = EL_PHASE_ONE_RE.match(label)
+    match = phase_one or LABEL_RE.match(label)
+    if not match:
+        return None
+    wb, inv, st = match.groups()
+    return f"WB{int(wb):02d}-INV{int(inv):02d}", int(st)
+
+
+def relocate_to_el_survey(
+        labels: List[Dict],
+        positions: Dict[Tuple[str, int], Tuple[float, float]]) -> List[Dict]:
+    """Pindahkan string ``PLACEMENT_FROM_EL`` ke koordinat survei EL.
+
+    Yang dipindah hanya string yang penempatan DXF-nya dibantah; ``positions``
+    boleh memuat lebih banyak tanpa menyentuh string lain.
+    """
+    for item in labels:
+        kunci = (f"WB{item['wb']:02d}-INV{item['inv']:02d}", item["st"])
+        if kunci[0] not in PLACEMENT_FROM_EL or kunci not in positions:
+            continue
+        item["north"], item["east"] = positions[kunci]
+        item["dari_el"] = True
+        item.pop("table_east", None)
+        item.pop("table_north", None)
+    return labels
 
 
 def parse_dxf_string_labels(path: str) -> List[Dict]:
@@ -492,13 +624,20 @@ def _geom_row(item: Dict, image, header, pv, mppt) -> Dict:
     """Satu baris string_geometry.csv dari label + DSM.
 
     ``elev_m`` adalah elevasi DI titik label; bidang tanah difit di bawah meja
-    (``table_center_east``).
+    -- pusat meja dari persegi DXF bila diketahui (``attach_table_centers``),
+    kalau tidak dari rumus pecahan (``table_center_east``).
     """
     inverter_id = f"WB{item['wb']:02d}-INV{item['inv']:02d}"
     lat, lon = utm50s_to_latlon(item["north"], item["east"])
-    plane = local_plane(image, header, item["north"], table_center_east(item["wb"], item["east"]))
-    clean = (plane is not None and plane["rms_m"] <= MAX_PLANE_RMS_M
-             and inverter_id not in PLACEMENT_DISPUTED)
+    center_east = item.get("table_east", table_center_east(item["wb"], item["east"]))
+    center_north = item.get("table_north", item["north"])
+    plane = local_plane(image, header, center_north, center_east)
+    clean = plane is not None and plane["rms_m"] <= MAX_PLANE_RMS_M
+    # Pusat meja ditulis dalam KEDUA satuan, seperti titik label: UTM untuk
+    # kerja spasial, lat/lon untuk ``tapak`` di cv-drone-plts.
+    punya_meja = "table_east" in item
+    table_lat, table_lon = (utm50s_to_latlon(center_north, center_east)
+                            if punya_meja else (None, None))
     return {
         "inverter_id": inverter_id,
         "st": item["st"],
@@ -516,6 +655,10 @@ def _geom_row(item: Dict, image, header, pv, mppt) -> Dict:
             if clean else None
         ),
         "plane_rms_m": plane["rms_m"] if plane else None,
+        "table_east": round(center_east, 3) if punya_meja else None,
+        "table_north": round(center_north, 3) if punya_meja else None,
+        "table_lat": round(table_lat, 7) if punya_meja else None,
+        "table_lon": round(table_lon, 7) if punya_meja else None,
     }
 
 
@@ -525,6 +668,12 @@ def main() -> None:
     if not labels:
         raise SystemExit(f"{dxf_path}: tidak ada label string ditemukan.")
     print(f"[string-geometry] {dxf_path}: {len(labels)} label string")
+
+    tables = parse_dxf_tables(dxf_path, TABLE_LAYER_PREFIX)
+    attach_table_centers(labels, tables)
+    n_meja = sum(1 for item in labels if "table_east" in item)
+    print(f"[string-geometry] {dxf_path}: {len(tables)} persegi meja; "
+          f"label bermeja {n_meja}/{len(labels)}")
 
     dsm_file = dsm_path()
     image, header = open_dsm(dsm_file)
@@ -554,6 +703,24 @@ def main() -> None:
         mppt_by_pv = phase_one_mppt_map()
         print(f"[string-geometry] {phase_one_path}: "
               f"{len(phase_one)} label Phase One")
+        attach_table_centers(
+            phase_one, parse_dxf_tables(phase_one_path,
+                                        PHASE_ONE_TABLE_LAYER_PREFIX),
+        )
+        # Berkas survei EL hilang -> BERHENTI. Meneruskannya akan menerbitkan
+        # ke-72 string tepi utara di posisi DXF yang sudah dibantah tiga sumber,
+        # dan tidak ada kolom yang memperlihatkan bedanya.
+        el_path = find_raw(EL_SURVEY_NAME, required=False)
+        if el_path is None:
+            raise SystemExit(
+                f"survei EL ({EL_SURVEY_NAME}) tidak ada di bawah {RAW_DIR!r}; "
+                f"{len(PLACEMENT_FROM_EL)} inverter Phase One butuh posisinya."
+            )
+        posisi_el = el_survey_positions(el_path, PLACEMENT_FROM_EL)
+        pindah = relocate_to_el_survey(phase_one, posisi_el)
+        n_el = sum(1 for item in pindah if item.get("dari_el"))
+        print(f"[string-geometry] {el_path}: {n_el} string pindah ke posisi EL "
+              f"({len(PLACEMENT_FROM_EL)} inverter yang penempatannya dibantah)")
         rows += [_geom_row(item, image, header, item["pv"],
                            mppt_by_pv.get(item["pv"]))
                  for item in phase_one]

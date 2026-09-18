@@ -186,6 +186,30 @@ def utm50s_to_latlon(northing: float, easting: float) -> Tuple[float, float]:
     return math.degrees(lat), math.degrees(lon)
 
 
+def latlon_to_utm50s(lat: float, lon: float) -> Tuple[float, float]:
+    """(lat, lon) derajat -> WGS 84 UTM zone 50S (northing, easting).
+
+    Dibalik secara numerik dari ``utm50s_to_latlon`` alih-alih mengetik deret
+    Snyder arah maju: satu rumus lebih sedikit untuk salah ketik, dan yang
+    diuji bolak-balik adalah fungsi yang benar-benar dipakai di seluruh repo.
+    Jacobian-nya nyaris tetap pada skala site, jadi tiga iterasi sudah memberi
+    milimeter.
+    """
+    north = UTM_FALSE_NORTHING_SOUTH + lat * 110_574.0
+    east = UTM_FALSE_EASTING + (lon - UTM_ZONE50_CM_DEG) * 111_320.0
+    for _ in range(3):
+        got_lat, got_lon = utm50s_to_latlon(north, east)
+        lat_n, lon_n = utm50s_to_latlon(north + 1.0, east)
+        lat_e, lon_e = utm50s_to_latlon(north, east + 1.0)
+        a11, a12 = lat_n - got_lat, lat_e - got_lat
+        a21, a22 = lon_n - got_lon, lon_e - got_lon
+        det = a11 * a22 - a12 * a21
+        r1, r2 = lat - got_lat, lon - got_lon
+        north += (r1 * a22 - r2 * a12) / det
+        east += (r2 * a11 - r1 * a21) / det
+    return north, east
+
+
 def summarize_block(points: Sequence[Dict]) -> Dict:
     """Ringkas satu WB: jumlah titik, bbox UTM, pusat lat/lon, bentang meter."""
     norths = [p["north"] for p in points]
