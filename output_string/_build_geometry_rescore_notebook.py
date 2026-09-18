@@ -165,18 +165,31 @@ print(f"versi repo (isi): string_intraday_diagnostic lengkap "
 # tampak sukses akan melewatkan justru bagian yang baru bisa dinilai.
 import pandas as _pd
 _geom = _pd.read_csv(REPO_DIR / "config" / "string_geometry.csv")
-_OQ8 = ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"]
-_n_oq8 = _geom[_geom["inverter_id"].isin(_OQ8)]["cross_slope_deg"].notna().sum()
-if _n_oq8 < 72:
+if "table_east" not in _geom.columns:
     raise RuntimeError(
-        f"Geometri TERTINGGAL: hanya {_n_oq8}/72 baris WB02-INV01/02/04/06 "
-        f"punya cross_slope_deg. Klon ini mendahului penerapan Open Question 8 "
-        f"(commit 22b059e, 15 Agu 2026). Jalankan ulang Sel 1 supaya "
+        "Geometri TERTINGGAL: tanpa kolom table_east. Klon ini mendahului "
+        "pusat meja dari persegi DXF (18 Sep 2026); jendela fit bidang 90 "
+        "string jatuh di meja sebelahnya. Jalankan ulang Sel 1 supaya "
+        "fetch/reset mengambil master terbaru."
+    )
+_OQ8 = ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"]
+_cs_oq8 = _geom[_geom["inverter_id"].isin(_OQ8)]["cross_slope_deg"]
+_n_oq8, _curam = int(_cs_oq8.notna().sum()), float(_cs_oq8.abs().max())
+# Diuji SIFAT tanahnya, bukan cacah baris: posisi survei EL memberi tanah rata
+# (|cs| <= 3,3 deg), versi tertinggal memberi kolom kosong atau lereng sampai
+# 15,4 deg. Cacah "72/72" yang dulu di sini patah begitu tiga baris gugur oleh
+# ambang rms 0,5 m yang berlaku se-situs.
+if _n_oq8 < 60 or _curam > 5.0:
+    raise RuntimeError(
+        f"Geometri TERTINGGAL: WB02-INV01/02/04/06 {_n_oq8}/72 terisi dengan "
+        f"|cs| maks {_curam:.2f} deg -- ini masih posisi DXF yang dibantah "
+        f"tiga sumber, bukan posisi survei EL. Jalankan ulang Sel 1 supaya "
         f"fetch/reset mengambil master terbaru."
     )
 _n_cs = int(_geom["cross_slope_deg"].notna().sum())
-print(f"versi repo (isi): geometri OQ8 diterapkan "
-      f"({_n_oq8}/72 baris sengketa, {_n_cs} cross-slope se-situs)")
+print(f"versi repo (isi): geometri OQ8 diterapkan, pusat meja dari DXF "
+      f"({_n_oq8}/72 baris sengketa, |cs| maks {_curam:.2f} deg, "
+      f"{_n_cs} cross-slope se-situs)")
 '''
 
 CODE_CONFIG = '''# Cell 2 - Konfigurasi (edit nilai di sini)

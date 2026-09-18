@@ -316,22 +316,32 @@ if GEOM_CSV.exists():
     STRING_GEOMETRY = pd.read_csv(GEOM_CSV)
     print(f"geometri: {STRING_GEOMETRY['cross_slope_deg'].notna().sum()} string "
           f"punya cross-slope terukur")
-    # Penanda versi kedua, kali ini pada DATA. Keempat inverter tepi utara
-    # Phase One sempat dikosongkan karena penempatan DXF-nya dibantah tiga
-    # sumber bebas. Open Question 8 menutup itu pada 15 Agu 2026: barisnya
-    # pindah ke posisi survei EL dan kolom bidangnya dihitung ulang dari
-    # dsm.tif, jadi arah penandanya kini TERBALIK -- masih KOSONG berarti
-    # salinan repo tertinggal dari commit 22b059e.
+    # Penanda versi kedua, kali ini pada DATA. Diuji SIFAT tanahnya, bukan
+    # cacah baris: di posisi survei EL keempat inverter tepi utara Phase One
+    # duduk di tanah rata (|cs| <= 3,3 deg), sedangkan versi tertinggal
+    # memberi kolom KOSONG (sebelum 15 Agu 2026) atau lereng sampai 15,4 deg
+    # (regenerasi tanpa survei EL). Cacah "72/72" pernah dipakai di sini dan
+    # patah begitu tiga baris gugur oleh ambang rms 0,5 m yang berlaku
+    # se-situs -- ambang itu benar, penandanya yang salah tempat.
+    if "table_east" not in STRING_GEOMETRY.columns:
+        raise RuntimeError(
+            "Geometri TERTINGGAL: tanpa kolom table_east. Salinan ini "
+            "mendahului pusat meja dari persegi DXF (18 Sep 2026); jendela "
+            "fit bidang 90 string jatuh di meja sebelahnya. Sinkronkan ulang "
+            "lalu jalankan dari Sel 1."
+        )
     _dibantah = STRING_GEOMETRY["inverter_id"].isin(
         ["WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"])
-    _terisi = int(STRING_GEOMETRY.loc[_dibantah, "cross_slope_deg"].notna().sum())
+    _cs_oq8 = STRING_GEOMETRY.loc[_dibantah, "cross_slope_deg"]
+    _terisi, _curam = int(_cs_oq8.notna().sum()), float(_cs_oq8.abs().max())
     print(f"          {_terisi}/{int(_dibantah.sum())} string tepi utara "
-          f"Phase One terisi geometri OQ8 (harus 72/72)")
-    if _terisi < int(_dibantah.sum()):
+          f"Phase One terisi geometri OQ8, |cs| maks {_curam:.2f} deg")
+    if _terisi < 60 or _curam > 5.0:
         raise RuntimeError(
-            f"Geometri TERTINGGAL: hanya {_terisi}/72 baris tepi utara punya "
-            f"cross_slope_deg. Salinan ini mendahului Open Question 8 "
-            f"(commit 22b059e). Sinkronkan ulang lalu jalankan dari Sel 1."
+            f"Geometri TERTINGGAL: tepi utara Phase One {_terisi}/72 terisi "
+            f"dengan |cs| maks {_curam:.2f} deg. Posisi survei EL memberi "
+            f"tanah rata (<= 3,3 deg); ini masih posisi DXF yang dibantah "
+            f"tiga sumber. Sinkronkan ulang lalu jalankan dari Sel 1."
         )
 else:
     print(f"geometri: {GEOM_CSV.name} tidak ada -> kolom cross-slope kosong")
