@@ -451,6 +451,27 @@ def test_gugus_wb01_yang_bersengketa_dipindah_ke_survei_el():
     assert not {"WB01-INV17", "WB01-INV22", "WB01-INV23", "WB01-INV24"} & b.PLACEMENT_FROM_EL
 
 
+def test_gugus_wb02_dipindah_utuh_bukan_hanya_empat_oq8():
+    """WB02-INV03/07/08 menyusul keempat inverter OQ8 -- satu gugus tujuh.
+
+    Titik EL ketujuh inverter itu jatuh di persegi milik ketujuhnya sendiri
+    (114 dari 126; 11 di luar semua persegi, satu di persegi INV05). OQ8 dulu
+    hanya memindah empat, sehingga 12 string OQ8 tak mendapat meja: meja
+    "mereka" masih diduduki INV03/07/08 di posisi DXF -- persis bahaya
+    "memindah sebagian" yang PRD catat untuk WB01. Bukti foto 9-15 Sep: 12
+    persegi DXF yang tak kebagian titik EL bermedian pecahan modul 0,19 lawan
+    0,59 pada persegi berisi titik EL di bingkai yang sama, dan 6 titik EL di
+    luar persegi mendarat di meja fisik yang tidak tergambar (bingkai 0100).
+    """
+    import build_string_geometry as b
+
+    assert {"WB02-INV01", "WB02-INV02", "WB02-INV03", "WB02-INV04",
+            "WB02-INV06", "WB02-INV07", "WB02-INV08"} <= b.PLACEMENT_FROM_EL
+    # INV05 sepakat dengan EL (median <= 2 m) walau satu titik EL gugus jatuh
+    # di salah satu persegi miliknya; ia tidak ikut dipindah.
+    assert "WB02-INV05" not in b.PLACEMENT_FROM_EL
+
+
 def test_string_yang_dipindah_mendapat_pusat_persegi_yang_memuat_titik_elnya():
     """Titik EL jatuh di dalam persegi meja pada 95 % string gugus WB01 (median
     jarak 0 m), jadi pusat persegi itulah pusat mejanya -- bukan titik EL yang

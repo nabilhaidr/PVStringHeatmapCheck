@@ -174,7 +174,17 @@ DXF_RENUMBER_SPATIAL = {(10, 3): 27}
 #                 meja fisik tanpa poligon di foto 0217.
 # Titik EL gugus hanya jatuh di persegi milik gugus itu sendiri, jadi inverter
 # WB01 lain tidak tersentuh.
-PLACEMENT_FROM_EL = {"WB02-INV01", "WB02-INV02", "WB02-INV04", "WB02-INV06"} | {
+#
+# Gugus WB02 utuh (19 Sep 2026): INV03/07/08 menyusul keempat OQ8. Titik EL
+# ketujuhnya jatuh di persegi milik ketujuhnya sendiri (114 dari 126; 11 di
+# luar semua persegi, 1 di persegi INV05), jadi OQ8 memindah empat dari satu
+# gugus -- 12 string OQ8 tidak bisa mendapat meja karena meja itu masih
+# diduduki INV03/07/08 di posisi DXF. Foto 9-15 Sep (arsip F:): 12 persegi DXF
+# tanpa titik EL bermedian pecahan modul 0,19 lawan 0,59 pada persegi berisi
+# titik EL di bingkai yang sama; 6 titik EL di luar persegi mendarat di meja
+# fisik yang tidak tergambar (bingkai hampir nadir 0100). INV05 sepakat dengan
+# EL (median <= 2 m) dan tidak dipindah.
+PLACEMENT_FROM_EL = {f"WB02-INV{i:02d}" for i in (1, 2, 3, 4, 6, 7, 8)} | {
     f"WB01-INV{i:02d}" for i in (1, 2, 3, 6, 7, 8, 12, 13, 18, 19, 20, 21, 25)
 }
 
