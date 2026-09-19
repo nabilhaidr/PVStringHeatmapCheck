@@ -917,3 +917,82 @@ def test_cross_slope_takes_only_the_east_west_component():
 
     assert cross_slope_deg(20.0, 45.0) == pytest.approx(expected, abs=1e-9)
     assert 0.0 < cross_slope_deg(20.0, 45.0) < 20.0
+
+
+# --- sengketa WB03-INV08/INV09 dan label di luar meja (B6, 20 Sep 2026) -------
+
+
+def _a3(inv, st, east, north, **kw):
+    return {"label": "x", "wb": 3, "inv": inv, "st": st, "east": east, "north": north, **kw}
+
+
+# Dua meja 14,95 x 4,87 m dengan celah 2 m di antaranya: label di celah itu
+# berada di luar KEDUA persegi, lebih dari toleransi 0,3 m.
+_MEJA_A3 = [(459800.0, 459814.95, 9890600.0, 9890604.87),      # A
+            (459817.0, 459831.95, 9890600.0, 9890604.87)]      # C
+
+
+def test_string_wb03_bersengketa_dipindah_per_string_bukan_per_inverter():
+    """Uji kabel as-built 20 Sep: string sengketa WB03-INV08 ST16-21/23-25 dan
+    INV09-ST02 kelebihan kabel +7,9..+20,7 m di posisi label DXF (~satu meja)
+    dan hanya +0,2..+2,3 m di posisi EL, dengan kalibrasi 16 string sepakat
+    (R2 1,00, sd residu 0,7 m). EL dan daftar kabel sepakat melawan layer label.
+
+    Cakupannya PER STRING: 24 string INV09 lain tidak disengketakan dan tetap
+    di titik labelnya. Memindah seluruh inverter akan menggeser lat/lon mereka
+    dari ujung barat meja ke pusat modul tanpa bukti apa pun.
+    """
+    import build_string_geometry as b
+
+    assert ("WB03-INV09", 2) in b.PLACEMENT_FROM_EL_STRING
+    assert ("WB03-INV09", 3) not in b.PLACEMENT_FROM_EL_STRING
+    assert "WB03-INV09" not in b.PLACEMENT_FROM_EL
+
+    sengketa = _a3(9, 2, 459800.0, 9890500.0)
+    tetap = _a3(9, 3, 459820.0, 9890500.0)
+    b.relocate_to_el_survey([sengketa, tetap], {("WB03-INV09", 2): (9890602.0, 459836.0),
+                                                ("WB03-INV09", 3): (9890602.0, 459840.0)})
+
+    assert (sengketa["east"], sengketa["north"]) == (459836.0, 9890602.0)
+    assert sengketa["dari_el"] is True
+    assert (tetap["east"], tetap["north"]) == (459820.0, 9890500.0)
+    assert "dari_el" not in tetap
+
+
+def test_label_di_luar_meja_ditempel_lewat_titik_el_bila_mejanya_tak_berlabel():
+    """WB05-INV17 ST09/14/19/24 dan WB10-INV15 ST22: labelnya ~1 m lebih ke
+    barat dari biasanya, jadi tepat di luar mejanya sendiri; meja itu tak
+    berlabel dan titik EL string itu jatuh di dalamnya (+6,6..+6,9 m timur
+    label). Tanpa aturan ini pusat mejanya dari rumus pecahan, meleset ~0,9 m.
+    """
+    import build_string_geometry as b
+
+    luar = _a3(17, 9, 459816.5, 9890602.0)        # 0,5 m di barat persegi C
+    lain = _a3(17, 10, 459807.0, 9890602.0)       # label di dalam persegi A
+    b.attach_table_centers([luar, lain], _MEJA_A3)
+    assert "table_east" not in luar, "premis: label ini di luar semua persegi"
+
+    b.attach_table_centers_via_el([luar, lain], _MEJA_A3,
+                                  {("WB03-INV17", 9): (9890601.0, 459823.0)})
+
+    assert luar["table_east"] == pytest.approx(459824.475)
+    assert luar["table_north"] == pytest.approx(9890602.435)
+    assert lain["table_east"] == pytest.approx(459807.2)
+
+
+def test_label_di_luar_meja_tidak_mengambil_meja_milik_string_lain():
+    """WB08-INV06/07: label melayang 5,6-9,1 m di barat meja, tetapi titik
+    EL-nya jatuh di meja yang sudah berlabel string lain, dan di sana uji kabel
+    memihak DXF. Mengambil meja itu berarti menerbitkan meja milik string lain.
+    """
+    import build_string_geometry as b
+
+    luar = _a3(17, 9, 459816.5, 9890602.0)
+    pemilik = _a3(17, 10, 459824.0, 9890602.0)    # label DXF di dalam persegi C
+    b.attach_table_centers([luar, pemilik], _MEJA_A3)
+
+    b.attach_table_centers_via_el([luar, pemilik], _MEJA_A3,
+                                  {("WB03-INV17", 9): (9890601.0, 459823.0)})
+
+    assert "table_east" not in luar
+    assert pemilik["table_east"] == pytest.approx(459824.475)

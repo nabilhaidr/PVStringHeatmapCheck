@@ -188,6 +188,20 @@ PLACEMENT_FROM_EL = {f"WB02-INV{i:02d}" for i in (1, 2, 3, 4, 6, 7, 8)} | {
     f"WB01-INV{i:02d}" for i in (1, 2, 3, 6, 7, 8, 12, 13, 18, 19, 20, 21, 25)
 }
 
+# Sengketa WB03-INV08/INV09 di 1129.dxf (diperiksa 20 Sep 2026): EL menaruh
+# WB03-INV08-STn di meja berlabel DXF ST(n+1) pada ST16-21 dan ST23-25, ST21 di
+# persegi TANPA label, dan INV09-ST02 di meja berlabel INV08-ST23; label DXF
+# INV08-ST16 dan INV09-ST02 sendiri melayang di luar semua persegi. Panjang
+# kabel as-built memihak EL: kalibrasi pada 16 string yang kedua sumbernya
+# sepakat memberi R2 1,00 dengan sd residu 0,7 m, dan string sengketa meleset
+# +7,9..+20,7 m -- kira-kira satu meja -- di posisi label DXF, tetapi hanya
+# +0,2..+2,3 m di posisi EL. Di WB08 uji yang sama memihak DXF, jadi cakupannya
+# PER STRING dan bukan aturan umum "EL selalu benar"; string lain di kedua
+# inverter tidak disengketakan dan tetap di titik labelnya.
+PLACEMENT_FROM_EL_STRING = {("WB03-INV08", st) for st in (16, 17, 18, 19, 20, 21, 23, 24, 25)} | {
+    ("WB03-INV09", 2)
+}
+
 # --- dua ST satu kanal PV di as-built -----------------------------------------
 # Delapan inverter mencatat dua ST berbeda pada SATU kanal PV (Koreksi As-Built
 # butir 2.1). Di tiap inverter itu telemetri memperlihatkan tepat satu kanal
@@ -369,6 +383,42 @@ def attach_table_centers(labels: List[Dict],
     return labels
 
 
+def attach_table_centers_via_el(items: List[Dict],
+                                tables: List[Tuple[float, ...]],
+                                positions: Dict[Tuple[str, int], Tuple[float, float]]) -> List[Dict]:
+    """Pusat meja untuk label di luar semua persegi, lewat titik survei EL.
+
+    Lima label WB03-WB10 (WB05-INV17 ST09/14/19/24, WB10-INV15 ST22) duduk
+    ~0,4 m di barat mejanya sendiri, jadi di luar toleransi; persegi itu tidak
+    berlabel dan titik EL string itu jatuh di dalamnya. Persegi yang SUDAH
+    dipakai label lain tidak boleh diambil: di WB08 titik EL label yang
+    melayang jatuh di meja string lain, dan uji panjang kabel di sana memihak
+    DXF. Dua label yang mengincar satu persegi sama-sama dibiarkan kosong --
+    memilih salah satunya berarti menebak.
+    """
+    def pusat(t):
+        return (t[0] + t[1]) / 2.0, (t[2] + t[3]) / 2.0
+
+    dipakai = {(i["table_east"], i["table_north"]) for i in items if "table_east" in i}
+    sisa = [t for t in tables if pusat(t) not in dipakai]
+    calon: Dict[int, Tuple[float, float]] = {}
+    for n, item in enumerate(items):
+        if "table_east" in item:
+            continue
+        titik = positions.get((f"WB{item['wb']:02d}-INV{item['inv']:02d}", item["st"]))
+        if titik is None:
+            continue
+        for t in sisa:
+            if t[0] <= titik[1] <= t[1] and t[2] <= titik[0] <= t[3]:
+                calon[n] = pusat(t)
+                break
+    ganda = Counter(calon.values())
+    for n, c in calon.items():
+        if ganda[c] == 1:
+            items[n]["table_east"], items[n]["table_north"] = c
+    return items
+
+
 def el_survey_positions(path: str,
                         inverter_ids) -> Dict[Tuple[str, int], Tuple[float, float]]:
     """(inverter_id, st) -> (north, east) rata-rata modul di survei EL.
@@ -414,11 +464,15 @@ def relocate_to_el_survey(
     """Pindahkan string ``PLACEMENT_FROM_EL`` ke koordinat survei EL.
 
     Yang dipindah hanya string yang penempatan DXF-nya dibantah; ``positions``
-    boleh memuat lebih banyak tanpa menyentuh string lain.
+    boleh memuat lebih banyak tanpa menyentuh string lain. Cakupannya per
+    inverter (gugus Phase One) atau per string (``PLACEMENT_FROM_EL_STRING``,
+    sengketa WB03) -- di WB08 uji kabel memihak DXF, jadi tidak ada aturan
+    umum yang memenangkan EL.
     """
     for item in labels:
         kunci = (f"WB{item['wb']:02d}-INV{item['inv']:02d}", item["st"])
-        if kunci[0] not in PLACEMENT_FROM_EL or kunci not in positions:
+        if kunci not in positions or (kunci[0] not in PLACEMENT_FROM_EL
+                                      and kunci not in PLACEMENT_FROM_EL_STRING):
             continue
         item["north"], item["east"] = positions[kunci]
         item["dari_el"] = True
@@ -729,9 +783,31 @@ def main() -> None:
 
     tables = parse_dxf_tables(dxf_path, TABLE_LAYER_PREFIX)
     attach_table_centers(labels, tables)
+
+    # Survei EL dibutuhkan dua kali: gugus Phase One (per inverter) dan sengketa
+    # WB03 + label di luar meja (per string). Berkasnya hilang -> BERHENTI;
+    # meneruskannya menerbitkan posisi yang sudah dibantah tanpa satu kolom pun
+    # yang memperlihatkan bedanya.
+    el_path = find_raw(EL_SURVEY_NAME, required=False)
+    if el_path is None:
+        raise SystemExit(
+            f"survei EL ({EL_SURVEY_NAME}) tidak ada di bawah {RAW_DIR!r}; "
+            f"{len(PLACEMENT_FROM_EL)} inverter Phase One dan "
+            f"{len(PLACEMENT_FROM_EL_STRING)} string WB03 butuh posisinya."
+        )
+    butuh_el = {k[0] for k in PLACEMENT_FROM_EL_STRING} | {
+        f"WB{item['wb']:02d}-INV{item['inv']:02d}"
+        for item in labels if "table_east" not in item
+    }
+    posisi_array = el_survey_positions(el_path, butuh_el)
+    relocate_to_el_survey(labels, posisi_array)
+    attach_relocated_table_centers(labels, tables)
+    attach_table_centers_via_el(labels, tables, posisi_array)
     n_meja = sum(1 for item in labels if "table_east" in item)
+    n_pindah = sum(1 for item in labels if item.get("dari_el"))
     print(f"[string-geometry] {dxf_path}: {len(tables)} persegi meja; "
-          f"label bermeja {n_meja}/{len(labels)}")
+          f"label bermeja {n_meja}/{len(labels)}; {n_pindah} string pindah ke posisi EL "
+          f"(sengketa WB03-INV08/INV09)")
 
     dsm_file = dsm_path()
     image, header = open_dsm(dsm_file)
@@ -761,15 +837,8 @@ def main() -> None:
         mppt_by_pv = phase_one_mppt_map()
         print(f"[string-geometry] {phase_one_path}: "
               f"{len(phase_one)} label Phase One")
-        # Berkas survei EL hilang -> BERHENTI. Meneruskannya akan menerbitkan
-        # gugus WB01 dan tepi utara WB02 di posisi DXF yang sudah dibantah, dan
-        # tidak ada kolom yang memperlihatkan bedanya.
-        el_path = find_raw(EL_SURVEY_NAME, required=False)
-        if el_path is None:
-            raise SystemExit(
-                f"survei EL ({EL_SURVEY_NAME}) tidak ada di bawah {RAW_DIR!r}; "
-                f"{len(PLACEMENT_FROM_EL)} inverter Phase One butuh posisinya."
-            )
+        # ``el_path`` sudah dipastikan ada di atas: gugus WB01 dan tepi utara
+        # WB02 tidak boleh terbit di posisi DXF yang sudah dibantah.
         posisi_el = el_survey_positions(el_path, PLACEMENT_FROM_EL)
         pindah = relocate_to_el_survey(phase_one, posisi_el)
         attach_relocated_table_centers(
