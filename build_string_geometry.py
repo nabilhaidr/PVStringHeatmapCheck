@@ -198,8 +198,18 @@ PLACEMENT_FROM_EL = {f"WB02-INV{i:02d}" for i in (1, 2, 3, 4, 6, 7, 8)} | {
 # +0,2..+2,3 m di posisi EL. Di WB08 uji yang sama memihak DXF, jadi cakupannya
 # PER STRING dan bukan aturan umum "EL selalu benar"; string lain di kedua
 # inverter tidak disengketakan dan tetap di titik labelnya.
+#
+# Rantainya berujung di INV11-ST04 (diperiksa 20 Sep 2026): titik EL INV08-ST25
+# tidak melayang di lahan kosong, ia jatuh 1,3 m dari pusat persegi yang dipegang
+# label INV11-ST04 -- dan EL menaruh ST04 sendiri satu meja ke timur, di persegi
+# TANPA label. 24 string INV11 lain duduk -1,1 +- 0,8 m timur pusat persegi
+# berlabelnya; ST04 menyimpang +14,6 m, tepat satu meja, dengan simpangan utara
+# yang sama (-1,17 lawan rerata -1,13). Kabel as-built memihak EL lagi: kalibrasi
+# Manhattan pada 24 string sepakat itu (R2 0,998, rms sisa 0,75 m) menduga 46,8 m
+# di posisi label DXF lawan 29 m tercatat (23,5 sigma), dan 28,1 m di posisi EL
+# (1,2 sigma). Tanpa ST04 di sini, ST25 kehilangan pusat mejanya.
 PLACEMENT_FROM_EL_STRING = {("WB03-INV08", st) for st in (16, 17, 18, 19, 20, 21, 23, 24, 25)} | {
-    ("WB03-INV09", 2)
+    ("WB03-INV09", 2), ("WB03-INV11", 4),
 }
 
 # --- dua ST satu kanal PV di as-built -----------------------------------------

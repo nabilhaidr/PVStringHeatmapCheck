@@ -959,6 +959,40 @@ def test_string_wb03_bersengketa_dipindah_per_string_bukan_per_inverter():
     assert "dari_el" not in tetap
 
 
+def test_wb03_inv11_st04_menyusul_supaya_inv08_st25_dapat_mejanya():
+    """Rantai sengketa WB03 berujung di INV11-ST04, bukan di meja tak tergambar.
+
+    Titik EL WB03-INV08-ST25 jatuh 1,3 m dari pusat sebuah persegi yang JELAS
+    tergambar -- persegi yang dipegang label DXF WB03-INV11-ST04. Uji kabel
+    as-built yang sama (kalibrasi Manhattan pada 24 string INV11 yang sepakat,
+    R2 0,998, rms sisa 0,75 m) menaruh ST04 satu meja ke timur: di posisi label
+    DXF ia kekurangan 17,8 m kabel (23,5 sigma), di posisi EL hanya lebih 0,9 m
+    (1,2 sigma). EL dan daftar kabel sepakat melawan layer label, seperti di
+    INV08/INV09 dan berbeda dengan WB08 yang kabelnya memihak DXF.
+
+    Yang diuji di sini adalah RANTAInya: begitu ST04 dikeluarkan dari himpunan,
+    ia merebut kembali persegi itu lewat labelnya dan ST25 kehilangan pusat
+    mejanya -- persis cacat yang ditemukan sesudah commit cd38763.
+    """
+    import build_string_geometry as b
+
+    assert ("WB03-INV11", 4) in b.PLACEMENT_FROM_EL_STRING
+    assert ("WB03-INV11", 5) not in b.PLACEMENT_FROM_EL_STRING
+    assert "WB03-INV11" not in b.PLACEMENT_FROM_EL
+
+    st04 = _a3(11, 4, 459802.0, 9890602.0)      # label DXF di dalam persegi A
+    st25 = _a3(8, 25, 459700.0, 9890602.0)      # labelnya jauh di barat
+    b.relocate_to_el_survey([st04, st25], {("WB03-INV11", 4): (9890602.0, 459823.0),
+                                           ("WB03-INV08", 25): (9890602.0, 459806.0)})
+    assert st04["dari_el"] is True, "premis: ST04 ikut pindah ke posisi EL"
+
+    b.attach_relocated_table_centers([st04, st25], _MEJA_A3)
+
+    assert st25["table_east"] == pytest.approx(459807.475), "ST25 mewarisi persegi A"
+    assert st04["table_east"] == pytest.approx(459824.475), "ST04 pindah ke persegi C"
+
+
+
 def test_label_di_luar_meja_ditempel_lewat_titik_el_bila_mejanya_tak_berlabel():
     """WB05-INV17 ST09/14/19/24 dan WB10-INV15 ST22: labelnya ~1 m lebih ke
     barat dari biasanya, jadi tepat di luar mejanya sendiri; meja itu tak
