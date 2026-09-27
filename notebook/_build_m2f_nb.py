@@ -41,31 +41,24 @@ Beda dari `daily_runfast_v1.ipynb` (M2e saja, sengaja tanpa POA/Tcell):
 notebook ini BUTUH POA, panel spec, dan konfigurasi Tcell, karena baseline
 `E_expected` M2f bergantung pada ketiganya.
 
-## PENTING -- kondisi data hari ini
+## Kondisi data (2026-09-27)
 
-`raw data input/` di working tree TIDAK punya berkas pyranometer POA maupun
-berkas suhu modul (`PV Module Temperature PLTS IKN.xlsx`). Akibatnya:
+Berkas POA dan `PV Module Temperature PLTS IKN.xlsx` tersedia di Drive; run
+2026-08-31 menilai 4.470/4.470 string-hari dengan POA/Tcell terukur. Tcell
+terisi s.d. 2026-08-31 -- hari sesudahnya akan tercatat
+`skipped_reason="poa_or_tcell_missing"`. `m2f.dc_derate_per_wb` masih kosong
+(lihat sheet `M2f_BaselineCalib`), jadi `unexplained` masih memuat rugi
+struktural baseline; soiling hanya diklaim bila ada workbook
+`soiling_srr_*.xlsx` (`SOILING_SRR_XLSX`) yang mencakup bulan run.
 
-- `M2fLossAttribution._load_providers` gagal saat `CellTempProvider` meng-
-  konstruksi dirinya (raise `FileNotFoundError` sebelum sempat mengecek
-  cakupan POA/Tcell manapun), jadi SETIAP string-hari tercatat
-  `skipped_reason="provider_unavailable"` di sheet `M2f_Closure` -- BUKAN
-  `poa_or_tcell_missing` (yang baru muncul kalau berkasnya ADA tapi
-  cakupannya di bawah ambang `poa_coverage_min_pct`). Workbook tetap
-  ter-generate lengkap dengan skema yang benar; isinya nol. Itu memang hasil
-  yang jujur untuk ditampilkan mengingat data yang tersedia -- bukan bug di
-  wiring ini.
-- `M2bPeerZScore` -- seperti `M2aSoiling`, `_ensure_providers()` membungkus
-  konstruksi `CellTempProvider`-nya dengan `try/except`: kalau berkas suhu
-  modul absen, ia warn dan biarkan `self.cell_temp` None, lalu `run()`
-  fallback ke `tcell_mean=25.0` (STC) alih-alih RAISE `FileNotFoundError`.
-  Konsekuensinya: `voc_at_cell_temp` di 25 C jauh lebih tinggi dari suhu
-  modul riil di iklim ini, jadi `voc_ratio` terbaca rendah dan finding
-  `high_R` berisiko over-flag -- bukan bug baru, cuma sekarang bisa
-  ter-reach lewat kondisi berkas hilang ini.
-- Begitu berkas POA dan `PV Module Temperature PLTS IKN.xlsx` tersedia,
-  jalankan ulang notebook ini tanpa perubahan apa pun -- workbook akan mulai
-  terisi angka nyata.
+## Batch harian
+
+`RUN_BATCH_orchestrator.ipynb` dapat menjalankan notebook ini per tanggal:
+set `TEMPLATE_NB` ke path notebook ini (ia mengganti baris
+`DRIVE_FOLDER_URL = ...` di Cell 1). Tiap hari menulis
+`outputs_m2f/m2f_loss_attribution_YYYYMMDD.xlsx`. Rekap bulanan:
+
+    !python rekap_m2f.py --input-dir "/content/drive/MyDrive/Cek PV String/outputs_m2f"
 
 Notebook ini di-generate `notebook/_build_m2f_nb.py` -- edit builder, bukan
 .ipynb langsung.
