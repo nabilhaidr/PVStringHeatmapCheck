@@ -140,6 +140,37 @@ Verifikasi hipotesis under-estimate ini **wajib dilakukan pada run pertama**
 dengan data POA nyata; hipotesis ini belum teruji karena `raw data input/`
 kosong di working tree saat spec ditulis.
 
+### Revisi 2026-09-27: hipotesisnya terbalik, knob diganti `dc_derate`
+
+Run nyata pertama (2026-08-31, Colab) membantah prediksi di atas: `E_expected`
+justru **over-estimate** ~17% (292.809 vs 244.241 kWh) dan `unexplained`
+mencapai 92% rugi. `compute_pmax_per_module` adalah daya pelat-nama yang
+diskalakan POA dan suhu -- tanpa IAM, mismatch, kabel DC, LID/toleransi,
+maupun efisiensi cahaya-rendah. Mengalibrasi `g_bifacial` sebagai median
+aktual/harapan akan menghasilkan ~0,83, yaitu menamai seluruh tumpukan derate
+"gain bifacial".
+
+Karena itu koreksinya dipisah dan dinamai jujur:
+
+- `dc_derate_per_wb` -- faktor empiris bersih per WB (derate x gain bifacial;
+  tanpa POA belakang keduanya tidak dapat dipisahkan). `bifacial_gain_per_wb`
+  dibiarkan kosong.
+- Sheet `M2f_BaselineCalib` (pengganti `M2f_BifacialCalib`) mencatat nilai
+  yang dipakai plus `measured_ratio`: median rasio aktual / harapan-MENTAH per
+  string-hari, hanya pada timestamp inverter ON dan tidak di-curtail
+  (`m2f.curtailment_keywords`). Rasio dihitung terhadap baseline mentah supaya
+  menyalinnya ke config tidak menggandakan derate.
+- `calibrate_bifacial_gain` diganti nama menjadi `calibrate_dc_derate`.
+
+**Temuan kalibrasi lokal (5 hari, POA/Tcell dari disk eksternal):**
+`measured_ratio` tidak stabil antar hari. Hari hujan/mendung (2025-12-01,
+2026-07-01) memberi ~0,95-1,06; hari cerah-kering (2026-07-29) ~0,81-0,94;
+selisih max-min per WB 0,09-0,31 -- sebesar derate itu sendiri. Satu konstanta
+per WB belum didukung data; `dc_derate_per_wb` karena itu **sengaja belum
+diisi**. Hipotesis yang perlu diuji dengan batch multi-hari: rasio mengikuti
+fraksi difus (gain bifacial relatif lebih besar di langit mendung) dan/atau
+ketidakcocokan spasial pyranometer titik vs array pada awan pecah.
+
 ## Ledger klaim dan urutan prioritas
 
 `LossLedger` memelihara sisa energi yang belum diklaim per (string, timestamp).
@@ -243,7 +274,7 @@ tidak melipatgandakan energinya) sebelum diklaim ke ledger.
 | `M2f_Pareto` | terurut kWh desc: kWh, %, % kumulatif, flag vital-few |
 | `M2f_PerString` | per string per kategori, untuk targeting ROI |
 | `M2f_Closure` | audit: `L_total`, jumlah klaim, residual absolut dan % |
-| `M2f_BifacialCalib` | `g_bifacial` per WB, jumlah hari dan string yang dipakai |
+| `M2f_BaselineCalib` | `g_bifacial` dan `dc_derate` yang dipakai per WB, `measured_ratio` run ini, jumlah string-hari kalibrasi, hari dan string |
 
 ## Grafik
 
@@ -302,7 +333,12 @@ Section `m2f` baru di `config/m2_config.yaml`:
 - `enabled` (default `false`, opt-in mengikuti pola detektor lain)
 - `attribution_order` -- daftar kategori; eksplisit supaya urutan prioritas
   dapat diaudit dan diuji, bukan tersembunyi di kode
-- `bifacial_gain_per_wb` -- hasil kalibrasi, kosong = gain 1.0
+- `bifacial_gain_per_wb` -- kosong = gain 1.0; dibiarkan kosong (lihat
+  "Revisi 2026-09-27")
+- `dc_derate_per_wb` -- faktor derate bersih per WB, fraksi di (0, 1.5];
+  kosong = 1.0. Nilai di luar rentang me-raise (salah satuan persen)
+- `curtailment_keywords` -- substring status inverter yang berarti produksi
+  dibatasi dari luar; dikeluarkan dari kalibrasi `dc_derate`
 - `poa_coverage_min_pct` (default `80.0`) -- ambang cakupan POA/Tcell untuk
   memproses satu (string, hari); di bawah ini string-hari itu di-skip dengan
   `skipped_reason="poa_or_tcell_missing"` alih-alih diam-diam diisi 0 di
@@ -317,15 +353,18 @@ Section `m2f` baru di `config/m2_config.yaml`:
   `peer_zscore`/`open_circuit`/`mppt_ratio`; kosong/`None` berarti
   `dc_cable_fault` TIDAK PERNAH diklaim (tetap `None`, bukan `0.0`)
 - `p_loss_by_month` -- fraksi rugi soiling per bulan (`YYYY-MM -> 0..1`) dari
-  artifact `M2aSoiling`; bulan yang absen dari dict ini berarti soiling TIDAK
-  PERNAH diklaim untuk bulan itu
+  artifact `M2aSoiling` dan/atau workbook `soiling_srr_*.xlsx`
+  (`collect_m2f_inputs(..., soiling_srr_xlsx=...)`; untuk bulan yang sama
+  workbook menang). Run harian tidak pernah mencapai 90 hari yang dibutuhkan
+  SRR, jadi workbook dari `notebook/M2aSoiling.ipynb` adalah sumber praktisnya.
+  Bulan yang absen dari dict ini berarti soiling TIDAK PERNAH diklaim untuk
+  bulan itu
 
 `clearsky_kt_min`, yang disebut draft desain awal dokumen ini, tidak pernah
-dibaca `report.py`: kalibrasi bifacial (`calibrate_bifacial_gain`, di
-`baseline.py`) dipanggil terpisah dari `run()` atas data yang sudah disaring
-pemanggilnya sendiri ke hari clear-sky, bukan lewat threshold di config. Key
-itu karena itu dibuang dari `config/m2_config.yaml` -- tidak ada kode yang
-membacanya.
+dibaca `report.py` dan sudah dibuang dari `config/m2_config.yaml`. Kalibrasi
+kini berjalan di dalam `run()` sebagai diagnostik (`measured_ratio` di
+`M2f_BaselineCalib`, lewat `calibrate_dc_derate`); pemilihan hari kalibrasi
+dilakukan operator, bukan threshold di config.
 
 ## Penanganan kegagalan
 
@@ -349,7 +388,7 @@ dihitung sejak awal.
   hantu. Tanpa filter ini tiap slot kosong mendapat `E_expected` satu string
   penuh melawan aktual ~0: rugi 100% palsu yang menggelembungkan
   `E_expected` site, waterfall, residual Pareto, dan `n_strings` di
-  `M2f_BifacialCalib`.
+  `M2f_BaselineCalib` (dulu `M2f_BifacialCalib`).
 - **Klasifikasi DOWN.** `_down_mask` sekarang memakai ulang
   `availability._classify_status` dan hanya mengklaim timestamp yang
   hasilnya `"DOWN"`. Sebelumnya `~on_grid` menyapu status UNKNOWN dan

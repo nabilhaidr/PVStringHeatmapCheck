@@ -6,6 +6,13 @@
 lewat `notebook/m2f_loss_attribution.ipynb`, tetapi **belum menghasilkan satu
 angka pun** karena dua berkas pengukuran di bawah tidak ada di working tree.
 
+> **Status 2026-09-27: terpenuhi.** Ketiga berkas ada di
+> `F:\Downloads part 2\raw data input` dan di Drive, dengan nama, sheet, dan
+> kolom persis seperti di bawah (POA 2025/2026: 105.120 baris per tahun; Tcell:
+> terisi 2025-01-01 s.d. **2026-08-31**). Run pertama (2026-08-31) menilai
+> 4.470/4.470 string-hari dengan POA dan Tcell terukur. Yang masih kurang:
+> sertifikat kalibrasi pyranometer (bagian 4), dan Tcell sesudah 2026-08-31.
+
 Selama keduanya absen, notebook tetap jalan dan menghasilkan workbook berskema
 benar — tetapi setiap string ditandai `skipped_reason="provider_unavailable"`
 dan seluruh selnya kosong. Itu perilaku yang disengaja: lebih baik kosong
@@ -93,12 +100,9 @@ itu akan muncul sebagai rugi yang tampak nyata di waterfall.
   sebagai fallback Tcell. Kalau Tcell terukur tersedia, ketiganya tidak
   diperlukan untuk M2f.
 
-  > **Justru berhati-hatilah di sini:** kalau berkas cuaca datang lebih dulu
-  > sementara Tcell terukur belum, `get_tcell` (yang masih memakai
-  > `source="auto"`) akan diam-diam memakai Tcell hasil model SAPM dan
-  > melaporkan cakupan penuh. Follow-up `tcell_source` konfigurabel dibuat
-  > untuk menutup lubang ini — sampai itu selesai, **jangan** menaruh berkas
-  > cuaca tanpa berkas Tcell.
+  > **Sudah ditutup:** `m2f.tcell_source` (default `measured_per_ws`) membuat
+  > M2f meminta Tcell terukur secara eksplisit, jadi berkas cuaca tidak lagi
+  > bisa diam-diam menggantikan Tcell lewat model SAPM.
 
 - **Data meter POI 20 kV.** Di luar lingkup M2f v1 (rantai M1→M3 terpisah).
 - **Albedo.** Sudah ada sebagai forecast NSRDB.
@@ -114,14 +118,18 @@ Jalankan `notebook/m2f_loss_attribution.ipynb` dan periksa berurutan:
    terbaca (nama/sheet/kolom tidak cocok). Kalau `poa_or_tcell_missing`,
    berkasnya terbaca tetapi cakupannya di bawah ambang — periksa
    `poa_coverage_pct` dan `tcell_coverage_pct` di baris yang sama.
-2. **Kalibrasi gain bifacial.** Jalankan `calibrate_bifacial_gain` atas string
-   sehat di hari clear-sky, isi `m2f.bifacial_gain_per_wb` di
-   `config/m2_config.yaml`, lalu pastikan median `L_total` string sehat
-   mendekati nol. Bila jauh (mis. di atas 1,10 atau di bawah 0,95), baseline
-   perlu ditinjau sebelum angkanya dipakai untuk keputusan biaya.
-3. **Tilt WB01–WB02.** `config/site_geometry.yaml:28` hanya mengonfirmasi
-   WB03–WB10 pada 10°. Bila WB01–02 berbeda, `E_expected` untuk 49 inverter
-   bias — dan kalibrasi bifacial akan menyerap bias itu secara keliru.
+2. **Kalibrasi derate DC.** Baca kolom `measured_ratio` di sheet
+   `M2f_BaselineCalib` (median aktual / harapan-mentah per WB, hanya timestamp
+   ON tanpa curtailment) dan salin ke `m2f.dc_derate_per_wb` — **hanya dari
+   run hari bersih**. `bifacial_gain_per_wb` dibiarkan kosong: tanpa POA
+   belakang, gain bifacial tidak terpisahkan dari derate.
+   *Temuan 2026-09-27:* rasio ini bervariasi 0,09–0,31 antar hari per WB
+   (mendung ~1,0; cerah-kering ~0,85), jadi belum ada nilai yang layak diisi
+   — kumpulkan rasio dari banyak hari lewat batch dulu.
+3. **Tilt WB01–WB02.** *Terjawab sebagian 2026-09-27:* `Pyranometer Sensor
+   Data.xlsx` (sheet `POA`) mencatat WS-5 terpasang di WB02-INV12-ST06 pada
+   tilt 10°, sebidang dengan modulnya — bukti kuat WB01–02 juga ~10°. WS-1 dan
+   WS-4 tercatat 9°, bukan 10°.
 4. **Besar `unexplained` di sheet `M2f_Pareto`.** Ia akan mendominasi di v1
    karena menyerap shading, low-irradiance, microcrack, bifacial, dan
    ground-fault sekaligus. Itu keadaan yang diharapkan; besarnya adalah ukuran
