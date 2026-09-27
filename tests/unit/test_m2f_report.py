@@ -904,6 +904,94 @@ def test_measured_ratio_is_nan_when_too_few_string_days(stubbed):
 
 
 # --------------------------------------------------------------------------
+# curtailment dipisah dari availability_outage
+# --------------------------------------------------------------------------
+
+CURTAIL_FIRST = [
+    "curtailment", "availability_outage", "dc_cable_fault", "soiling",
+    "unexplained",
+]
+
+
+def _status_rows(statuses, pv3_kw):
+    """Satu inverter, satu string (PV3), status dan daya per timestamp INDEX."""
+    rows = []
+    for ts, status, kw in zip(INDEX, statuses, pv3_kw):
+        rows += _rows("WB03-INV01", [ts], {"PV3": kw}, status=status)
+    return pd.DataFrame(rows)
+
+
+def _loss_by_category(sm):
+    return sm.artifacts["M2f_PerString"].set_index("category")["loss_kwh"]
+
+
+def test_instructed_shutdown_is_curtailment_not_outage(stubbed):
+    # WHY: "OFF : instructed shutdown" memuat "shutdown", jadi
+    # _classify_status menyebutnya DOWN. Tanpa pemisahan, perintah grid
+    # terhitung outage -- biaya yang tak bisa dipulihkan maintenance tampil
+    # sebagai target maintenance. "unexpected shutdown" tetap outage.
+    df = _status_rows(
+        ["On-grid", "OFF : instructed shutdown", "OFF : unexpected shutdown", "On-grid"],
+        [ACTUAL_KW, 0.0, 0.0, ACTUAL_KW],
+    )
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=CURTAIL_FIRST))
+    loss = _loss_by_category(sm)
+    assert loss["curtailment"] == pytest.approx(_expected_kwh_per_ts())
+    assert loss["availability_outage"] == pytest.approx(_expected_kwh_per_ts())
+
+
+def test_power_limited_deficit_is_curtailment(stubbed):
+    # WHY: inverter tetap "Grid connected" tetapi dibatasi -- _classify_status
+    # menyebutnya ON, jadi tanpa kategori ini defisitnya jatuh ke unexplained.
+    df = _status_rows(
+        ["On-grid", "Grid connected : power limited", "On-grid", "On-grid"],
+        [ACTUAL_KW, 1.0, ACTUAL_KW, ACTUAL_KW],
+    )
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=CURTAIL_FIRST))
+    loss = _loss_by_category(sm)
+    assert loss["curtailment"] == pytest.approx(
+        _expected_kwh_per_ts() - 1.0 * FREQ_HOURS
+    )
+    assert loss["availability_outage"] == pytest.approx(0.0)
+
+
+def test_curtailed_timestamps_never_become_outage_whatever_the_order(stubbed):
+    # WHY: attribution_order dapat ditukar di config. Perintah grid tetap
+    # bukan gangguan, jadi availability tidak boleh mengklaimnya walau
+    # berprioritas lebih tinggi.
+    df = _status_rows(
+        ["On-grid", "OFF : instructed shutdown", "OFF : unexpected shutdown", "On-grid"],
+        [ACTUAL_KW, 0.0, 0.0, ACTUAL_KW],
+    )
+    order = [
+        "availability_outage", "curtailment", "dc_cable_fault", "soiling",
+        "unexplained",
+    ]
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=order))
+    loss = _loss_by_category(sm)
+    assert loss["availability_outage"] == pytest.approx(_expected_kwh_per_ts())
+    assert loss["curtailment"] == pytest.approx(_expected_kwh_per_ts())
+
+
+def test_without_curtailment_keywords_category_stays_unmeasured(stubbed):
+    # WHY: tanpa kata kunci, "tidak di-curtail" tak bisa dibedakan dari
+    # "tidak dicek" -- kategori None (absen), bukan 0.0; dan instructed
+    # shutdown kembali ke perilaku lama (DOWN = outage).
+    df = _status_rows(
+        ["On-grid", "OFF : instructed shutdown", "OFF : unexpected shutdown", "On-grid"],
+        [ACTUAL_KW, 0.0, 0.0, ACTUAL_KW],
+    )
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=CURTAIL_FIRST, curtailment_keywords=[]))
+    loss = _loss_by_category(sm)
+    assert "curtailment" not in loss.index
+    assert loss["availability_outage"] == pytest.approx(2 * _expected_kwh_per_ts())
+
+
+# --------------------------------------------------------------------------
 # Jalur provider_unavailable
 # --------------------------------------------------------------------------
 

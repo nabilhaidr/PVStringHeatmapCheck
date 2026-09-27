@@ -329,8 +329,11 @@ m2f:
   # shading diklaim sebagai rugi soiling dan ROI cleaning jadi overstated.
   # ground_fault SENGAJA tidak ada di daftar ini -- lihat spec bagian
   # "Ledger klaim dan urutan prioritas"; rugi ground_fault jatuh ke
-  # unexplained di v1.
+  # unexplained di v1. curtailment (perintah grid / power limit) pertama:
+  # timestamp yang dibatasi dari luar bukan gangguan, dan outage tidak pernah
+  # mengklaimnya apa pun urutannya (lihat report.py).
   attribution_order:
+    - curtailment
     - availability_outage
     - dc_cable_fault
     - soiling

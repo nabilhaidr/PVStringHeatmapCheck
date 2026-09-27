@@ -18,7 +18,10 @@ PARETO_COLUMNS: List[str] = [
 VITAL_FEW_THRESHOLD_PCT: float = 80.0
 
 # `unexplained` bukan target tindakan -- ia metrik kualitas atribusi.
-NON_ACTIONABLE: List[str] = ["unexplained"]
+# `curtailment` adalah keputusan grid/plant controller, bukan maintenance;
+# ikut dikumulatifkan, ia mendorong rugi yang bisa diperbaiki keluar dari
+# vital-few.
+NON_ACTIONABLE: List[str] = ["unexplained", "curtailment"]
 
 
 def build_pareto_table(totals: Dict[str, Optional[float]]) -> pd.DataFrame:

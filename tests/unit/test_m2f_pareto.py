@@ -83,6 +83,20 @@ def test_vital_few_survives_when_unexplained_dominates():
     assert bool(table.loc["unexplained", "vital_few"]) is False
 
 
+def test_curtailment_is_not_actionable_and_does_not_crowd_out_vital_few():
+    # WHY: curtailment adalah keputusan grid/plant controller, bukan target
+    # maintenance. Bila dikumulatifkan, 50% curtailment + 30% soiling sudah
+    # menembus 80% dan dc_cable_fault -- rugi yang BISA diperbaiki -- keluar
+    # dari vital-few.
+    table = build_pareto_table(
+        _totals(curtailment=50.0, soiling=30.0, dc_cable_fault=20.0)
+    ).set_index("category")
+    assert bool(table.loc["curtailment", "actionable"]) is False
+    assert bool(table.loc["curtailment", "vital_few"]) is False
+    assert bool(table.loc["soiling", "vital_few"]) is True
+    assert bool(table.loc["dc_cable_fault", "vital_few"]) is True
+
+
 def test_negative_residual_does_not_break_percentages():
     # String melebihi ekspektasi -> residual negatif. Persentase dihitung
     # terhadap total rugi POSITIF supaya tetap terbaca.

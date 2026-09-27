@@ -179,7 +179,8 @@ diklaim tidak dapat diklaim lagi oleh kategori berprioritas lebih rendah.
 
 | # | Kategori | Counterfactual | Sumber detektor |
 |---|---|---|---|
-| 1 | `availability_outage` | `E_expected` sepanjang interval mati | `availability.py` |
+| 0 | `curtailment` | `E_expected` sepanjang interval dibatasi dari luar (`instructed shutdown`, `power limited`); non-actionable (2026-09-27) | status inverter + `m2f.curtailment_keywords` |
+| 1 | `availability_outage` | `E_expected` sepanjang interval mati, KECUALI timestamp curtailment | `availability.py` |
 | 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `mppt_ratio` |
 | 3 | `shading` | median sibling **per jam** pada jam ter-flag | `m2a/shading` |
 | 4 | `soiling` | `p_loss * E_expected` (energi baseline bersih per timestamp, dipotong ke sisa ledger) | `m2a/soiling` |

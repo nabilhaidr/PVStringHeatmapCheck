@@ -5,6 +5,7 @@ import pytest
 
 from pv_pipeline.m2f.estimators import (
     claim_availability_outage,
+    claim_curtailment,
     claim_dc_cable_fault,
     claim_soiling,
 )
@@ -24,6 +25,21 @@ def test_availability_claims_full_expected_during_downtime():
     led = _ledger([2.0, 2.0, 2.0], [0.0, 2.0, 2.0])
     claimed = claim_availability_outage(led, down_mask=np.array([True, False, False]))
     assert claimed == pytest.approx(2.0)
+
+
+def test_curtailment_claims_remaining_on_curtailed_timestamps():
+    # WHY: saat output dibatasi dari luar (perintah shutdown / power limit),
+    # counterfactual-nya string tanpa batas: seluruh sisa di jendela itu
+    # milik curtailment -- termasuk sebagian yang dipotong, bukan hanya nol.
+    led = _ledger([2.0, 2.0, 2.0], [0.0, 1.2, 2.0])
+    claimed = claim_curtailment(led, curtailed_mask=np.array([True, True, False]))
+    assert claimed == pytest.approx(2.8)
+
+
+def test_curtailment_mask_length_mismatch_raises():
+    led = _ledger([2.0, 2.0], [1.0, 1.0])
+    with pytest.raises(ValueError, match="curtailed_mask"):
+        claim_curtailment(led, curtailed_mask=np.array([True]))
 
 
 def test_availability_claims_nothing_when_string_never_down():

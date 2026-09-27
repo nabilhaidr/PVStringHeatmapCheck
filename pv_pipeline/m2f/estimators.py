@@ -31,6 +31,28 @@ def claim_availability_outage(
     return ledger.claim("availability_outage", np.where(mask, remaining, 0.0))
 
 
+def claim_curtailment(
+    ledger: LossLedger,
+    *,
+    curtailed_mask: np.ndarray,
+) -> float:
+    """Klaim seluruh sisa rugi pada timestamp saat output dibatasi dari luar.
+
+    Counterfactual: tanpa perintah shutdown / pembatasan daya dari grid atau
+    plant controller, string akan menghasilkan ``E_expected``. Rugi lain di
+    jendela itu (soiling, fault) tidak teridentifikasi karena tertutup batas,
+    jadi seluruh sisanya milik curtailment -- sama seperti availability.
+    Bukan target maintenance; ``pareto.NON_ACTIONABLE`` memuatnya.
+    """
+    mask = np.asarray(curtailed_mask, dtype=bool)
+    remaining = ledger.remaining()
+    if mask.shape != remaining.shape:
+        raise ValueError(
+            f"[m2f] panjang curtailed_mask {mask.shape} != ledger {remaining.shape}"
+        )
+    return ledger.claim("curtailment", np.where(mask, remaining, 0.0))
+
+
 def claim_dc_cable_fault(
     ledger: LossLedger,
     *,

@@ -29,6 +29,7 @@ from pv_pipeline.m2f.baseline import (
 from pv_pipeline.m2f.deficit import reduce_deficit_frames
 from pv_pipeline.m2f.estimators import (
     claim_availability_outage,
+    claim_curtailment,
     claim_dc_cable_fault,
     claim_soiling,
 )
@@ -358,11 +359,28 @@ class M2fLossAttribution(SubModule):
             for category in order:
                 if category == "unexplained":
                     continue
-                if category == "availability_outage":
+                if category == "curtailment":
+                    # Tanpa kata kunci, "tidak di-curtail" tak bisa dibedakan
+                    # dari "tidak dicek" -- dilewati (None), bukan klaim 0.0.
+                    if not curtailment_keywords or "Inverter status" not in group.columns:
+                        continue
+                    curtailed = _curtailed_mask(
+                        group["Inverter status"], curtailment_keywords,
+                    )
+                    claim_curtailment(
+                        ledger, curtailed_mask=curtailed.to_numpy(dtype=bool),
+                    )
+                elif category == "availability_outage":
                     if not can_classify_status or "Inverter status" not in group.columns:
                         continue
-                    down = _down_mask(group["Inverter status"], status_map)
-                    claim_availability_outage(ledger, down_mask=down.to_numpy())
+                    # "OFF : instructed shutdown" memuat "shutdown", jadi
+                    # _classify_status menyebutnya DOWN. Perintah grid bukan
+                    # gangguan: dikecualikan di sini APA PUN urutan config,
+                    # supaya tidak pernah terbaca sebagai target maintenance.
+                    down = _down_mask(group["Inverter status"], status_map) & ~_curtailed_mask(
+                        group["Inverter status"], curtailment_keywords,
+                    )
+                    claim_availability_outage(ledger, down_mask=down.to_numpy(dtype=bool))
                 elif category == "dc_cable_fault":
                     string_frames = frames_by_string.get(string_id)
                     if not string_frames:
