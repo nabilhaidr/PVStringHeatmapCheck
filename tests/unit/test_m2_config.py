@@ -1,9 +1,46 @@
 """Test pv_pipeline.m2_config: DEFAULT_M2_CONFIG + load_m2_config deep-merge."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from pv_pipeline.m2_config import DEFAULT_M2_CONFIG, load_m2_config
+
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+
+
+class _DuplicateKeyLoader(yaml.SafeLoader):
+    """SafeLoader yang menolak kunci ganda alih-alih memakai yang terakhir."""
+
+
+def _construct_unique_mapping(loader, node, deep=False):
+    seen = {}
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise ValueError(
+                f"kunci {key!r} ganda: baris {seen[key]} dan {key_node.start_mark.line + 1}"
+            )
+        seen[key] = key_node.start_mark.line + 1
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+_DuplicateKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping,
+)
+
+
+@pytest.mark.parametrize(
+    "path", sorted(CONFIG_DIR.glob("*.yaml")), ids=lambda p: p.name,
+)
+def test_repo_config_yaml_has_no_duplicate_keys(path):
+    # WHY: PyYAML diam-diam memakai kemunculan TERAKHIR dari kunci ganda.
+    # m2a_shading pernah ditulis dua kali di m2_config.yaml: seluruh blok
+    # pertama (ambang CV/PR, hour_range, ...) terbuang tanpa suara, jadi
+    # mengubahnya tidak berefek apa pun -- dan tidak ada yang tahu.
+    yaml.load(path.read_text(encoding="utf-8"), Loader=_DuplicateKeyLoader)
 
 
 # ---------- DEFAULT_M2_CONFIG structure ----------

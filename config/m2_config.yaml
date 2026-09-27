@@ -216,6 +216,10 @@ m2a_shading:
   am_pm_split_hour: 12.0             # Diurnal asymmetry boundary
   asymmetry_threshold: 0.5           # |N_am - N_pm|/total >= 0.5 -> asymmetric
   pv_max: 28                         # PV string inventory upper bound
+  # Findings shading TIDAK masuk Findings sheet utama (pola sama dengan
+  # m2_iforest di bawah). Dulu ditulis di blok m2a_shading KEDUA; YAML hanya
+  # memakai kunci ganda terakhir, jadi seluruh blok ini diam-diam terbuang.
+  exclude_from_findings_sheet: true
 
 # Fase 3 Part 2 Task #5 - M2a Soiling SRR via rdtools (SKELETON).
 # Default OFF. BLOCKED on >=6 months data + optional BMKG precipitation.
@@ -314,9 +318,6 @@ m2_iforest:
   # baseline data.
   # Set False kalau mau iforest masuk Findings + ikut auto-skip seperti
   # detector M2b yang lebih konservatif.
-  exclude_from_findings_sheet: true
-  enabled: true                     # Opt-in feature flag (default OFF)
-m2a_shading:
   exclude_from_findings_sheet: true
   enabled: true                     # Opt-in feature flag (default OFF)
 # M2f Loss Attribution & Pareto (spec 2026-08-11).
