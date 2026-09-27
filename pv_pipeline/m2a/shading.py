@@ -352,6 +352,11 @@ class M2aShading(SubModule):
         am_pm_split = float(cfg.get("am_pm_split_hour", DEFAULT_AM_PM_SPLIT_HOUR))
         asymmetry_thr = float(cfg.get("asymmetry_threshold", DEFAULT_ASYMMETRY_THRESHOLD))
         pv_max = int(cfg.get("pv_max", DEFAULT_PV_MAX))
+        # "auto" (default lama) mengisi celah pyranometer dengan clear-sky;
+        # di jam mendung PR-proxy lalu terbaca rendah dan jamnya tampak
+        # "terbayang". M2f memaksa sumber terukur lewat kunci ini dan hanya
+        # memakai baris HourlyMetrics yang poa_source-nya cocok.
+        poa_source = str(cfg.get("poa_source", "auto"))
 
         if "Inverter_ID" not in combined_df.columns or "Start Time" not in combined_df.columns:
             warnings.warn(
@@ -377,7 +382,16 @@ class M2aShading(SubModule):
         hourly_rows: List[dict] = []
         summary_rows: List[dict] = []
 
-        for inverter_id, group in combined_df.groupby("Inverter_ID"):
+        # Per (inverter, HARI): ambang median CV/PR-proxy didefinisikan "hari
+        # ini". Dikelompokkan per inverter saja, run multi-hari mencampur jam
+        # yang sama dari semua hari -- jam terbayang di satu hari diencerkan
+        # hari lain, dan temuan dicap tanggal hari pertama.
+        day_key = pd.to_datetime(
+            combined_df["Start Time"], errors="coerce",
+        ).dt.normalize().rename("_day")
+        for (inverter_id, day), group in combined_df.groupby(
+            [combined_df["Inverter_ID"], day_key], sort=True,
+        ):
             wb_id = _wb_from_inverter_id(inverter_id)
             inv_empties = set(int(n) for n in empty_map.get(str(inverter_id).upper(), []))
             pv_indices = [n for n in range(1, pv_max + 1) if n not in inv_empties]
@@ -409,7 +423,7 @@ class M2aShading(SubModule):
 
             # POA gate.
             try:
-                poa_series = self.poa.get_poa(ts_day, wb_id, source="auto")
+                poa_series = self.poa.get_poa(ts_day, wb_id, source=poa_source)
             except Exception as exc:
                 warnings.warn(
                     f"[M2aShading] POA query failed (wb={wb_id}): "
@@ -470,6 +484,8 @@ class M2aShading(SubModule):
             for h, row in hourly.iterrows():
                 hourly_rows.append({
                     "inverter_id": inverter_id,
+                    "day": day,
+                    "poa_source": poa_source,
                     "hour": int(h),
                     "cv": float(row["cv"]) if pd.notna(row["cv"]) else float("nan"),
                     "pr_proxy": float(row["pr_proxy"]) if pd.notna(row["pr_proxy"]) else float("nan"),
@@ -478,6 +494,9 @@ class M2aShading(SubModule):
                     "mean_inv": float(row["mean_inv"]) if pd.notna(row["mean_inv"]) else float("nan"),
                     "cv_threshold": cv_threshold,
                     "pr_threshold": pr_threshold,
+                    # Median PR-proxy hari itu: counterfactual M2f untuk jam
+                    # ter-flag (aktual x pr_reference / pr_proxy).
+                    "pr_reference": pr_median,
                     "suspicious": bool(suspicious.loc[h]),
                     "am_pm": "AM" if h < am_pm_split else "PM",
                 })
@@ -485,6 +504,7 @@ class M2aShading(SubModule):
             # Summary row per inverter.
             summary_rows.append({
                 "inverter_id": inverter_id,
+                "day": day,
                 "total_hours": total_hours,
                 "n_suspicious": n_suspicious,
                 "n_am": n_am,

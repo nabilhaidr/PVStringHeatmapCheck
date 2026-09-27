@@ -264,7 +264,13 @@ class M2aLowIrradiance(SubModule):
         ))
 
         try:
-            poa_series = self.poa.get_poa(ts_clean, wb_id, source="auto")
+            # "auto" (default lama) mengisi celah pyranometer dengan clear-sky.
+            # M2f memaksa sumber terukur lewat kunci ini: fit PR-proxy yang
+            # dibangun di atas clear-sky tidak sebanding dengan POA terukur
+            # yang M2f pakai untuk mengevaluasinya.
+            poa_series = self.poa.get_poa(
+                ts_clean, wb_id, source=str(cfg.get("poa_source", "auto")),
+            )
         except Exception as exc:
             warnings.warn(
                 f"[M2aLowIrradiance] POA query failed (wb={wb_id}): "
@@ -414,6 +420,7 @@ class M2aLowIrradiance(SubModule):
             if n_low < min_low_samples:
                 fit_rows.append({
                     "inverter_id": inverter_id,
+                    "poa_source": str(cfg.get("poa_source", "auto")),
                     "n_low_samples": n_low,
                     "n_mid_samples": n_mid,
                     "slope_low": slope_low,
@@ -439,6 +446,7 @@ class M2aLowIrradiance(SubModule):
 
             fit_rows.append({
                 "inverter_id": inverter_id,
+                "poa_source": str(cfg.get("poa_source", "auto")),
                 "n_low_samples": n_low,
                 "n_mid_samples": n_mid,
                 "slope_low": slope_low,

@@ -472,6 +472,74 @@ class TestM2aShadingDetection:
             assert 50.0 <= f.confidence <= 100.0
 
 
+class _SourceRecordingPOA:
+    """Bungkus mock POA; catat tiap ``source`` yang diminta detektor."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.sources = []
+
+    def get_poa(self, timestamps, wb_id, source="auto"):
+        self.sources.append(source)
+        return self.inner.get_poa(timestamps, wb_id, source=source)
+
+
+class TestM2aShadingPerDay:
+    def test_multi_day_run_scores_each_day_separately(self, shading_cfg, mock_poa):
+        # WHY: HourlyMetrics dulu per (inverter, jam) lintas SEMUA hari -- di
+        # run multi-hari, jam yang terbayang satu hari diencerkan hari lain
+        # dan temuan dicap tanggal hari pertama. M2f mengklaim energi per
+        # (string, hari), jadi metriknya harus per hari.
+        clean = _make_uniform_shading_df(shade_hours=[])
+        shaded = _make_uniform_shading_df(shade_hours=[7, 8, 9])
+        shaded["Start Time"] = shaded["Start Time"] + pd.Timedelta(days=1)
+        sm = M2aShading(poa=mock_poa)
+        findings = sm.run(pd.concat([clean, shaded], ignore_index=True), shading_cfg)
+        hm = sm.artifacts["HourlyMetrics"]
+        days = hm["day"].dt.strftime("%Y-%m-%d")
+        assert sorted(days.unique()) == ["2026-05-14", "2026-05-15"]
+        shaded_hours = hm["hour"].isin([7, 8, 9])
+        assert hm.loc[(days == "2026-05-15") & shaded_hours, "suspicious"].all()
+        assert not hm.loc[(days == "2026-05-14") & shaded_hours, "suspicious"].any()
+        shade_findings = [f for f in findings if f.evidence["hour"] in (7, 8, 9)]
+        assert shade_findings
+        assert {f.timestamp.date().isoformat() for f in shade_findings} == {"2026-05-15"}
+        assert sorted(sm.artifacts["ShadingSummary"]["day"].dt.strftime("%Y-%m-%d")) == [
+            "2026-05-14", "2026-05-15",
+        ]
+
+    def test_hourly_metrics_record_reference_pr(self, shading_cfg, mock_poa):
+        # WHY: M2f menghitung defisit jam ter-flag sebagai
+        # aktual x (pr_reference / pr_proxy - 1); pr_reference harus median
+        # PR-proxy hari itu yang dipakai detektor, bukan ditebak ulang.
+        sm = M2aShading(poa=mock_poa)
+        sm.run(_make_uniform_shading_df(shade_hours=[7, 8, 9]), shading_cfg)
+        hm = sm.artifacts["HourlyMetrics"]
+        mult = shading_cfg["m2a_shading"]["pr_low_multiplier"]
+        assert np.allclose(hm["pr_reference"] * mult, hm["pr_threshold"])
+        assert np.allclose(hm["pr_reference"], hm["pr_proxy"].median())
+
+    def test_poa_source_comes_from_config(self, shading_cfg, mock_poa):
+        # WHY: "auto" mengisi celah pyranometer dengan clear-sky; di jam
+        # mendung PR-proxy lalu terbaca rendah -> jam "shading" palsu yang
+        # akan M2f klaim sebagai energi. Sumber harus bisa dipaksa ke terukur
+        # dan tercatat di artefak supaya M2f menolak baris dari sumber lain.
+        cfg = dict(shading_cfg)
+        cfg["m2a_shading"] = dict(shading_cfg["m2a_shading"], poa_source="pyranometer_per_ws")
+        poa = _SourceRecordingPOA(mock_poa)
+        sm = M2aShading(poa=poa)
+        sm.run(_make_uniform_shading_df(shade_hours=[7, 8, 9]), cfg)
+        assert set(poa.sources) == {"pyranometer_per_ws"}
+        assert set(sm.artifacts["HourlyMetrics"]["poa_source"]) == {"pyranometer_per_ws"}
+
+    def test_poa_source_defaults_to_auto(self, shading_cfg, mock_poa):
+        # WHY: daily_runfast dan config lama tidak memuat kunci ini; perilaku
+        # mereka tidak boleh berubah diam-diam.
+        poa = _SourceRecordingPOA(mock_poa)
+        M2aShading(poa=poa).run(_make_uniform_shading_df(shade_hours=[7]), shading_cfg)
+        assert set(poa.sources) == {"auto"}
+
+
 class TestM2aShadingArtifacts:
     def test_hourly_metrics_artifact(self, shading_cfg, mock_poa):
         df = _make_uniform_shading_df(shade_hours=[7, 8, 9])

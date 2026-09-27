@@ -374,6 +374,42 @@ class TestM2aLowIrradianceBasic:
         assert len(f1) == len(f2)
 
 
+class _SourceRecordingPOA:
+    """Bungkus mock POA; catat tiap ``source`` yang diminta detektor."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.sources = []
+
+    def get_poa(self, timestamps, wb_id, source="auto"):
+        self.sources.append(source)
+        return self.inner.get_poa(timestamps, wb_id, source=source)
+
+
+class TestM2aLowIrradiancePoaSource:
+    def test_poa_source_comes_from_config_and_is_recorded(self, low_irr_cfg, mock_poa):
+        # WHY: M2f memakai fit PR-proxy pita menengah sebagai counterfactual
+        # low_irradiance_eff dan mengevaluasinya dengan POA terukur miliknya.
+        # Fit yang dibangun di atas clear-sky ("auto") tidak sebanding, jadi
+        # sumbernya harus bisa dipaksa dan tercatat supaya M2f menolaknya.
+        cfg = dict(low_irr_cfg)
+        cfg["m2a_low_irradiance"] = dict(
+            low_irr_cfg["m2a_low_irradiance"], poa_source="pyranometer_per_ws",
+        )
+        poa = _SourceRecordingPOA(mock_poa)
+        sm = M2aLowIrradiance(poa=poa)
+        sm.run(_make_inverter_df("WB05-INV01"), cfg)
+        assert set(poa.sources) == {"pyranometer_per_ws"}
+        assert set(sm.artifacts["LowIrradianceFit"]["poa_source"]) == {"pyranometer_per_ws"}
+
+    def test_poa_source_defaults_to_auto(self, low_irr_cfg, mock_poa):
+        # WHY: daily_runfast dan config lama tidak memuat kunci ini; perilaku
+        # mereka tidak boleh berubah diam-diam.
+        poa = _SourceRecordingPOA(mock_poa)
+        M2aLowIrradiance(poa=poa).run(_make_inverter_df("WB05-INV01"), low_irr_cfg)
+        assert set(poa.sources) == {"auto"}
+
+
 class TestM2aLowIrradianceConfigOverrides:
     def test_higher_threshold_flags_more(self, mock_poa):
         """Raising slope_threshold flags more inverters."""
