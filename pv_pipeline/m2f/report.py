@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 # _classify_status dipakai apa adanya (bukan disalin) supaya M2f dan
@@ -27,10 +28,15 @@ from pv_pipeline.m2f.baseline import (
     compute_expected_energy_kwh,
 )
 from pv_pipeline.m2f.deficit import reduce_deficit_frames
+from pv_pipeline.m2a.low_irradiance import DEFAULT_POA_LOW_RANGE
 from pv_pipeline.m2f.estimators import (
     claim_availability_outage,
     claim_curtailment,
     claim_dc_cable_fault,
+    claim_low_irradiance_eff,
+    claim_shading,
+    low_irradiance_deficit_kwh,
+    shading_deficit_kwh,
     claim_soiling,
 )
 from pv_pipeline.m2f.ledger import (
@@ -90,6 +96,63 @@ def _index_deficit_frames(
             inverter_id, pv_string = key
             out.setdefault(f"{inverter_id}-{pv_string}", []).append(part)
     return out
+
+
+# M2aShading sendiri menyebut pola simetris (pagi = sore) lebih konsisten
+# dengan soiling atau awan. Hanya pola berarah yang diklaim sebagai shading;
+# selebihnya terevaluasi dengan klaim 0.0 supaya tidak mencuri energi soiling.
+_DIRECTIONAL_SHADING = frozenset({"shading_morning", "shading_afternoon"})
+
+
+def _index_shading(
+    hourly: Optional[pd.DataFrame], poa_source: str,
+) -> Dict[Tuple[str, pd.Timestamp], pd.DataFrame]:
+    """HourlyMetrics M2aShading per (inverter_id, hari), disaring ke poa_source.
+
+    Baris dari sumber POA lain (mis. "auto" yang berakhir di clear-sky)
+    dibuang: jam mendung di sana tampak "terbayang". Inverter-hari yang tidak
+    ada di peta ini tidak pernah dievaluasi -- shading tetap None.
+    """
+    if hourly is None or hourly.empty:
+        return {}
+    subset = hourly[hourly["poa_source"] == poa_source]
+    days = pd.to_datetime(subset["day"]).dt.normalize()
+    return {
+        (str(inverter_id), pd.Timestamp(day)): part
+        for (inverter_id, day), part in subset.groupby([subset["inverter_id"], days])
+    }
+
+
+def _index_low_irradiance(
+    fit: Optional[pd.DataFrame], poa_source: str,
+) -> Dict[str, pd.Series]:
+    """LowIrradianceFit per inverter yang BENAR-BENAR dievaluasi.
+
+    "insufficient_data" berarti fit tidak pernah dihitung -- dibuang supaya
+    low_irradiance_eff tetap None, bukan 0.0. Fit dari sumber POA lain tidak
+    sebanding dengan POA yang M2f pakai untuk mengevaluasinya.
+    """
+    if fit is None or fit.empty:
+        return {}
+    subset = fit[
+        (fit["poa_source"] == poa_source)
+        & (fit["classification"] != "insufficient_data")
+    ]
+    return {str(row["inverter_id"]): row for _, row in subset.iterrows()}
+
+
+def _inverter_power_kw(group: pd.DataFrame, empty_slots: set) -> pd.Series:
+    """Jumlah daya PV inverter per timestamp (kW), slot kosong dilewati.
+
+    Definisi yang sama dengan ``M2aLowIrradiance.build_inverter_power_series``
+    -- PR-proxy fit detektor dan PR-proxy aktual di sini harus sebanding.
+    """
+    cols = [
+        col for col in group.columns
+        if (match := PV_POWER_RE.search(str(col)))
+        and int(match.group(1)) not in empty_slots
+    ]
+    return group[cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
 
 
 def _down_mask(status: pd.Series, status_map: dict) -> pd.Series:
@@ -265,6 +328,14 @@ class M2fLossAttribution(SubModule):
         frames_by_string = _index_deficit_frames(deficit_frames, poa_source)
         # Slot PV kosong by design, sama sumbernya dengan ketiga detektor m2b.
         empty_pv_map = load_empty_pv_map(config)
+        shading_by_day = _index_shading(cfg.get("shading_hourly"), poa_source)
+        low_irr_fits = _index_low_irradiance(cfg.get("low_irradiance_fit"), poa_source)
+        # Pita yang sama dengan detektornya -- satu sumber config.
+        poa_low_min, poa_low_max = (
+            (config.get("m2a_low_irradiance") or {}).get(
+                "poa_low_range", DEFAULT_POA_LOW_RANGE,
+            )
+        )
 
         per_string_rows: List[dict] = []
         closure_rows: List[dict] = []
@@ -294,6 +365,8 @@ class M2fLossAttribution(SubModule):
                 continue
 
             idx = pd.DatetimeIndex(group.index)
+            # _iter_string_days menyusun string_id sebagai "{inverter}-PV{n}".
+            inverter_id = string_id.rsplit("-PV", 1)[0]
             # source=poa_source EKSPLISIT. Default get_poa adalah "auto", yang
             # mengisi tiap NaN dari rantai fallback sampai ke pvlib clear-sky
             # -- cakupan lalu terbaca ~100% walau tidak ada satu pun pembacaan
@@ -396,6 +469,36 @@ class M2fLossAttribution(SubModule):
                         freq_hours=DEFAULT_FREQ_HOURS,
                     )
                     claim_dc_cable_fault(ledger, deficit_kwh=reduced)
+                elif category == "shading":
+                    rows = shading_by_day.get((inverter_id, day))
+                    if rows is None:
+                        continue
+                    if rows["fault_type"].isin(_DIRECTIONAL_SHADING).any():
+                        deficit = shading_deficit_kwh(e_act, rows)
+                    else:
+                        deficit = np.zeros(len(idx))
+                    claim_shading(ledger, deficit_kwh=deficit)
+                elif category == "low_irradiance_eff":
+                    fit = low_irr_fits.get(inverter_id)
+                    if fit is None:
+                        continue
+                    if fit["classification"] == "low_irradiance_underperform":
+                        empty_slots = {
+                            int(n) for n in empty_pv_map.get(inverter_id.upper(), [])
+                        }
+                        deficit = low_irradiance_deficit_kwh(
+                            e_act.to_numpy(),
+                            poa.to_numpy(dtype=float),
+                            _inverter_power_kw(group, empty_slots).to_numpy(dtype=float),
+                            intercept_mid=float(fit["intercept_mid"]),
+                            slope_mid=float(fit["slope_mid"]),
+                            poa_low_min=float(poa_low_min),
+                            poa_low_max=float(poa_low_max),
+                        )
+                    else:
+                        # Dievaluasi, tanpa anomali cahaya rendah.
+                        deficit = np.zeros(len(idx))
+                    claim_low_irradiance_eff(ledger, deficit_kwh=deficit)
                 elif category == "soiling":
                     month_key = day.strftime("%Y-%m")
                     if month_key not in p_loss_by_month:

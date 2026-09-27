@@ -28,7 +28,8 @@ Isi:
    `daily_runfast_v1.ipynb`).
 3. **Cell 3** -- Load `config/m2_config.yaml`, aktifkan `m2f` + `m2a_soiling`
    (keduanya default OFF/opt-in di yaml), deteksi rentang tanggal data.
-4. **Cell 4** -- Jalankan 3 detektor m2b + M2aSoiling + M2eAvailability.
+4. **Cell 4** -- Jalankan 3 detektor m2b + M2aShading + M2aLowIrradiance +
+   M2aSoiling + M2eAvailability.
 5. **Cell 5** -- `collect_m2f_inputs(submodules, cfg)` menjembatani
    `deficit_frames`/`p_loss_by_month` ke `M2fLossAttribution`, lalu
    `M2fLossAttribution().run(...)`.
@@ -164,6 +165,12 @@ cfg = load_m2_config(M2_CFG_PATH)
 # notebook ini yang mewakili "user opt-in" untuk keduanya.
 cfg["m2f"]["enabled"] = True
 cfg.setdefault("m2a_soiling", {})["enabled"] = True
+# Detektor v2 (shading, low-irradiance) memakai sumber POA yang SAMA dengan
+# M2f -- default mereka "auto" (berakhir di clear-sky), dan M2f menolak baris
+# dari sumber lain sehingga kategorinya akan tetap None.
+for _key in ("m2a_shading", "m2a_low_irradiance"):
+    cfg.setdefault(_key, {})["enabled"] = True
+    cfg[_key]["poa_source"] = cfg["m2f"]["poa_source"]
 
 # --- Pre-check combined_df ---
 if "combined_df" not in globals():
@@ -187,6 +194,8 @@ print(f"[m2f-nb] combined_df shape = {combined_df.shape}")
 CODE_CELL4 = """\
 # Cell 4 -- Jalankan 3 detektor m2b + M2aSoiling + M2eAvailability
 from pv_pipeline.availability import M2eAvailability
+from pv_pipeline.m2a.low_irradiance import M2aLowIrradiance
+from pv_pipeline.m2a.shading import M2aShading
 from pv_pipeline.m2a.soiling import M2aSoiling
 from pv_pipeline.mppt_ratio import M2bMpptRatio
 from pv_pipeline.open_circuit import M2bOpenCircuit
@@ -194,7 +203,7 @@ from pv_pipeline.peer_zscore import M2bPeerZScore
 
 submodules = [
     M2bPeerZScore(), M2bOpenCircuit(), M2bMpptRatio(),
-    M2aSoiling(), M2eAvailability(),
+    M2aShading(), M2aLowIrradiance(), M2aSoiling(), M2eAvailability(),
 ]
 all_findings = []
 for sm in submodules:

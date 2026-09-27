@@ -182,9 +182,9 @@ diklaim tidak dapat diklaim lagi oleh kategori berprioritas lebih rendah.
 | 0 | `curtailment` | `E_expected` sepanjang interval dibatasi dari luar (`instructed shutdown`, `power limited`); non-actionable (2026-09-27) | status inverter + `m2f.curtailment_keywords` |
 | 1 | `availability_outage` | `E_expected` sepanjang interval mati, KECUALI timestamp curtailment | `availability.py` |
 | 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `mppt_ratio` |
-| 3 | `shading` | median sibling **per jam** pada jam ter-flag | `m2a/shading` |
+| 3 | `shading` | referensi-diri: `aktual x (pr_reference / pr_proxy - 1)` pada jam ter-flag; `pr_reference` = median PR-proxy inverter itu hari itu. Hanya pola berarah (`shading_morning`/`_afternoon`); simetris = 0.0 (2026-09-27, menggantikan "median sibling") | `m2a/shading` (HourlyMetrics) |
 | 4 | `soiling` | `p_loss * E_expected` (energi baseline bersih per timestamp, dipotong ke sisa ledger) | `m2a/soiling` |
-| 5 | `low_irradiance_eff` | defisit ter-fit pada pita POA [50,250] | `m2a/low_irradiance` |
+| 5 | `low_irradiance_eff` | hanya inverter `low_irradiance_underperform`: `aktual x (pr_fit / pr_aktual - 1)` pada POA [50,250], `pr_fit` = fit PR-proxy pita menengah diekstrapolasi (2026-09-27) | `m2a/low_irradiance` (LowIrradianceFit) |
 | 6 | `microcrack`, `bifacial_underperf` | -- | `None` |
 | 7 | `unexplained` | sisa ledger (termasuk `ground_fault`, lihat di bawah) | -- |
 
@@ -446,6 +446,15 @@ Tes menguji maksud, bukan sekadar perilaku (Rule 9).
   plus kedua grafik. Closure sudah berlaku penuh dengan empat kategori;
   sisanya masuk residual secara jujur.
 - **v2** -- `shading` dan `low_irradiance_eff` dipindahkan keluar dari residual.
+  **Diimplementasikan 2026-09-27.** Keputusan owner: shading memakai
+  referensi-diri inverter (tetangga se-WB biasanya ikut tertutup bayangan
+  terrain yang sama), low_irradiance_eff berarti anomali cahaya-rendah pada
+  inverter yang di-flag (rugi intrinsik modul sehat tetap urusan derate).
+  Prasyarat di detektor: M2aShading kini per (inverter, hari) dengan kolom
+  `day`/`poa_source`/`pr_reference`/`fault_type`; kedua detektor menerima
+  `poa_source` (default `"auto"`, notebook M2f menyamakannya dengan
+  `m2f.poa_source`) dan M2f menolak baris dari sumber lain. `curtailment`
+  (non-actionable) ditambahkan di depan urutan pada hari yang sama.
 - **v3** -- `microcrack` dan `bifacial_underperf`; terkunci sampai tersedia EL
   imaging + IV tracer dan sensor rear-POA.
 

@@ -320,6 +320,34 @@ def test_end_to_end_detector_ran_found_nothing_is_distinguishable_from_never_ran
 
 
 # --------------------------------------------------------------------------
+# v2: artefak M2aShading dan M2aLowIrradiance
+# --------------------------------------------------------------------------
+
+def test_collect_bridges_v2_detector_artifacts():
+    # WHY: M2Engine tidak punya jalur antar-submodule. Tanpa jembatan ini
+    # estimator shading/low_irradiance_eff tidak pernah melihat detektornya.
+    shading = _FakeDetector()
+    shading.artifacts["HourlyMetrics"] = pd.DataFrame(
+        {"inverter_id": ["WB03-INV01"], "hour": [8]}
+    )
+    low = _FakeDetector()
+    low.artifacts["LowIrradianceFit"] = pd.DataFrame({"inverter_id": ["WB03-INV01"]})
+    config = {"m2f": {}}
+    collect_m2f_inputs([shading, low], config)
+    assert config["m2f"]["shading_hourly"]["hour"].tolist() == [8]
+    assert config["m2f"]["low_irradiance_fit"]["inverter_id"].tolist() == ["WB03-INV01"]
+
+
+def test_collect_without_v2_detectors_leaves_none():
+    # WHY: None = "detektor tidak dijalankan"; kategori tetap tidak terukur,
+    # bukan terbaca 0.0.
+    config = {"m2f": {}}
+    collect_m2f_inputs([_FakeDetector()], config)
+    assert config["m2f"]["shading_hourly"] is None
+    assert config["m2f"]["low_irradiance_fit"] is None
+
+
+# --------------------------------------------------------------------------
 # p_loss_by_month dari workbook soiling_srr_*.xlsx (run_soiling_analysis.py)
 # --------------------------------------------------------------------------
 

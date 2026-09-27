@@ -7,8 +7,67 @@ from pv_pipeline.m2f.estimators import (
     claim_availability_outage,
     claim_curtailment,
     claim_dc_cable_fault,
+    claim_low_irradiance_eff,
+    claim_shading,
     claim_soiling,
+    low_irradiance_deficit_kwh,
+    shading_deficit_kwh,
 )
+
+
+# --------------------------------------------------------------------------
+# v2: shading dan low_irradiance_eff
+# --------------------------------------------------------------------------
+
+def _hourly(rows):
+    return pd.DataFrame(rows, columns=["hour", "pr_proxy", "pr_reference", "suspicious"])
+
+
+def test_shading_deficit_restores_flagged_hour_to_reference_pr():
+    # WHY: counterfactual jam terbayang = produksi bila PR-proxy jam itu
+    # setara median harinya sendiri: aktual x (pr_reference / pr_proxy - 1).
+    # Jam yang tidak di-flag tidak menyumbang apa pun.
+    idx = pd.date_range("2026-05-13 07:00", periods=4, freq="30min")
+    actual = pd.Series([1.0, 1.0, 2.0, 2.0], index=idx)
+    hourly = _hourly([
+        {"hour": 7, "pr_proxy": 0.5, "pr_reference": 1.0, "suspicious": True},
+        {"hour": 8, "pr_proxy": 0.9, "pr_reference": 1.0, "suspicious": False},
+    ])
+    np.testing.assert_allclose(shading_deficit_kwh(actual, hourly), [1.0, 1.0, 0.0, 0.0])
+
+
+def test_shading_deficit_skips_hours_without_production():
+    # WHY: PR-proxy 0 di siang hari berarti inverter tidak berproduksi --
+    # itu outage, bukan bayangan, dan rasionya tak terhingga.
+    idx = pd.date_range("2026-05-13 07:00", periods=2, freq="30min")
+    actual = pd.Series([0.0, 0.0], index=idx)
+    hourly = _hourly([{"hour": 7, "pr_proxy": 0.0, "pr_reference": 1.0, "suspicious": True}])
+    np.testing.assert_allclose(shading_deficit_kwh(actual, hourly), [0.0, 0.0])
+
+
+def test_low_irradiance_deficit_only_inside_low_band():
+    # WHY: counterfactual = PR-proxy pita menengah diekstrapolasi ke POA
+    # rendah. Di luar pita [50, 250] estimator ini tidak berlaku sama
+    # sekali; timestamp tanpa daya inverter adalah outage, bukan low-light.
+    actual = np.array([0.5, 0.5, 0.5, 0.5])
+    poa = np.array([100.0, 200.0, 500.0, 150.0])
+    inverter_kw = np.array([1.0, 4.0, 1.0, 0.0])
+    deficit = low_irradiance_deficit_kwh(
+        actual, poa, inverter_kw,
+        intercept_mid=0.02, slope_mid=0.0, poa_low_min=50.0, poa_low_max=250.0,
+    )
+    # t0: pr_aktual 0.01, pr_fit 0.02 -> faktor 1.0; t1: pr_aktual 0.02 -> 0;
+    # t2: di luar pita; t3: inverter tidak berproduksi.
+    np.testing.assert_allclose(deficit, [0.5, 0.0, 0.0, 0.0])
+
+
+def test_v2_claims_land_in_their_own_categories():
+    led = _ledger([2.0, 2.0], [1.0, 1.0])
+    assert claim_shading(led, deficit_kwh=np.array([0.3, 0.0])) == pytest.approx(0.3)
+    assert claim_low_irradiance_eff(led, deficit_kwh=np.array([0.0, 0.2])) == pytest.approx(0.2)
+    totals = led.totals()
+    assert totals["shading"] == pytest.approx(0.3)
+    assert totals["low_irradiance_eff"] == pytest.approx(0.2)
 from pv_pipeline.m2f.ledger import LossLedger
 
 

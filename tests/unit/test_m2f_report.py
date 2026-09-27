@@ -992,6 +992,112 @@ def test_without_curtailment_keywords_category_stays_unmeasured(stubbed):
 
 
 # --------------------------------------------------------------------------
+# v2: shading dan low_irradiance_eff
+# --------------------------------------------------------------------------
+
+V2_ORDER = [
+    "curtailment", "availability_outage", "dc_cable_fault", "shading",
+    "soiling", "low_irradiance_eff", "unexplained",
+]
+
+
+def _shading_rows(fault_type="shading_morning", poa_source=POA_SOURCE, day="2026-05-13"):
+    """HourlyMetrics M2aShading: jam 08 (= seluruh INDEX) ter-flag."""
+    return pd.DataFrame([{
+        "inverter_id": "WB03-INV01", "day": pd.Timestamp(day),
+        "poa_source": poa_source, "hour": 8, "pr_proxy": 0.5,
+        "pr_reference": 1.0, "suspicious": True, "fault_type": fault_type,
+    }])
+
+
+SHADING_KWH = len(INDEX) * ACTUAL_KW * FREQ_HOURS * (1.0 / 0.5 - 1.0)
+
+
+def test_shading_claims_flagged_hour_against_reference_pr(stubbed):
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(attribution_order=V2_ORDER, shading_hourly=_shading_rows()))
+    assert _loss_by_category(sm)["shading"] == pytest.approx(SHADING_KWH)
+
+
+def test_shading_is_claimed_before_soiling(stubbed):
+    # WHY: SRR menyerap apa saja yang turun perlahan. Bila soiling mengklaim
+    # lebih dulu, rugi shading terbaca rugi soiling dan ROI cleaning
+    # overstated -- padahal angka itu dasar keputusan biaya.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(
+        attribution_order=V2_ORDER, shading_hourly=_shading_rows(),
+        p_loss_by_month={"2026-05": 1.0},
+    ))
+    loss = _loss_by_category(sm)
+    l_total = _scored(sm)["l_total_kwh"].iloc[0]
+    assert loss["shading"] == pytest.approx(SHADING_KWH)
+    assert loss["soiling"] == pytest.approx(l_total - SHADING_KWH)
+
+
+def test_symmetric_shading_pattern_is_not_claimed_as_shading(stubbed):
+    # WHY: menurut M2aShading sendiri, pola simetris pagi = sore lebih
+    # mirip soiling atau awan. Mengklaimnya sebagai shading mencuri energi
+    # soiling. Inverter-hari itu tetap terevaluasi: 0.0, bukan None.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(
+        attribution_order=V2_ORDER,
+        shading_hourly=_shading_rows(fault_type="shading_uniform"),
+    ))
+    assert _loss_by_category(sm)["shading"] == pytest.approx(0.0)
+
+
+def test_shading_from_other_poa_source_or_day_stays_unmeasured(stubbed):
+    # WHY: baris dari sumber POA lain (mis. "auto" = clear-sky) tidak
+    # sebanding; inverter-hari yang tidak dievaluasi detektor tidak boleh
+    # terbaca "dicek, tidak terbayang".
+    for rows in (_shading_rows(poa_source="auto"), _shading_rows(day="2026-05-14")):
+        sm = M2fLossAttribution()
+        sm.run(_combined_df(), _config(attribution_order=V2_ORDER, shading_hourly=rows))
+        assert "shading" not in _categories(sm)
+
+
+LOW_FIT = {
+    "inverter_id": "WB03-INV01", "poa_source": POA_SOURCE,
+    "intercept_mid": 0.01, "slope_mid": 0.0,
+    "classification": "low_irradiance_underperform",
+}
+
+
+def _low_light_run(monkeypatch, **fit_overrides):
+    """POA 150 W/m2 (di pita rendah), PV3 = 1.0 kW -> PR-proxy 1/150."""
+    _install_providers(monkeypatch, poa=_ConstantPOA(value=150.0))
+    df = pd.DataFrame(_rows("WB03-INV01", INDEX, {"PV3": 1.0}))
+    sm = M2fLossAttribution()
+    sm.run(df, _config(
+        attribution_order=V2_ORDER,
+        low_irradiance_fit=pd.DataFrame([dict(LOW_FIT, **fit_overrides)]),
+    ))
+    return sm
+
+
+def test_low_irradiance_claims_deficit_against_mid_band_fit(monkeypatch):
+    # WHY: counterfactual = PR-proxy pita menengah (0.01) diekstrapolasi ke
+    # POA rendah; aktual 1/150 -> faktor 0.01 / (1/150) - 1 = 0.5.
+    sm = _low_light_run(monkeypatch)
+    assert _loss_by_category(sm)["low_irradiance_eff"] == pytest.approx(
+        len(INDEX) * 1.0 * FREQ_HOURS * 0.5
+    )
+
+
+def test_low_irradiance_normal_inverter_is_measured_zero(monkeypatch):
+    sm = _low_light_run(monkeypatch, classification="normal")
+    assert _loss_by_category(sm)["low_irradiance_eff"] == pytest.approx(0.0)
+
+
+def test_low_irradiance_unevaluated_or_other_source_stays_unmeasured(monkeypatch):
+    # WHY: "insufficient_data" berarti fit tidak pernah dihitung; fit dari
+    # sumber POA lain tidak sebanding dengan POA yang dipakai M2f.
+    for overrides in ({"classification": "insufficient_data"}, {"poa_source": "auto"}):
+        sm = _low_light_run(monkeypatch, **overrides)
+        assert "low_irradiance_eff" not in _categories(sm)
+
+
+# --------------------------------------------------------------------------
 # Jalur provider_unavailable
 # --------------------------------------------------------------------------
 

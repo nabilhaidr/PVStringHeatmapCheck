@@ -497,6 +497,9 @@ class M2aShading(SubModule):
                     # Median PR-proxy hari itu: counterfactual M2f untuk jam
                     # ter-flag (aktual x pr_reference / pr_proxy).
                     "pr_reference": pr_median,
+                    # Klasifikasi inverter-hari (sama dengan ShadingSummary):
+                    # M2f hanya mengklaim pola berarah pagi/sore.
+                    "fault_type": fault_type if n_suspicious > 0 else "no_shading",
                     "suspicious": bool(suspicious.loc[h]),
                     "am_pm": "AM" if h < am_pm_split else "PM",
                 })

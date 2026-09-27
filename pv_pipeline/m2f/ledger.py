@@ -26,7 +26,9 @@ CLAIMABLE_CATEGORIES: List[str] = [
     "curtailment",
     "availability_outage",
     "dc_cable_fault",
+    "shading",
     "soiling",
+    "low_irradiance_eff",
 ]
 
 

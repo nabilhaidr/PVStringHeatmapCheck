@@ -539,6 +539,18 @@ class TestM2aShadingPerDay:
         M2aShading(poa=poa).run(_make_uniform_shading_df(shade_hours=[7]), shading_cfg)
         assert set(poa.sources) == {"auto"}
 
+    def test_hourly_metrics_carry_inverter_day_classification(self, shading_cfg, mock_poa):
+        # WHY: M2f hanya boleh mengklaim energi shading untuk pola berarah
+        # (pagi/sore). Pola simetris menurut detektor ini sendiri lebih
+        # mirip soiling/awan -- mengklaimnya sebagai shading mencuri energi
+        # soiling. Klasifikasi inverter-hari harus terbawa ke tiap baris jam.
+        sm = M2aShading(poa=mock_poa)
+        sm.run(_make_uniform_shading_df(shade_hours=[7, 8, 9]), shading_cfg)
+        hm = sm.artifacts["HourlyMetrics"]
+        summary = sm.artifacts["ShadingSummary"]
+        assert set(hm["fault_type"]) == set(summary["fault_type"])
+        assert set(hm["fault_type"]) == {"shading_morning"}
+
 
 class TestM2aShadingArtifacts:
     def test_hourly_metrics_artifact(self, shading_cfg, mock_poa):

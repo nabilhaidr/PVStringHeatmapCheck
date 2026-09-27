@@ -7,6 +7,7 @@ melihat energi yang belum dijelaskan.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from pv_pipeline.m2f.ledger import LossLedger
 
@@ -106,3 +107,80 @@ def claim_soiling(
             f"ledger {remaining.shape}"
         )
     return ledger.claim("soiling", p * e_expected)
+
+
+def shading_deficit_kwh(actual_kwh: pd.Series, hourly: pd.DataFrame) -> np.ndarray:
+    """Defisit jam ter-flag M2aShading: ``aktual x (pr_reference / pr_proxy - 1)``.
+
+    Counterfactual referensi-diri: pada jam terbayang, inverter berkinerja
+    setara median PR-proxy HARINYA SENDIRI -- bukan inverter tetangga, yang
+    biasanya ikut tertutup bayangan terrain yang sama, dan lintas plant
+    mencampur 24 vs 26 modul per string. ``hourly`` adalah baris
+    HourlyMetrics satu inverter-hari. Jam dengan ``pr_proxy <= 0`` dilewati:
+    inverter yang tidak berproduksi di siang hari adalah outage, bukan
+    bayangan, dan rasionya tak terhingga.
+    """
+    actual = actual_kwh.to_numpy(dtype=float)
+    deficit = np.zeros_like(actual)
+    hours = np.asarray(actual_kwh.index.hour)
+    flagged = hourly[hourly["suspicious"].astype(bool) & (hourly["pr_proxy"] > 0)]
+    for hour, pr_proxy, pr_reference in zip(
+        flagged["hour"], flagged["pr_proxy"], flagged["pr_reference"],
+    ):
+        factor = float(pr_reference) / float(pr_proxy) - 1.0
+        if factor > 0.0:
+            in_hour = hours == int(hour)
+            deficit[in_hour] = actual[in_hour] * factor
+    return deficit
+
+
+def low_irradiance_deficit_kwh(
+    actual_kwh: np.ndarray,
+    poa_wm2: np.ndarray,
+    inverter_kw: np.ndarray,
+    *,
+    intercept_mid: float,
+    slope_mid: float,
+    poa_low_min: float,
+    poa_low_max: float,
+) -> np.ndarray:
+    """Defisit pita cahaya rendah pada inverter yang di-flag M2aLowIrradiance.
+
+    Counterfactual: PR-proxy (kW per W/m2) fit pita menengah, diekstrapolasi
+    ke POA pita rendah (``intercept_mid + slope_mid x POA``). Defisit per
+    timestamp = ``aktual x (pr_fit / pr_aktual - 1)`` di dalam pita, nol di
+    luar pita. Timestamp tanpa daya inverter dilewati (outage, bukan
+    low-light). ``inverter_kw`` harus jumlah daya PV yang sama dengan yang
+    dipakai detektor, dan POA dari sumber yang sama dengan fit-nya.
+    """
+    actual = np.asarray(actual_kwh, dtype=float)
+    poa = np.asarray(poa_wm2, dtype=float)
+    inverter = np.asarray(inverter_kw, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        factor = (intercept_mid + slope_mid * poa) / (inverter / poa) - 1.0
+    usable = (
+        (poa >= poa_low_min) & (poa <= poa_low_max)
+        & (inverter > 0.0) & np.isfinite(factor)
+    )
+    return np.where(usable, actual * np.clip(factor, 0.0, None), 0.0)
+
+
+def _claim_deficit(ledger: LossLedger, category: str, deficit_kwh: np.ndarray) -> float:
+    deficit = np.asarray(deficit_kwh, dtype=float)
+    remaining = ledger.remaining()
+    if deficit.shape != remaining.shape:
+        raise ValueError(
+            f"[m2f] panjang deficit_kwh {deficit.shape} != ledger {remaining.shape}"
+        )
+    return ledger.claim(category, np.maximum(deficit, 0.0))
+
+
+def claim_shading(ledger: LossLedger, *, deficit_kwh: np.ndarray) -> float:
+    """Klaim defisit :func:`shading_deficit_kwh`. Prioritas SEBELUM soiling:
+    SRR menyerap apa saja yang turun perlahan, termasuk bayangan."""
+    return _claim_deficit(ledger, "shading", deficit_kwh)
+
+
+def claim_low_irradiance_eff(ledger: LossLedger, *, deficit_kwh: np.ndarray) -> float:
+    """Klaim defisit :func:`low_irradiance_deficit_kwh`, sesudah soiling."""
+    return _claim_deficit(ledger, "low_irradiance_eff", deficit_kwh)

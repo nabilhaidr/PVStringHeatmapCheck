@@ -46,6 +46,23 @@ def _collect_deficit_frames(submodules: Iterable[SubModule]) -> List[pd.DataFram
     return out
 
 
+def _collect_artifact(
+    submodules: Iterable[SubModule], name: str,
+) -> Optional[pd.DataFrame]:
+    """Gabungan artifact ``name`` dari submodule yang punya isi; None bila tak ada.
+
+    Dipakai untuk HourlyMetrics (M2aShading) dan LowIrradianceFit
+    (M2aLowIrradiance). None -- bukan frame kosong -- supaya kategori v2
+    tetap "tidak pernah diukur" bila detektornya tidak dijalankan.
+    """
+    frames = [
+        frame for sm in submodules
+        if (frame := (getattr(sm, "artifacts", None) or {}).get(name)) is not None
+        and not frame.empty
+    ]
+    return pd.concat(frames, ignore_index=True) if frames else None
+
+
 def _format_month(value) -> str:
     """Normalisasi satu nilai kolom ``month`` ke ``"YYYY-MM"``.
 
@@ -152,3 +169,5 @@ def collect_m2f_inputs(
     m2f_cfg = config.setdefault("m2f", {})
     m2f_cfg["deficit_frames"] = deficit_frames if deficit_frames else None
     m2f_cfg["p_loss_by_month"] = p_loss_by_month
+    m2f_cfg["shading_hourly"] = _collect_artifact(submodules, "HourlyMetrics")
+    m2f_cfg["low_irradiance_fit"] = _collect_artifact(submodules, "LowIrradianceFit")
