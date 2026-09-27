@@ -14,7 +14,7 @@ import pytest
 
 from pv_pipeline.core import SubModule
 from pv_pipeline.m2a.soiling import MONTHLY_SOILING_COLUMNS, build_monthly_soiling_loss
-from pv_pipeline.m2f.collect import collect_m2f_inputs
+from pv_pipeline.m2f.collect import collect_m2f_inputs, load_p_loss_by_month_xlsx
 from pv_pipeline.m2f.deficit import build_deficit_frame
 from pv_pipeline.m2f.report import M2fLossAttribution
 from pv_pipeline.panel_spec import PanelSpec
@@ -317,3 +317,84 @@ def test_end_to_end_detector_ran_found_nothing_is_distinguishable_from_never_ran
     row = per_string[per_string["category"] == "dc_cable_fault"]
     assert len(row) == 1
     assert row["loss_kwh"].iloc[0] == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# p_loss_by_month dari workbook soiling_srr_*.xlsx (run_soiling_analysis.py)
+# --------------------------------------------------------------------------
+
+def _monthly(rows):
+    frame = pd.DataFrame(rows)
+    for col in MONTHLY_SOILING_COLUMNS:
+        if col not in frame.columns:
+            frame[col] = np.nan
+    return frame[MONTHLY_SOILING_COLUMNS]
+
+
+def _write_srr_xlsx(path, monthly=None):
+    """Meniru run_soiling_analysis.py: sheet kosong TIDAK ditulis sama sekali."""
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame({"note": ["x"]}).to_excel(writer, sheet_name="Findings", index=False)
+        if monthly is not None:
+            monthly.to_excel(writer, sheet_name="MonthlySoilingLoss", index=False)
+    return str(path)
+
+
+def test_srr_xlsx_months_become_fractions(tmp_path):
+    # WHY: run M2f harian hanya melihat hari-harinya sendiri, dan M2aSoiling
+    # butuh >= 90 hari -- soiling TIDAK PERNAH diklaim (run 2026-08-31:
+    # p_loss_by_month = {}). Workbook SRR multi-bulan adalah sumbernya, dan
+    # p_loss_pct di sana PERSEN: tanpa /100, claim_soiling menolak nilai
+    # > 1, atau untuk bulan < 1% mengklaim 100x terlalu besar.
+    path = _write_srr_xlsx(tmp_path / "soiling_srr.xlsx", _monthly([
+        {"month": "2026-05", "p_loss_pct": 3.2},
+        {"month": "2026-06", "p_loss_pct": 0.5},
+    ]))
+    assert load_p_loss_by_month_xlsx(path) == pytest.approx(
+        {"2026-05": 0.032, "2026-06": 0.005}
+    )
+
+
+def test_srr_xlsx_nan_month_stays_absent(tmp_path):
+    # WHY: NaN = bulan tanpa cakupan insolasi yang cukup untuk SRR. Mengisinya
+    # 0.0 akan terbaca "sudah dicek, bersih" untuk bulan yang tak pernah dihitung.
+    path = _write_srr_xlsx(tmp_path / "soiling_srr.xlsx", _monthly([
+        {"month": "2026-05", "p_loss_pct": 3.2},
+        {"month": "2026-06", "p_loss_pct": np.nan},
+    ]))
+    out = load_p_loss_by_month_xlsx(path)
+    assert "2026-06" not in out
+    assert out["2026-05"] == pytest.approx(0.032)
+
+
+def test_srr_xlsx_without_monthly_sheet_gives_empty(tmp_path):
+    # WHY: run_soiling_analysis.py hanya menulis sheet yang tidak kosong --
+    # sheet absen berarti SRR tidak menghasilkan profil bulanan, bukan nol.
+    path = _write_srr_xlsx(tmp_path / "soiling_srr.xlsx", monthly=None)
+    assert load_p_loss_by_month_xlsx(path) == {}
+
+
+def test_srr_xlsx_missing_file_fails_loud(tmp_path):
+    # WHY: path eksplisit yang salah ketik tidak boleh diam-diam menjadi
+    # "tanpa soiling" -- itu tampak persis seperti bulan bersih.
+    with pytest.raises(FileNotFoundError):
+        load_p_loss_by_month_xlsx(str(tmp_path / "tidak_ada.xlsx"))
+
+
+def test_collect_srr_xlsx_overrides_same_month_from_run(tmp_path):
+    # WHY: dua sumber p_loss untuk bulan yang sama tidak boleh dirata-rata
+    # (CLAUDE.md Rule 7). Workbook dibangun dari baseline multi-bulan; SRR di
+    # run ini hanya melihat hari-hari run itu sendiri. Workbook menang untuk
+    # bulan yang sama; bulan yang hanya ada di run tetap dipakai.
+    run_sm = _FakeDetector(monthly_soiling_loss=_monthly([
+        {"month": "2026-05", "p_loss_pct": 9.0},
+        {"month": "2026-04", "p_loss_pct": 1.0},
+    ]))
+    path = _write_srr_xlsx(tmp_path / "soiling_srr.xlsx", _monthly([
+        {"month": "2026-05", "p_loss_pct": 3.2},
+    ]))
+    config = {"m2f": {}}
+    collect_m2f_inputs([run_sm], config, soiling_srr_xlsx=path)
+    assert config["m2f"]["p_loss_by_month"] == pytest.approx(
+        {"2026-05": 0.032, "2026-04": 0.01}
+    )

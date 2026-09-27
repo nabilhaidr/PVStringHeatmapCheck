@@ -16,11 +16,15 @@ lihat catatan di tiap helper di bawah.
 """
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import pandas as pd
 
 from pv_pipeline.core import SubModule
+
+# Nama sheet/artifact yang sama di kedua sumber: artifacts M2aSoiling dan
+# workbook yang ditulis run_soiling_analysis.py.
+MONTHLY_SOILING_SHEET = "MonthlySoilingLoss"
 
 
 def _collect_deficit_frames(submodules: Iterable[SubModule]) -> List[pd.DataFrame]:
@@ -74,17 +78,53 @@ def _collect_p_loss_by_month(submodules: Iterable[SubModule]) -> dict:
     """
     out: dict = {}
     for sm in submodules:
-        monthly = (getattr(sm, "artifacts", None) or {}).get("MonthlySoilingLoss")
+        monthly = (getattr(sm, "artifacts", None) or {}).get(MONTHLY_SOILING_SHEET)
         if monthly is None or monthly.empty:
             continue
-        for month_value, p_loss_pct in zip(monthly["month"], monthly["p_loss_pct"]):
-            if pd.isna(p_loss_pct):
-                continue
-            out[_format_month(month_value)] = float(p_loss_pct) / 100.0
+        out.update(_p_loss_from_monthly(monthly))
     return out
 
 
-def collect_m2f_inputs(submodules: Iterable[SubModule], config: dict) -> None:
+def _p_loss_from_monthly(monthly: pd.DataFrame) -> dict:
+    """``MonthlySoilingLoss`` -> ``{"YYYY-MM": fraksi}``; bulan NaN dilewati.
+
+    Satu tempat untuk kedua sumber (artifact submodule dan workbook SRR),
+    supaya konversi persen->fraksi tidak pernah bisa berbeda antar-jalur.
+    """
+    out: dict = {}
+    for month_value, p_loss_pct in zip(monthly["month"], monthly["p_loss_pct"]):
+        if pd.isna(p_loss_pct):
+            continue
+        out[_format_month(month_value)] = float(p_loss_pct) / 100.0
+    return out
+
+
+def load_p_loss_by_month_xlsx(path: str) -> dict:
+    """``p_loss_by_month`` dari workbook ``soiling_srr_*.xlsx``.
+
+    Workbook itu ditulis ``run_soiling_analysis.py`` (lewat
+    ``notebook/M2aSoiling.ipynb``) dari baseline multi-bulan -- satu-satunya
+    sumber SRR yang realistis bagi run M2f harian, karena M2aSoiling di dalam
+    run hanya melihat hari-hari run itu sendiri dan butuh >= 90 hari.
+
+    Path yang tidak ada me-raise ``FileNotFoundError``: path eksplisit yang
+    salah ketik tidak boleh diam-diam terbaca "tanpa soiling". Sheet
+    ``MonthlySoilingLoss`` yang absen menghasilkan ``{}`` --
+    ``run_soiling_analysis.py`` hanya menulis sheet yang tidak kosong, jadi
+    absen berarti SRR tidak menghasilkan profil bulanan, bukan soiling nol.
+    """
+    workbook = pd.ExcelFile(path)
+    if MONTHLY_SOILING_SHEET not in workbook.sheet_names:
+        return {}
+    return _p_loss_from_monthly(workbook.parse(MONTHLY_SOILING_SHEET))
+
+
+def collect_m2f_inputs(
+    submodules: Iterable[SubModule],
+    config: dict,
+    *,
+    soiling_srr_xlsx: Optional[str] = None,
+) -> None:
     """Isi ``config["m2f"]["deficit_frames"]``/``["p_loss_by_month"]`` in-place.
 
     Dipanggil setelah ketiga detektor m2b dan M2aSoiling selesai `run()`,
@@ -102,6 +142,12 @@ def collect_m2f_inputs(submodules: Iterable[SubModule], config: dict) -> None:
     """
     deficit_frames = _collect_deficit_frames(submodules)
     p_loss_by_month = _collect_p_loss_by_month(submodules)
+    if soiling_srr_xlsx:
+        # Bulan yang sama dari dua sumber TIDAK dirata-rata (CLAUDE.md Rule
+        # 7): workbook menang, karena dibangun dari baseline multi-bulan
+        # sedangkan SRR di run ini hanya melihat hari-hari run itu sendiri.
+        # Bulan yang hanya ada di run tetap dipakai.
+        p_loss_by_month.update(load_p_loss_by_month_xlsx(soiling_srr_xlsx))
 
     m2f_cfg = config.setdefault("m2f", {})
     m2f_cfg["deficit_frames"] = deficit_frames if deficit_frames else None

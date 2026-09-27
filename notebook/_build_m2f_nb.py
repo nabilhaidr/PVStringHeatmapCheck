@@ -98,6 +98,10 @@ EXPECTED_FILES   = ['1-2.xlsx', '3-10.xlsx']
 EXCEL_HEADER_ROW = 3
 USECOLS          = None
 NROWS            = None
+# Workbook soiling_srr_*.xlsx dari notebook/M2aSoiling.ipynb (SRR atas
+# baseline multi-bulan). None = pakai yang TERBARU (site-level) di outputs/.
+# Tanpa workbook ini soiling tidak pernah diklaim: run harian < 90 hari.
+SOILING_SRR_XLSX = None
 # =====================================
 
 M2F_OUT_DIR = os.path.join(REPO_DIR, "outputs_m2f")
@@ -218,13 +222,32 @@ if (getattr(sm_avail, "last_inverter_log_df", None) is not None
 
 CODE_CELL5 = """\
 # Cell 5 -- Jembatani hasil detektor ke M2f lalu jalankan M2fLossAttribution
+import glob
+import re
+
 from pv_pipeline.m2f.collect import collect_m2f_inputs
 from pv_pipeline.m2f.report import M2fLossAttribution
 
-collect_m2f_inputs(submodules, cfg)
+_srr = globals().get("SOILING_SRR_XLSX")
+if _srr is None:
+    # Hanya workbook site-level: varian per-WB bernama ..._WBxx.xlsx
+    # (run_soiling_analysis.py --wb / --per-wb).
+    _cands = [
+        p for p in glob.glob(os.path.join(REPO_DIR, "outputs", "soiling_srr_*.xlsx"))
+        if not re.search(r"_WB\\d", os.path.basename(p))
+    ]
+    _srr = max(_cands, key=os.path.getmtime) if _cands else None
+print(f"[m2f-nb] workbook soiling SRR: {_srr}")
+
+collect_m2f_inputs(submodules, cfg, soiling_srr_xlsx=_srr)
 _deficit_frames = cfg["m2f"]["deficit_frames"]
 print(f"[m2f-nb] deficit_frames terkumpul: {len(_deficit_frames) if _deficit_frames else 0}")
 print(f"[m2f-nb] p_loss_by_month terkumpul: {cfg['m2f']['p_loss_by_month']}")
+_run_months = sorted({d.strftime("%Y-%m") for d in st_dates})
+_no_srr = [m for m in _run_months if m not in cfg["m2f"]["p_loss_by_month"]]
+if _no_srr:
+    print(f"[m2f-nb] PERINGATAN: bulan run tanpa p_loss SRR -> soiling "
+          f"TIDAK diklaim (tetap None, jatuh ke unexplained): {_no_srr}")
 
 sm_m2f = M2fLossAttribution()
 m2f_findings = sm_m2f.run(combined_df, cfg)
