@@ -35,7 +35,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
-from pv_pipeline.availability import parse_inverter_time
+from pv_pipeline.availability import shutdown_keep_mask
 from pv_pipeline.core import M2Finding, Severity, SubModule
 from pv_pipeline.m2f.deficit import build_deficit_frame
 from pv_pipeline.open_circuit import (
@@ -228,14 +228,13 @@ class M2bMpptRatio(SubModule):
 
                 daylight_shutdown = pd.Series(True, index=ts_clean)
                 if respect_inverter_shutdown and shutdown_col is not None:
-                    raw_shut = parse_inverter_time(group_clean[shutdown_col])
-                    valid_shut = raw_shut.dropna()
-                    if not valid_shut.empty:
-                        valid_shut = valid_shut[valid_shut.dt.year >= 2000]
-                    if not valid_shut.empty:
-                        proposed = pd.Series(ts_clean < valid_shut.min(), index=ts_clean)
-                        if proposed.sum() > 0:
-                            daylight_shutdown = proposed
+                    # Per baris: inverter sedang shutdown HARI ITU (lihat
+                    # availability.shutdown_keep_mask). min() lama selalu jatuh ke
+                    # waktu mati kemarin, jadi filter tidak pernah berlaku.
+                    daylight_shutdown = pd.Series(
+                        shutdown_keep_mask(group_clean[shutdown_col], ts_clean),
+                        index=ts_clean,
+                    )
 
                 daylight_mask = pd.Series(
                     daylight_poa.values & daylight_time.values & daylight_shutdown.values,

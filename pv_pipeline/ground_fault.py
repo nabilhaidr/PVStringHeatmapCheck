@@ -32,7 +32,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from pv_pipeline.availability import parse_inverter_time
+from pv_pipeline.availability import shutdown_keep_mask
 from pv_pipeline.core import M2Finding, Severity, SubModule
 from pv_pipeline.voc_estimator import estimate_voc_at_low_current
 
@@ -313,18 +313,13 @@ class M2bGroundFault(SubModule):
 
                 mask_shutdown = pd.Series(True, index=ts_clean)
                 if respect_inverter_shutdown and shutdown_col is not None:
-                    raw_shut = parse_inverter_time(group_clean[shutdown_col])
-                    valid_shut = raw_shut.dropna()
-                    # Wave 11 hotfix #5: drop sentinel datetimes (year<2000).
-                    if not valid_shut.empty:
-                        valid_shut = valid_shut[valid_shut.dt.year >= 2000]
-                    if not valid_shut.empty:
-                        shutdown_ts = valid_shut.min()
-                        proposed = pd.Series(ts_clean < shutdown_ts, index=ts_clean)
-                        # Wave 11 hotfix #6: skip filter kalau proposed mask
-                        # drop ALL ts (likely sentinel).
-                        if proposed.sum() > 0:
-                            mask_shutdown = proposed
+                    # Per baris: inverter sedang shutdown HARI ITU (lihat
+                    # availability.shutdown_keep_mask). min() lama selalu jatuh ke
+                    # waktu mati kemarin, jadi filter tidak pernah berlaku.
+                    mask_shutdown = pd.Series(
+                        shutdown_keep_mask(group_clean[shutdown_col], ts_clean),
+                        index=ts_clean,
+                    )
                 daylight_mask = pd.Series(
                     mask_poa_main.values & mask_time.values & mask_shutdown.values,
                     index=ts_clean,

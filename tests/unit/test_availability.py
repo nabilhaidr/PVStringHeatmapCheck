@@ -27,7 +27,45 @@ from pv_pipeline.availability import (
     TELEMETRY_LINK_GROUPS,
     detect_link_outage,
     parse_inverter_time,
+    shutdown_keep_mask,
 )
+
+
+# --------------------------------------------------------------------------
+# shutdown_keep_mask: baris mana yang inverter-nya sedang shutdown
+# --------------------------------------------------------------------------
+
+def test_shutdown_mask_follows_huawei_last_shutdown_semantics():
+    # WHY: kolom ini berisi waktu shutdown TERAKHIR. Pola nyata WB06-INV05
+    # 2026-07-29: pagi = waktu mati KEMARIN (tetap dipakai), trip siang =
+    # waktu mati hari itu (dibuang), setelah menyala lagi dikosongkan "-"
+    # (dipakai lagi). Filter lama mengambil min() satu inverter -> selalu
+    # "kemarin" -> filter dilewati di 194/194 inverter.
+    ts = pd.DatetimeIndex([
+        "2026-07-29 10:00", "2026-07-29 12:40", "2026-07-29 12:45",
+        "2026-07-29 13:05", "2026-07-29 18:40",
+    ])
+    raw = pd.Series([
+        "2026/07/28 18:38:02", "2026/07/29 12:38:38", "2026/07/29 12:38:38",
+        "-", "2026/07/29 18:35:10",
+    ])
+    assert shutdown_keep_mask(raw, ts).tolist() == [True, False, False, True, False]
+
+
+def test_shutdown_mask_ignores_same_day_shutdown_still_in_the_future():
+    # WHY: sebagian ekspor/fixture menaruh waktu shutdown sore di SEMUA baris
+    # hari itu; baris sebelum waktu itu inverternya masih hidup.
+    ts = pd.DatetimeIndex(["2026-05-14 10:00", "2026-05-14 18:25", "2026-05-14 18:30"])
+    raw = pd.Series(pd.to_datetime(["2026-05-14 18:25"] * 3))
+    assert shutdown_keep_mask(raw, ts).tolist() == [True, False, False]
+
+
+def test_shutdown_mask_does_not_leak_across_days():
+    # WHY: di run multi-hari, shutdown sore hari pertama tidak boleh
+    # membuang hari kedua (paginya masih membawa nilai hari pertama).
+    ts = pd.DatetimeIndex(["2026-07-28 18:40", "2026-07-29 09:00", "2026-07-29 15:00"])
+    raw = pd.Series(["2026/07/28 18:38:02", "2026/07/28 18:38:02", "-"])
+    assert shutdown_keep_mask(raw, ts).tolist() == [False, True, True]
 
 
 # --------------------------------------------------------------------------

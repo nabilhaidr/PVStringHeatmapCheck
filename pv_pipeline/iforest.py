@@ -20,7 +20,7 @@ of that inverter.
 
 Gating reuses the pattern from ``peer_zscore`` (POA threshold +
 ``poa_floor`` sanity + ``solar_elevation`` filter w/ defensive
-``hour_cutoff`` AND + ``Inverter shutdown time`` sentinel guard) so the
+``hour_cutoff`` AND + ``Inverter shutdown time`` per-row gate) so the
 detector only fits / predicts on legitimate daylight samples.
 
 Config (default in ``DEFAULT_M2_CONFIG["m2_iforest"]``)
@@ -59,7 +59,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from pv_pipeline.availability import parse_inverter_time
+from pv_pipeline.availability import shutdown_keep_mask
 from pv_pipeline.core import M2Finding, Severity, SubModule, load_empty_pv_map
 
 
@@ -83,7 +83,7 @@ DEFAULT_INCLUDE_SIBLING_DEV: bool = True
 PV_V_COL_TEMPLATE: str = "PV{pv} input voltage(V)"
 PV_I_COL_TEMPLATE: str = "PV{pv} input current(A)"
 
-# Inverter shutdown sentinel guard (same as peer_zscore).
+# Kolom waktu shutdown inverter (gate yang sama dengan peer_zscore).
 INVERTER_SHUTDOWN_COL_CANDIDATES: List[str] = [
     "Inverter shutdown time",
     "Shutdown time",
@@ -287,18 +287,16 @@ class M2IForest(SubModule):
             hour_arr = ts_clean.hour + ts_clean.minute / 60.0
             mask_time = pd.Series(hour_arr < hour_cutoff_end, index=ts_clean)
 
-        # Shutdown gate (Wave 11 hotfix #5/#6 sentinel guard).
+        # Shutdown gate: buang baris saat inverter sedang shutdown hari itu.
         mask_shutdown = pd.Series(True, index=ts_clean)
         if respect_shutdown and shutdown_col is not None and shutdown_col in group_clean.columns:
-            raw_shut = parse_inverter_time(group_clean[shutdown_col])
-            valid_shut = raw_shut.dropna()
-            if not valid_shut.empty:
-                valid_shut = valid_shut[valid_shut.dt.year >= 2000]
-            if not valid_shut.empty:
-                shutdown_ts = valid_shut.min()
-                proposed = pd.Series(ts_clean < shutdown_ts, index=ts_clean)
-                if proposed.sum() > 0:
-                    mask_shutdown = proposed
+            # Per baris: inverter sedang shutdown HARI ITU (lihat
+            # availability.shutdown_keep_mask). min() lama selalu jatuh ke
+            # waktu mati kemarin, jadi filter tidak pernah berlaku.
+            mask_shutdown = pd.Series(
+                shutdown_keep_mask(group_clean[shutdown_col], ts_clean),
+                index=ts_clean,
+            )
 
         return mask_poa & mask_time & mask_shutdown
 

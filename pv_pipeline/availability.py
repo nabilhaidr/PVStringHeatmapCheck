@@ -291,6 +291,26 @@ def parse_inverter_time(values: "pd.Series") -> "pd.Series":
     return parsed
 
 
+def shutdown_keep_mask(values: "pd.Series", timestamps) -> np.ndarray:
+    """True = sampel dipakai; False = inverter sedang shutdown di baris itu.
+
+    Kolom "Inverter shutdown time" Huawei berisi waktu shutdown TERAKHIR:
+    sepanjang pagi-siang biasanya waktu mati KEMARIN sore; saat inverter
+    mati hari itu ia berisi waktu mati hari itu; setelah inverter menyala
+    lagi ia dikosongkan ("-"). Baris berada dalam keadaan shutdown bila
+    nilainya jatuh di hari yang SAMA dengan timestamp-nya dan tidak
+    sesudahnya. Dievaluasi per baris -- min() atas satu inverter hampir
+    selalu jatuh ke kemarin (filter tidak pernah berlaku), dan setelah trip
+    siang yang pulih akan membuang sisa hari. ``values`` harus sejajar
+    posisional dengan ``timestamps``.
+    """
+    shutdown = parse_inverter_time(values).to_numpy(dtype="datetime64[ns]")
+    ts = pd.DatetimeIndex(timestamps).to_numpy(dtype="datetime64[ns]")
+    # Perbandingan dengan NaT selalu False: baris tanpa waktu shutdown dipakai.
+    same_day = shutdown.astype("datetime64[D]") == ts.astype("datetime64[D]")
+    return ~(same_day & (shutdown <= ts))
+
+
 def _detect_shutdown_time_mode(
     shutdown_series: "pd.Series",
     startup_series: "pd.Series",

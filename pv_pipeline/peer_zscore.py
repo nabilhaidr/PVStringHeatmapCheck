@@ -27,7 +27,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from pv_pipeline.availability import parse_inverter_time
+from pv_pipeline.availability import shutdown_keep_mask
 from pv_pipeline.core import M2Finding, Severity, SubModule
 from pv_pipeline.m2f.deficit import build_deficit_frame
 from pv_pipeline.voc_estimator import estimate_voc_at_low_current
@@ -200,7 +200,6 @@ class M2bPeerZScore(SubModule):
             "g1_insufficient_daylight_samples": 0,
             "g2_poa_query_exception": 0,
             "g3_mask_poa_below_min_daylight": 0,
-            "g4_shutdown_sentinel_skipped": 0,  # tidak fail, hanya info
             "g5_peer_strings_below_min": 0,
             "g6_rstr_std_too_small": 0,
             "total_iterations": 0,
@@ -284,26 +283,13 @@ class M2bPeerZScore(SubModule):
 
                 mask_shutdown = pd.Series(True, index=ts_clean)
                 if respect_inverter_shutdown and shutdown_col is not None:
-                    raw_shut = parse_inverter_time(group_clean[shutdown_col])
-                    valid_shut = raw_shut.dropna()
-                    # Wave 11 hotfix #5: drop sentinel datetimes (year<2000)
-                    # yang artinya "never shutdown" -- tanpa filter ini,
-                    # valid_shut.min() = 1970-01-01 -> mask_shutdown all False
-                    # -> mask_poa.sum()=0 -> continue (artifact_rows tetap empty
-                    # -> fan-out fallback kicks in).
-                    if not valid_shut.empty:
-                        valid_shut = valid_shut[valid_shut.dt.year >= 2000]
-                    if not valid_shut.empty:
-                        shutdown_ts = valid_shut.min()
-                        proposed = pd.Series(ts_clean < shutdown_ts, index=ts_clean)
-                        # Wave 11 hotfix #6: kalau shutdown_ts <= earliest ts
-                        # (proposed mask drop ALL timestamps), itu sentinel
-                        # (e.g., Huawei "0:00:00" parsed sebagai today midnight).
-                        # Skip filter supaya tidak buang semua data legitimate.
-                        if proposed.sum() > 0:
-                            mask_shutdown = proposed
-                        else:
-                            gate_failures["g4_shutdown_sentinel_skipped"] += 1
+                    # Per baris: inverter sedang shutdown HARI ITU (lihat
+                    # availability.shutdown_keep_mask). min() lama selalu jatuh ke
+                    # waktu mati kemarin, jadi filter tidak pernah berlaku.
+                    mask_shutdown = pd.Series(
+                        shutdown_keep_mask(group_clean[shutdown_col], ts_clean),
+                        index=ts_clean,
+                    )
 
                 mask_poa = pd.Series(
                     mask_poa_main.values & mask_time.values & mask_shutdown.values,

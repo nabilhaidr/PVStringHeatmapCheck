@@ -133,6 +133,24 @@ def test_huawei_text_shutdown_column_parses_without_dateutil_warning(
     assert {f.pv_string for f in findings} == baseline
 
 
+def test_shutdown_filter_works_with_huawei_last_shutdown_column(
+    df_sunset_scenario, cfg_sunset_fix,
+):
+    # WHY: ekspor Huawei membawa waktu mati KEMARIN sepanjang hari dan baru
+    # berganti ke waktu mati hari ini saat inverter benar-benar mati. Filter
+    # lama mengambil min() satu inverter (= kemarin) sehingga TIDAK PERNAH
+    # berlaku; di sini batas jam dimatikan supaya hanya filter shutdown yang
+    # menahan false positive senja (POA lag 250 W/m2 saat arus 0).
+    df = df_sunset_scenario.copy()
+    after_shutdown = df["Start Time"] >= pd.Timestamp("2026-05-14 18:00")
+    df["Inverter shutdown time"] = "2026/05/13 18:31:00"
+    df.loc[after_shutdown, "Inverter shutdown time"] = "2026/05/14 18:00:00"
+    cfg = dict(cfg_sunset_fix)
+    cfg["m2b_open_circuit"] = dict(cfg_sunset_fix["m2b_open_circuit"], hour_cutoff_end=24.0)
+    findings = M2bOpenCircuit(poa=_MockPOAWithSunsetLag()).run(df, cfg)
+    assert {f.pv_string for f in findings} == {"PV7"}
+
+
 def test_disabled_sunset_filters_regress_to_false_positives(df_sunset_scenario):
     """Sanity check: kalau sunset filters DI-DISABLE (hour_cutoff=24, no shutdown,
     poa_floor=0), behavior regress ke pre-fix dan emit false positives.
