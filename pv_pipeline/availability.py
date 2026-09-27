@@ -261,6 +261,36 @@ def _replace_sentinels(s: "pd.Series") -> "pd.Series":
     return s.where(~s.astype(str).str.strip().isin(_SENTINEL_NULLS), other=np.nan)
 
 
+# Format kolom "Inverter startup/shutdown time" ekspor Huawei FusionSolar,
+# terverifikasi di ekspor 2025-12 s.d. 2026-07. Tahun di depan: tidak ambigu.
+INVERTER_TIME_FORMAT = "%Y/%m/%d %H:%M:%S"
+
+
+def parse_inverter_time(values: "pd.Series") -> "pd.Series":
+    """Parse kolom waktu inverter Huawei dengan format EKSPLISIT.
+
+    Tanpa format, sentinel "-" membuat pandas gagal menyimpulkan format dan
+    jatuh ke dateutil per elemen: satu UserWarning per pemanggilan (ribuan
+    per run, mengubur peringatan yang penting), lambat, dan -- bila ekspor
+    suatu saat berformat DD/MM/YYYY -- menukar hari/bulan tidak konsisten di
+    dalam satu kolom tanpa suara.
+
+    Sentinel (``_SENTINEL_NULLS``) menjadi NaT tanpa peringatan. Nilai lain
+    di luar format menjadi NaT DENGAN peringatan; pesannya konstan supaya
+    filter warnings bawaan Python menampilkannya sekali, bukan per inverter.
+    """
+    cleaned = _replace_sentinels(values)
+    parsed = pd.to_datetime(cleaned, format=INVERTER_TIME_FORMAT, errors="coerce")
+    if bool((parsed.isna() & cleaned.notna()).any()):
+        warnings.warn(
+            "[pv_pipeline] kolom waktu inverter memuat nilai di luar format "
+            f"{INVERTER_TIME_FORMAT!r}; nilai itu menjadi NaT dan filter "
+            "shutdown tidak berlaku untuk inverter terkait.",
+            stacklevel=2,
+        )
+    return parsed
+
+
 def _detect_shutdown_time_mode(
     shutdown_series: "pd.Series",
     startup_series: "pd.Series",

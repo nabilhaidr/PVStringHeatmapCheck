@@ -18,12 +18,57 @@ tautan, sebagian berarti inverter. Kelompok di transport lain adalah kontrolnya.
 
 from __future__ import annotations
 
+import warnings
+
 import pandas as pd
+import pytest
 
 from pv_pipeline.availability import (
     TELEMETRY_LINK_GROUPS,
     detect_link_outage,
+    parse_inverter_time,
 )
+
+
+# --------------------------------------------------------------------------
+# parse_inverter_time: kolom "Inverter startup/shutdown time" ekspor Huawei
+# --------------------------------------------------------------------------
+
+def test_parse_inverter_time_reads_huawei_text_without_warning():
+    # WHY: tanpa format eksplisit, sentinel "-" membuat pandas gagal
+    # menyimpulkan format dan jatuh ke dateutil per elemen -- satu
+    # UserWarning per (inverter x sumber POA x detektor), ~2.900 baris di
+    # run 2026-08-31 yang mengubur peringatan yang benar-benar penting.
+    raw = pd.Series(["2026/07/28 18:34:15", "-", None, "2026/07/29 14:41:50"])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = parse_inverter_time(raw)
+    assert [str(w.message) for w in caught] == []
+    assert out.iloc[0] == pd.Timestamp("2026-07-28 18:34:15")
+    assert pd.isna(out.iloc[1]) and pd.isna(out.iloc[2])
+    assert out.iloc[3] == pd.Timestamp("2026-07-29 14:41:50")
+
+
+def test_parse_inverter_time_rejects_day_first_loudly():
+    # WHY: dateutil per elemen membaca "03/08/2026" sebagai 8 Maret tetapi
+    # "25/08/2026" sebagai 25 Agustus -- tidak konsisten di dalam satu kolom,
+    # tanpa suara. Format di luar ekspor Huawei harus NaT DAN terdengar.
+    raw = pd.Series(["03/08/2026 18:34:15", "25/08/2026 18:34:15"])
+    with pytest.warns(UserWarning, match="di luar format"):
+        out = parse_inverter_time(raw)
+    assert out.isna().all()
+
+
+def test_parse_inverter_time_passes_datetimes_through():
+    # WHY: fixture dan sebagian jalur loader sudah memberi Timestamp; parser
+    # tidak boleh mengubah nilainya atau memperlakukannya sebagai salah format.
+    raw = pd.Series(pd.to_datetime(["2026-05-14 18:25:00", None]))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = parse_inverter_time(raw)
+    assert caught == []
+    assert out.iloc[0] == pd.Timestamp("2026-05-14 18:25:00")
+    assert pd.isna(out.iloc[1])
 
 
 def _roster():

@@ -59,6 +59,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from pv_pipeline.availability import parse_inverter_time
 from pv_pipeline.core import M2Finding, Severity, SubModule, load_empty_pv_map
 
 
@@ -289,7 +290,7 @@ class M2IForest(SubModule):
         # Shutdown gate (Wave 11 hotfix #5/#6 sentinel guard).
         mask_shutdown = pd.Series(True, index=ts_clean)
         if respect_shutdown and shutdown_col is not None and shutdown_col in group_clean.columns:
-            raw_shut = pd.to_datetime(group_clean[shutdown_col], errors="coerce")
+            raw_shut = parse_inverter_time(group_clean[shutdown_col])
             valid_shut = raw_shut.dropna()
             if not valid_shut.empty:
                 valid_shut = valid_shut[valid_shut.dt.year >= 2000]

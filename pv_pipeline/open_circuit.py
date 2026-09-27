@@ -23,6 +23,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from pv_pipeline.availability import parse_inverter_time
 from pv_pipeline.core import M2Finding, Severity, SubModule
 from pv_pipeline.m2f.deficit import build_deficit_frame
 
@@ -282,7 +283,7 @@ class M2bOpenCircuit(SubModule):
                 if respect_inverter_shutdown and shutdown_col is not None:
                     # Per-inverter shutdown timestamp (biasanya seragam dalam 1 inverter,
                     # ambil min non-NaT supaya konservatif).
-                    raw_shut = pd.to_datetime(group_clean[shutdown_col], errors="coerce")
+                    raw_shut = parse_inverter_time(group_clean[shutdown_col])
                     valid_shut = raw_shut.dropna()
                     # Wave 11 hotfix #5: drop sentinel datetimes (year<2000).
                     if not valid_shut.empty:

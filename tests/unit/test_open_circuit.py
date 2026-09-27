@@ -108,6 +108,31 @@ def test_sunset_strings_not_false_positive(df_sunset_scenario, cfg_sunset_fix):
     )
 
 
+def test_huawei_text_shutdown_column_parses_without_dateutil_warning(
+    df_sunset_scenario, cfg_sunset_fix,
+):
+    # WHY: ekspor Huawei menulis kolom ini sebagai TEKS "YYYY/MM/DD HH:MM:SS"
+    # bercampur sentinel "-", bukan Timestamp seperti fixture di atas. Itu
+    # yang memicu ribuan "Could not infer format" di run nyata. Hasil
+    # deteksinya harus identik dengan versi Timestamp.
+    import warnings
+
+    baseline = {
+        f.pv_string
+        for f in M2bOpenCircuit(poa=_MockPOAWithSunsetLag()).run(
+            df_sunset_scenario, cfg_sunset_fix,
+        )
+    }
+    df = df_sunset_scenario.copy()
+    df["Inverter shutdown time"] = "2026/05/14 18:25:00"
+    df.loc[df.index[:10], "Inverter shutdown time"] = "-"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        findings = M2bOpenCircuit(poa=_MockPOAWithSunsetLag()).run(df, cfg_sunset_fix)
+    assert not [w for w in caught if "Could not infer format" in str(w.message)]
+    assert {f.pv_string for f in findings} == baseline
+
+
 def test_disabled_sunset_filters_regress_to_false_positives(df_sunset_scenario):
     """Sanity check: kalau sunset filters DI-DISABLE (hour_cutoff=24, no shutdown,
     poa_floor=0), behavior regress ke pre-fix dan emit false positives.
