@@ -4,7 +4,7 @@ prioritas, lalu emit waterfall, Pareto, dan audit closure.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -22,6 +22,7 @@ from pv_pipeline.core import (
 )
 from pv_pipeline.m2f.baseline import (
     DEFAULT_FREQ_HOURS,
+    calibrate_dc_derate,
     compute_actual_energy_kwh,
     compute_expected_energy_kwh,
 )
@@ -53,7 +54,10 @@ CLOSURE_COLUMNS: List[str] = [
     "residual_kwh", "residual_pct", "poa_coverage_pct", "tcell_coverage_pct",
     "poa_source", "tcell_source", "skipped_reason",
 ]
-BIFACIAL_COLUMNS: List[str] = ["wb_id", "g_bifacial", "n_strings", "n_days"]
+BASELINE_CALIB_COLUMNS: List[str] = [
+    "wb_id", "g_bifacial", "dc_derate", "measured_ratio",
+    "n_calib_string_days", "n_strings", "n_days",
+]
 
 _NAN: float = float("nan")
 
@@ -101,6 +105,33 @@ def _down_mask(status: pd.Series, status_map: dict) -> pd.Series:
     return status.map(lambda value: _classify_status(value, status_map) == "DOWN")
 
 
+def _curtailed_mask(status: pd.Series, keywords: List[str]) -> pd.Series:
+    """Timestamp yang produksinya dibatasi dari luar (grid/plant controller).
+
+    Substring tanpa beda huruf, sama dengan ``_classify_status``. Sengaja
+    terpisah dari klasifikasi empat arah itu supaya M2eAvailability tidak ikut
+    berubah: ``"OFF : instructed shutdown"`` tetap DOWN bagi M2e.
+    """
+    lowered = [kw.lower() for kw in keywords if kw]
+    return status.map(
+        lambda value: isinstance(value, str)
+        and any(kw in value.lower() for kw in lowered)
+    )
+
+
+def _calibration_mask(
+    status: pd.Series, status_map: dict, curtailment_keywords: List[str],
+) -> pd.Series:
+    """Timestamp sah untuk kalibrasi dc_derate: ON dan tidak di-curtail.
+
+    Standby, DOWN, UNKNOWN, dan curtailment menekan energi aktual karena
+    sebab di luar modul. Bila ikut, derate menyerapnya dan kategori yang
+    semestinya mengklaim energi itu ter-underestimate di setiap run sesudahnya.
+    """
+    on = status.map(lambda value: _classify_status(value, status_map) == "ON")
+    return on & ~_curtailed_mask(status, curtailment_keywords)
+
+
 def _skipped_closure_row(
     string_id: str,
     day: pd.Timestamp,
@@ -131,22 +162,50 @@ def _skipped_closure_row(
     }
 
 
-def _build_bifacial_table(wb_rows: List[dict]) -> pd.DataFrame:
-    """Gain bifacial yang DIPAKAI per WB, plus cakupan string-hari di baliknya.
+def _measured_ratio(
+    expected: Dict[str, float], actual: Dict[str, float],
+) -> Tuple[float, int]:
+    """(median rasio aktual/harapan-mentah, jumlah string-hari sah) satu WB."""
+    exp = pd.Series(expected, dtype=float)
+    n_valid = int((exp > 0.0).sum())
+    try:
+        ratio = calibrate_dc_derate(exp, pd.Series(actual, dtype=float))
+    except ValueError:
+        # Sampel terlalu tipis. NaN, dan n_valid di sheet menjelaskan kenapa.
+        return _NAN, n_valid
+    return ratio, n_valid
 
-    Bukan hasil kalibrasi ulang -- ini jejak audit atas nilai yang dipakai
-    menghitung E_expected, supaya gain 1.0 default (yang meng-under-estimate
-    baseline) terlihat, bukan tersembunyi.
+
+def _build_baseline_calib_table(
+    wb_rows: List[dict],
+    calib_expected: Dict[str, Dict[str, float]],
+    calib_actual: Dict[str, Dict[str, float]],
+) -> pd.DataFrame:
+    """Koreksi baseline yang DIPAKAI per WB, plus rasio yang terukur run ini.
+
+    ``g_bifacial``/``dc_derate`` adalah jejak audit nilai yang dipakai
+    menghitung E_expected -- default 1.0 (baseline pelat-nama) harus
+    terlihat, bukan tersembunyi. ``measured_ratio`` adalah median rasio
+    aktual / harapan-MENTAH pada timestamp ON tanpa curtailment: angka yang
+    disalin ke ``m2f.dc_derate_per_wb``, HANYA dari run hari bersih
+    (pasca-hujan lebat / cleaning massal). Di hari berdebu ia ikut menyerap
+    soiling, dan soiling lalu ter-underestimate.
     """
     if not wb_rows:
-        return pd.DataFrame(columns=BIFACIAL_COLUMNS)
+        return pd.DataFrame(columns=BASELINE_CALIB_COLUMNS)
     frame = pd.DataFrame(wb_rows)
     table = (
-        frame.groupby(["wb_id", "g_bifacial"], sort=True)
+        frame.groupby(["wb_id", "g_bifacial", "dc_derate"], sort=True)
         .agg(n_strings=("string_id", "nunique"), n_days=("day", "nunique"))
         .reset_index()
     )
-    return table[BIFACIAL_COLUMNS]
+    measured = {
+        wb: _measured_ratio(calib_expected.get(wb, {}), calib_actual.get(wb, {}))
+        for wb in table["wb_id"]
+    }
+    table["measured_ratio"] = [measured[wb][0] for wb in table["wb_id"]]
+    table["n_calib_string_days"] = [measured[wb][1] for wb in table["wb_id"]]
+    return table[BASELINE_CALIB_COLUMNS]
 
 
 class M2fLossAttribution(SubModule):
@@ -161,6 +220,22 @@ class M2fLossAttribution(SubModule):
 
         order: List[str] = list(cfg.get("attribution_order") or [])
         gains: Dict[str, float] = dict(cfg.get("bifacial_gain_per_wb") or {})
+        derates: Dict[str, float] = {
+            wb: float(value)
+            for wb, value in (cfg.get("dc_derate_per_wb") or {}).items()
+        }
+        for wb, value in derates.items():
+            # Fraksi, bukan persen: 85 alih-alih 0.85 menggelembungkan
+            # E_expected 100x. Batas atas 1.5 memberi ruang faktor bersih > 1
+            # (gain bifacial melebihi derate) tanpa meloloskan salah satuan.
+            if not 0.0 < value <= 1.5:
+                raise ValueError(
+                    f"[m2f] dc_derate_per_wb[{wb!r}] = {value} di luar (0, 1.5]; "
+                    "isi sebagai fraksi (mis. 0.85), bukan persen."
+                )
+        curtailment_keywords: List[str] = list(
+            cfg.get("curtailment_keywords") or []
+        )
         # .get(key) TANPA default 0.0 -- bulan/detektor yang absen dari dict
         # ini harus tetap None setelah lookup, bukan diam-diam jadi 0.0
         # sebelum sempat dicek.
@@ -193,6 +268,10 @@ class M2fLossAttribution(SubModule):
         per_string_rows: List[dict] = []
         closure_rows: List[dict] = []
         wb_rows: List[dict] = []
+        # Bahan measured_ratio: kWh harapan-mentah dan aktual per WB, per
+        # "string|hari", hanya pada timestamp yang lolos _calibration_mask.
+        calib_expected: Dict[str, Dict[str, float]] = {}
+        calib_actual: Dict[str, Dict[str, float]] = {}
         # Kategori yang tidak pernah muncul di peta ini tetap absen: `.get(cat)`
         # mengembalikan None, artinya "tidak pernah diukur oleh string-hari
         # manapun". Satu klaim saja sudah cukup membuat kategori itu terukur di
@@ -246,10 +325,26 @@ class M2fLossAttribution(SubModule):
                 continue
 
             g = float(gains.get(wb_id, 1.0))
-            e_exp = compute_expected_energy_kwh(
-                poa, tcell, providers["spec"], wb_id, bifacial_gain=g,
+            d = derates.get(wb_id, 1.0)
+            # Mentah dulu, tanpa koreksi apa pun: bahan measured_ratio. Rasio
+            # terhadap baseline yang SUDAH dikoreksi akan menggandakan derate
+            # setiap kali hasilnya disalin ke config.
+            e_raw = compute_expected_energy_kwh(
+                poa, tcell, providers["spec"], wb_id,
             )
+            e_exp = e_raw * (g * d)
             e_act = compute_actual_energy_kwh(group[power_col])
+            if "Inverter status" in group.columns:
+                eligible = _calibration_mask(
+                    group["Inverter status"], status_map, curtailment_keywords,
+                ).to_numpy(dtype=bool)
+                key = f"{string_id}|{day.date()}"
+                calib_expected.setdefault(wb_id, {})[key] = float(
+                    e_raw.to_numpy()[eligible].sum()
+                )
+                calib_actual.setdefault(wb_id, {})[key] = float(
+                    e_act.to_numpy()[eligible].sum()
+                )
             # HANYA string-hari yang benar-benar diproses; yang di-skip di atas
             # tidak boleh menyumbang E_expected ke waterfall site.
             site_e_expected_kwh += float(e_exp.sum())
@@ -333,7 +428,7 @@ class M2fLossAttribution(SubModule):
                 site_claimed[cat] = site_claimed.get(cat, 0.0) + float(val)
 
             wb_rows.append({
-                "wb_id": wb_id, "g_bifacial": g,
+                "wb_id": wb_id, "g_bifacial": g, "dc_derate": d,
                 "string_id": string_id, "day": day,
             })
 
@@ -357,7 +452,9 @@ class M2fLossAttribution(SubModule):
         self.artifacts["M2f_Closure"] = pd.DataFrame(
             closure_rows, columns=CLOSURE_COLUMNS,
         )
-        self.artifacts["M2f_BifacialCalib"] = _build_bifacial_table(wb_rows)
+        self.artifacts["M2f_BaselineCalib"] = _build_baseline_calib_table(
+            wb_rows, calib_expected, calib_actual,
+        )
 
         residual_kwh = site_claimed.get("unexplained", 0.0)
         residual_pct = (
@@ -428,7 +525,7 @@ class M2fLossAttribution(SubModule):
         penjaga all-NaN di bawah tidak pernah menangkapnya. Tanpa filter ini
         tiap slot hantu mendapat E_expected satu string penuh melawan aktual
         ~0: rugi 100% palsu yang menggelembungkan E_expected site, waterfall,
-        residual Pareto, dan n_strings di M2f_BifacialCalib. Ketiga detektor
+        residual Pareto, dan n_strings di M2f_BaselineCalib. Ketiga detektor
         m2b sudah menyaring hal yang sama lewat core.load_empty_pv_map.
         """
         frame = df.copy()

@@ -1,9 +1,12 @@
 """Baseline energi M2f: E_expected dari POA+Tcell terukur, dan E_actual.
 
-`E_expected` memakai ``physics.compute_p_expected_per_string`` yang hanya
-memperhitungkan POA DEPAN, sedangkan modul Jinko JKM625N bifacial. Koefisien
-``bifacial_gain`` per WB mengoreksi under-estimate itu; dikalibrasi dari string
-sehat pada hari clear-sky (lihat :func:`calibrate_bifacial_gain`).
+`E_expected` memakai ``physics.compute_p_expected_per_string``: daya pelat-nama
+yang diskalakan POA DEPAN dan koefisien suhu -- tanpa derate apa pun (IAM,
+mismatch, kabel DC, LID/toleransi, efisiensi cahaya-rendah). Tanpa koreksi,
+seluruh rugi struktural itu jatuh ke ``unexplained``. Koreksinya faktor
+empiris ``dc_derate`` per WB (lihat :func:`calibrate_dc_derate`), yang
+sekaligus menyerap gain bifacial: tanpa POA belakang keduanya tidak bisa
+dipisahkan.
 """
 from __future__ import annotations
 
@@ -59,21 +62,26 @@ def compute_actual_energy_kwh(
     return kwh
 
 
-def calibrate_bifacial_gain(
+def calibrate_dc_derate(
     expected_kwh_per_string: pd.Series,
     actual_kwh_per_string: pd.Series,
     *,
     min_strings: int = 3,
 ) -> float:
-    """Median rasio aktual/harapan pada string sehat di hari clear-sky.
+    """Median rasio aktual/harapan-mentah: faktor ``dc_derate`` empiris.
+
+    Median, bukan rata-rata: string ber-fault yang minoritas tidak menggeser
+    hasilnya, jadi tidak perlu daftar "string sehat" terpisah.
 
     Parameters
     ----------
     expected_kwh_per_string, actual_kwh_per_string : pd.Series
-        Total kWh per string, di-index oleh string_id. ``expected`` dihitung
-        dengan ``bifacial_gain=1.0``.
+        Total kWh per string, di-index oleh string_id. ``expected`` WAJIB
+        mentah (``bifacial_gain=1.0``, tanpa derate): rasio terhadap
+        E_expected yang sudah di-derate akan menggandakan derate setiap kali
+        hasilnya disalin ke config.
     min_strings : int, default 3
-        Jumlah string minimum. Di bawah ini kalibrasi ditolak -- gain dari
+        Jumlah string minimum. Di bawah ini kalibrasi ditolak -- rasio dari
         satu-dua string adalah kebetulan, bukan kalibrasi.
 
     Notes
@@ -98,7 +106,7 @@ def calibrate_bifacial_gain(
         # tercatat di telemetri; hilang dari expected = string belum
         # dihitung di sisi POA/Tcell.
         warnings.warn(
-            f"[m2f] kalibrasi bifacial: {n_missing_in_actual} string ada di "
+            f"[m2f] kalibrasi dc_derate: {n_missing_in_actual} string ada di "
             f"expected tapi hilang dari actual, {n_missing_in_expected} string "
             "ada di actual tapi hilang dari expected -- string ini di-drop "
             "sebelum kalibrasi (index tidak overlap).",
@@ -109,7 +117,7 @@ def calibrate_bifacial_gain(
     n_valid = int(valid.sum())
     if n_valid < min_strings:
         raise ValueError(
-            f"[m2f] kalibrasi bifacial butuh minimal {min_strings} string dengan "
+            f"[m2f] kalibrasi dc_derate butuh minimal {min_strings} string dengan "
             f"expected > 0; hanya ada {n_valid} (setelah align: "
             f"{n_missing_in_actual} string hilang dari actual, "
             f"{n_missing_in_expected} string hilang dari expected)."

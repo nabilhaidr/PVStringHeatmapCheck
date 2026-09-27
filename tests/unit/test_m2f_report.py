@@ -130,6 +130,8 @@ def _config(enabled=True, **overrides):
                 "availability_outage", "dc_cable_fault", "soiling", "unexplained",
             ],
             "bifacial_gain_per_wb": {"WB03": 1.05},
+            # Salinan config/m2_config.yaml -> m2f.curtailment_keywords.
+            "curtailment_keywords": ["instructed shutdown", "power limited"],
             "poa_coverage_min_pct": 80.0,
             "poa_source": POA_SOURCE,
             "residual_warn_pct": 30.0,
@@ -240,7 +242,7 @@ def test_emits_all_five_artifacts_when_enabled(stubbed):
     sm.run(_combined_df(), _config())
     for sheet in (
         "M2f_Waterfall", "M2f_Pareto", "M2f_PerString",
-        "M2f_Closure", "M2f_BifacialCalib",
+        "M2f_Closure", "M2f_BaselineCalib",
     ):
         assert sheet in sm.artifacts, f"artifact {sheet} hilang"
 
@@ -259,8 +261,9 @@ def test_artifacts_keep_their_schema_when_no_row_scored(monkeypatch):
     assert list(sm.artifacts["M2f_PerString"].columns) == [
         "string_id", "day", "category", "loss_kwh",
     ]
-    assert list(sm.artifacts["M2f_BifacialCalib"].columns) == [
-        "wb_id", "g_bifacial", "n_strings", "n_days",
+    assert list(sm.artifacts["M2f_BaselineCalib"].columns) == [
+        "wb_id", "g_bifacial", "dc_derate", "measured_ratio",
+        "n_calib_string_days", "n_strings", "n_days",
     ]
     assert sm.artifacts["M2f_PerString"].empty
     assert sm.artifacts["M2f_Pareto"].empty
@@ -385,7 +388,7 @@ def test_bifacial_table_counts_strings_and_days_per_wb(stubbed):
     # WHY: n_strings > 1 dan n_days > 1 tidak pernah tersentuh sebelumnya.
     sm = M2fLossAttribution()
     sm.run(_multi_combined_df(), _config())
-    calib = sm.artifacts["M2f_BifacialCalib"].set_index("wb_id")
+    calib = sm.artifacts["M2f_BaselineCalib"].set_index("wb_id")
     assert calib.loc["WB03", "n_strings"] == 2
     assert calib.loc["WB03", "n_days"] == 2
     assert calib.loc["WB03", "g_bifacial"] == pytest.approx(1.05)
@@ -782,11 +785,122 @@ def test_no_finding_when_residual_does_not_exceed_threshold(stubbed):
 def test_bifacial_calib_records_gain_actually_used(stubbed):
     sm = M2fLossAttribution()
     sm.run(_combined_df(), _config())
-    calib = sm.artifacts["M2f_BifacialCalib"]
+    calib = sm.artifacts["M2f_BaselineCalib"]
     assert calib["wb_id"].tolist() == ["WB03"]
     assert calib["g_bifacial"].iloc[0] == pytest.approx(1.05)
     assert calib["n_strings"].iloc[0] == 1
     assert calib["n_days"].iloc[0] == 1
+
+
+# --------------------------------------------------------------------------
+# dc_derate dan kalibrasi baseline
+# --------------------------------------------------------------------------
+
+def _raw_expected_kwh_per_ts(wb_id="WB03"):
+    """E_expected MENTAH satu timestamp: tanpa gain bifacial, tanpa derate."""
+    return _expected_kwh_per_ts(bifacial_gain=1.0, wb_id=wb_id)
+
+
+def test_dc_derate_scales_expected_energy(stubbed):
+    # WHY: baseline pelat-nama tanpa derate menaruh seluruh rugi struktural
+    # (IAM, mismatch, kabel DC, LID) ke unexplained -- 92% di run
+    # 2026-08-31. Derate harus benar-benar mengecilkan E_expected yang
+    # dipakai ledger DAN terminal waterfall, bukan hanya dicatat di sheet.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(dc_derate_per_wb={"WB03": 0.8}))
+    expected_ts = _raw_expected_kwh_per_ts() * 1.05 * 0.8
+    assert _scored(sm)["l_total_kwh"].iloc[0] == pytest.approx(
+        len(INDEX) * (expected_ts - ACTUAL_KW * FREQ_HOURS)
+    )
+    waterfall = sm.artifacts["M2f_Waterfall"].set_index("label")
+    assert waterfall.loc["E_expected", "delta_kwh"] == pytest.approx(
+        len(INDEX) * expected_ts
+    )
+
+
+def test_dc_derate_defaults_to_one_for_unlisted_wb(stubbed):
+    # WHY: WB yang belum dikalibrasi tidak boleh diam-diam memakai derate WB
+    # lain -- ia tetap di baseline pelat-nama sampai dikalibrasi sendiri.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(dc_derate_per_wb={"WB01": 0.8}))
+    expected_ts = _raw_expected_kwh_per_ts() * 1.05
+    assert _scored(sm)["l_total_kwh"].iloc[0] == pytest.approx(
+        len(INDEX) * (expected_ts - ACTUAL_KW * FREQ_HOURS)
+    )
+
+
+@pytest.mark.parametrize("bad", [85.0, 0.0, -0.8])
+def test_dc_derate_out_of_range_fails_loud(stubbed, bad):
+    # WHY: kebingungan persen vs fraksi berulang di codebase ini
+    # (p_loss_pct / 100). Derate 85 alih-alih 0,85 menggelembungkan
+    # E_expected 100x dan seluruh waterfall -- harus crash, bukan angka.
+    sm = M2fLossAttribution()
+    with pytest.raises(ValueError, match="dc_derate"):
+        sm.run(_combined_df(), _config(dc_derate_per_wb={"WB03": bad}))
+
+
+def test_baseline_calib_measured_ratio_is_median_of_raw_ratios(stubbed):
+    # WHY: measured_ratio adalah angka yang disalin operator ke
+    # dc_derate_per_wb. Ia median rasio aktual / harapan-MENTAH per
+    # string-hari: PV3 (4,0 kW) dan PV6 (3,0 kW), masing-masing dua hari.
+    sm = M2fLossAttribution()
+    sm.run(_multi_combined_df(), _config())
+    calib = sm.artifacts["M2f_BaselineCalib"].set_index("wb_id")
+    raw = _raw_expected_kwh_per_ts()
+    r_pv3 = ACTUAL_KW * FREQ_HOURS / raw
+    r_pv6 = 3.0 * FREQ_HOURS / raw
+    assert calib.loc["WB03", "measured_ratio"] == pytest.approx((r_pv3 + r_pv6) / 2)
+    assert calib.loc["WB03", "n_calib_string_days"] == 4
+
+
+def test_measured_ratio_ignores_configured_gain_and_derate(stubbed):
+    # WHY: bila rasio diukur terhadap E_expected yang SUDAH di-derate,
+    # menyalinnya ke config menggandakan derate di tiap putaran kalibrasi
+    # (0,85 -> 0,72 -> 0,61 ...) dan baseline merosot tanpa batas.
+    plain = M2fLossAttribution()
+    plain.run(_multi_combined_df(), _config())
+    derated = M2fLossAttribution()
+    derated.run(_multi_combined_df(), _config(dc_derate_per_wb={"WB03": 0.8}))
+    a = plain.artifacts["M2f_BaselineCalib"].set_index("wb_id")
+    b = derated.artifacts["M2f_BaselineCalib"].set_index("wb_id")
+    assert b.loc["WB03", "measured_ratio"] == pytest.approx(
+        a.loc["WB03", "measured_ratio"]
+    )
+    assert b.loc["WB03", "dc_derate"] == pytest.approx(0.8)
+    assert a.loc["WB03", "dc_derate"] == pytest.approx(1.0)
+
+
+def test_measured_ratio_excludes_curtailed_and_non_on_timestamps(stubbed):
+    # WHY: power limited dan standby menekan aktual karena sebab di luar
+    # modul. Ikut dihitung, derate menyerap curtailment dan rugi
+    # curtailment ter-underestimate di setiap run sesudahnya.
+    statuses = [
+        "On-grid", "On-grid", "Grid connected : power limited",
+        "Standby : no sunlight",
+    ]
+    powers = [ACTUAL_KW, ACTUAL_KW, 0.5, 0.0]
+    rows = []
+    for index in (INDEX, DAY_TWO):
+        for ts, status, kw in zip(index, statuses, powers):
+            rows += _rows(
+                "WB03-INV01", [ts], {"PV3": kw, "PV6": kw}, status=status,
+            )
+    sm = M2fLossAttribution()
+    sm.run(pd.DataFrame(rows), _config())
+    calib = sm.artifacts["M2f_BaselineCalib"].set_index("wb_id")
+    assert calib.loc["WB03", "measured_ratio"] == pytest.approx(
+        ACTUAL_KW * FREQ_HOURS / _raw_expected_kwh_per_ts()
+    )
+
+
+def test_measured_ratio_is_nan_when_too_few_string_days(stubbed):
+    # WHY: median satu-dua string adalah kebetulan, bukan kalibrasi. NaN
+    # plus n_calib_string_days memberi tahu pembaca KENAPA kosong.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config())
+    calib = sm.artifacts["M2f_BaselineCalib"].set_index("wb_id")
+    assert np.isnan(calib.loc["WB03", "measured_ratio"])
+    assert calib.loc["WB03", "n_calib_string_days"] == 1
 
 
 # --------------------------------------------------------------------------
