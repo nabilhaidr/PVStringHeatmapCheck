@@ -25,10 +25,37 @@ import pytest
 
 from pv_pipeline.availability import (
     TELEMETRY_LINK_GROUPS,
+    _classify_status,
     detect_link_outage,
     parse_inverter_time,
     shutdown_keep_mask,
 )
+from pv_pipeline.m2_config import DEFAULT_M2_CONFIG
+
+STATUS_MAP = DEFAULT_M2_CONFIG["m2e"]["inverter_status_map"]
+
+
+# --------------------------------------------------------------------------
+# _classify_status: kata kunci down yang termuat dalam kata kunci transitional
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status, expected", [
+    # WHY: "stop" (down) adalah substring "stopping" (transitional) dan down
+    # dicek lebih dulu -- tanpa aturan kekhususan, "stopping" TIDAK PERNAH
+    # bisa TRANSITIONAL, jadi inverter yang sedang berhenti normal terhitung
+    # outage di M2e dan diklaim availability_outage di M2f.
+    ("Stopping", "TRANSITIONAL"),
+    # Kata kunci down lain yang berdiri sendiri tetap menang.
+    ("Stopping : fault", "DOWN"),
+    ("Stop", "DOWN"),
+    ("Stopped", "DOWN"),
+    # Perilaku yang sudah benar tidak berubah.
+    ("OFF : instructed shutdown", "DOWN"),
+    ("Standby :  no sunlight", "TRANSITIONAL"),
+    ("Grid connected : power limited", "ON"),
+])
+def test_classify_status_prefers_more_specific_transitional_keyword(status, expected):
+    assert _classify_status(status, STATUS_MAP) == expected
 
 
 # --------------------------------------------------------------------------

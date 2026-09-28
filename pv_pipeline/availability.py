@@ -20,7 +20,10 @@ def _classify_status(status: Optional[str], keymap: dict) -> str:
     """Map raw status string -> {"ON","DOWN","TRANSITIONAL","UNKNOWN"}.
 
     Match strategy: lowercase + substring.
-    Priority: down > on > transitional (down menang bila ada keyword tabrakan).
+    Priority: down > on > transitional (down menang bila ada keyword tabrakan),
+    KECUALI kata kunci down yang termuat dalam kata kunci transitional yang
+    ikut cocok (mis. "stop" dalam "stopping") -- itu bagian kata yang lebih
+    spesifik, bukan sinyal mati.
     """
     if status is None:
         return "UNKNOWN"
@@ -31,8 +34,15 @@ def _classify_status(status: Optional[str], keymap: dict) -> str:
     if not s:
         return "UNKNOWN"
 
+    transitional_hits = [
+        kw.lower() for kw in keymap.get("transitional_keywords", []) or []
+        if kw and kw.lower() in s
+    ]
     for kw in keymap.get("down_keywords", []) or []:
-        if kw and kw.lower() in s:
+        down = kw.lower() if kw else ""
+        # Tanpa pengecualian ini "stopping" tak pernah bisa TRANSITIONAL:
+        # "stop" (down) selalu cocok lebih dulu sebagai substring-nya.
+        if down and down in s and not any(down in hit for hit in transitional_hits):
             return "DOWN"
     for kw in keymap.get("on_grid_keywords", []) or []:
         if kw and kw.lower() in s:
