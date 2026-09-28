@@ -333,16 +333,22 @@ m2f:
   # unexplained di v1. curtailment (perintah grid / power limit) pertama:
   # timestamp yang dibatasi dari luar bukan gangguan, dan outage tidak pernah
   # mengklaimnya apa pun urutannya (lihat report.py).
-  # shading (v2, M2aShading) dan low_irradiance_eff (v2, M2aLowIrradiance)
-  # hanya diklaim bila notebook menjalankan detektornya dengan poa_source
-  # yang sama dengan m2f.poa_source; tanpa itu keduanya tetap None.
+  # shading (v2, M2aShading) hanya diklaim bila notebook menjalankan
+  # detektornya dengan poa_source yang sama dengan m2f.poa_source; tanpa itu
+  # tetap None.
+  #
+  # low_irradiance_eff SENGAJA dikeluarkan (2026-09-28): klasifikasi
+  # M2aLowIrradiance mengikuti cuaca, bukan modul -- 2026-07-01 (hujan) 31
+  # inverter low_irradiance_underperform, 2025-12-01 nol, kemiringan PR-proxy
+  # berbalik tanda se-armada antar hari. Estimatornya tetap ada; kembalikan
+  # ke daftar ini (sesudah soiling) setelah detektor dibuat relatif terhadap
+  # tetangga se-WB pada timestamp yang sama.
   attribution_order:
     - curtailment
     - availability_outage
     - dc_cable_fault
     - shading
     - soiling
-    - low_irradiance_eff
     - unexplained
   # Gain bifacial fisik per WB. Kosong = 1.0, dan BIARKAN kosong: tanpa
   # sensor POA belakang, gain bifacial tidak bisa dipisahkan dari derate --

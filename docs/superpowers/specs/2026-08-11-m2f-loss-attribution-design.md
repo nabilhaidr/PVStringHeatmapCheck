@@ -464,6 +464,12 @@ Tes menguji maksud, bukan sekadar perilaku (Rule 9).
   `poa_source` (default `"auto"`, notebook M2f menyamakannya dengan
   `m2f.poa_source`) dan M2f menolak baris dari sumber lain. `curtailment`
   (non-actionable) ditambahkan di depan urutan pada hari yang sama.
+  **2026-09-28: `low_irradiance_eff` dikeluarkan dari `attribution_order`**
+  (keputusan owner). Uji 4 hari lokal: klasifikasi M2aLowIrradiance
+  mengikuti cuaca, bukan modul (2026-07-01 hujan: 31 inverter
+  `low_irradiance_underperform`; 2025-12-01: nol), dan tafsir "slope_low < 0 =
+  Rs tinggi" terbalik secara fisika. Estimator tetap ada dan kembali ke urutan
+  setelah detektornya dibuat relatif terhadap tetangga se-WB.
 - **v3** -- `microcrack` dan `bifacial_underperf`; terkunci sampai tersedia EL
   imaging + IV tracer dan sensor rear-POA.
 
