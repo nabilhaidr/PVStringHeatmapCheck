@@ -3,6 +3,7 @@ prioritas, lalu emit waterfall, Pareto, dan audit closure.
 """
 from __future__ import annotations
 
+import warnings
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -350,6 +351,9 @@ class M2fLossAttribution(SubModule):
         # level site, dan string-hari lain yang melaporkan None untuk kategori
         # yang sama menyumbang 0, bukan menggugurkan seluruh site jadi None.
         site_claimed: Dict[str, float] = {}
+        # String-hari dengan defisit ter-flag tetapi cakupan terukur di bawah
+        # ambang: dc_cable_fault dibiarkan None, dan jumlahnya dilaporkan.
+        dc_unmeasured_string_days = 0
         site_e_expected_kwh: float = 0.0
         site_l_total_kwh: float = 0.0
 
@@ -460,14 +464,27 @@ class M2fLossAttribution(SubModule):
                         continue
                     # reduce_deficit_frames sudah me-reindex ke `index=idx`
                     # (index-aware, bukan posisional), jadi hasilnya sejajar
-                    # dengan ledger. Timestamp yang tak bisa dievaluasi tetap
-                    # NaN dan gagal keras di pemeriksaan NaN LossLedger.claim().
+                    # dengan ledger. Timestamp ter-flag yang tak terukur tetap
+                    # NaN -- ditangani lewat ambang cakupan di bawah.
                     reduced = reduce_deficit_frames(
                         string_frames,
                         poa_source=poa_source,
                         index=idx,
                         freq_hours=DEFAULT_FREQ_HOURS,
                     )
+                    unsized = reduced.isna()
+                    if unsized.any():
+                        sized = int((reduced > 0.0).sum())
+                        # Ambang cakupan yang sama dengan POA/Tcell. Di bawahnya
+                        # kategori TAK TERUKUR (None) -- bukan 0.0 "aman" (dulu:
+                        # 42 string PV15+ tanpa tegangan) dan bukan crash
+                        # seluruh run (satu pencilan Hampel di WB03-INV08-PV6).
+                        if sized / (sized + int(unsized.sum())) < coverage_min:
+                            dc_unmeasured_string_days += 1
+                            continue
+                        # Cukup: timestamp tak terukur dihitung 0 -- klaimnya
+                        # batas bawah dari rugi yang sebenarnya.
+                        reduced = reduced.fillna(0.0)
                     claim_dc_cable_fault(ledger, deficit_kwh=reduced)
                 elif category == "shading":
                     rows = shading_by_day.get((inverter_id, day))
@@ -552,6 +569,15 @@ class M2fLossAttribution(SubModule):
                 "wb_id": wb_id, "g_bifacial": g, "dc_derate": d,
                 "string_id": string_id, "day": day,
             })
+
+        if dc_unmeasured_string_days:
+            warnings.warn(
+                f"[m2f] dc_cable_fault tak terukur di {dc_unmeasured_string_days} "
+                "string-hari: string itu ter-flag detektor m2b, tetapi defisit "
+                f"terukurnya < {coverage_min:.0%} (arus/tegangan hilang atau "
+                "dibuang filter pencilan). Kategorinya None, bukan 0.0.",
+                stacklevel=2,
+            )
 
         site_totals: Dict[str, Optional[float]] = {
             cat: site_claimed.get(cat) for cat in CLAIMABLE_CATEGORIES

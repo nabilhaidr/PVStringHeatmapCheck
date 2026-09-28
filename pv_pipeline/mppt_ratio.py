@@ -151,10 +151,14 @@ class M2bMpptRatio(SubModule):
         self._ensure_poa(config)
         sources = self._resolve_sources(config)
 
-        # Wave 11 hotfix #11 pattern: normalize Title Case I cols (PV15-28).
+        # Wave 11 hotfix #11 pattern: normalize Title Case V/I cols (PV15-28).
+        # Tegangan WAJIB ikut: deteksi hanya butuh arus, tetapi defisit M2f
+        # (I x V) memakai tegangan -- tanpa ini PV15+ ter-flag tanpa kWh.
         _rename_map = {}
         for _col in combined_df.columns:
-            if "Input Current" in _col:
+            if "Input Voltage" in _col:
+                _rename_map[_col] = _col.replace("Input Voltage", "input voltage")
+            elif "Input Current" in _col:
                 _rename_map[_col] = _col.replace("Input Current", "input current")
         if _rename_map:
             combined_df = combined_df.rename(columns=_rename_map)

@@ -111,11 +111,16 @@ def reduce_deficit_frames(
     """
     idx = pd.DatetimeIndex(index)
     per_detector: List[pd.Series] = []
+    # Timestamp yang di-flag sebuah detektor tetapi tak terukur olehnya (NaN
+    # di serinya SENDIRI -- bukan NaN hasil alignment concat di bawah).
+    unsized: set = set()
     for frame in frames:
         subset = frame[frame["poa_source"] == poa_source]
         if subset.empty:
             continue
-        per_detector.append(deficit_to_kwh(subset, freq_hours=freq_hours))
+        kwh = deficit_to_kwh(subset, freq_hours=freq_hours)
+        per_detector.append(kwh)
+        unsized.update(kwh.index[kwh.isna()])
 
     if not per_detector:
         return pd.Series(0.0, index=idx, dtype=float, name="deficit_kwh")
@@ -128,6 +133,11 @@ def reduce_deficit_frames(
     # bawah hanya mengisi 0.0 pada timestamp yang SAMA SEKALI tak tercakup
     # detektor manapun (bukan pada NaN yang sudah ada).
     reduced = combined.max(axis=1, skipna=True)
+    # ...tetapi NaN "ter-flag, tak terukur" tidak boleh tertutup 0.0 dari
+    # detektor lain yang sekadar tidak mem-flag timestamp itu: run 2026-08-31
+    # memberi 42 string ter-flag mppt_ratio klaim 0.0 ("dicek, aman") karena
+    # tegangannya hilang. Hanya defisit positif terukur yang menggantikannya.
+    reduced[reduced.index.isin(list(unsized)) & ~(reduced > 0.0)] = np.nan
     reduced = reduced.reindex(idx, fill_value=0.0)
     reduced.name = "deficit_kwh"
     return reduced.astype(float)

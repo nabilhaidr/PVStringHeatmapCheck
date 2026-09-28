@@ -208,3 +208,25 @@ def test_mppt_ratio_deficit_kw_and_debounced_flag(tmp_path):
     # PV3 underperform sungguhan (10% partner, 37 baris >> debounce 20) harus
     # flagged penuh -- kontras positif terhadap PV1.
     assert pv3["flagged"].all()
+
+
+def test_mppt_ratio_deficit_reads_title_case_voltage_columns(tmp_path):
+    # WHY (run 2026-08-31): ekspor Huawei menulis PV15-36 sebagai
+    # "PV15 Input Voltage(V)" (huruf besar). mppt_ratio hanya menormalkan
+    # kolom ARUS, jadi tegangan PV15+ hilang -> actual/counterfactual NaN ->
+    # 42 string ter-flag mendapat klaim dc_cable_fault 0.0. Di sini PV3/PV4
+    # diberi konvensi huruf besar.
+    strings_yaml = _mppt_strings_yaml(tmp_path)
+    t = pd.date_range("2026-05-14 06:00", "2026-05-14 09:00", freq="5min")
+    df = _mr_df_with_voltage(t, dip_ts=t[18])
+    df = df.rename(columns={
+        f"PV{n} input {kind}": f"PV{n} Input {kind.title()}"
+        for n in (3, 4) for kind in ("current(A)", "voltage(V)")
+    })
+    sm = M2bMpptRatio(poa=_MockPOAConstant())
+    sm.run(df, _mr_cfg(strings_yaml))
+    frames = pd.concat(sm.deficit_frames, ignore_index=True)
+    pv3 = frames[frames["pv_string"] == "PV3"].set_index("timestamp")
+    assert pv3["flagged"].all()
+    assert pv3.loc[t[0], "actual_kw"] == pytest.approx(_MR_DEGRADED_I * _MR_VOLTAGE_V / 1000.0)
+    assert pv3.loc[t[0], "counterfactual_kw"] == pytest.approx(_MR_HEALTHY_I * _MR_VOLTAGE_V / 1000.0)

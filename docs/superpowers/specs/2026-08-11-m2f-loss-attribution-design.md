@@ -373,6 +373,15 @@ dilakukan operator, bukan threshold di config.
   dicatat di `M2f_Closure`, bukan diperlakukan sebagai rugi nol.
 - Detektor tidak menghasilkan artefak deret waktu: kategorinya diisi `None`
   dan kontribusinya jatuh ke `unexplained`, konsisten dengan perlakuan M2c/M2d.
+- Timestamp yang di-flag detektor m2b tetapi defisitnya tak terukur (NaN --
+  arus/tegangan hilang, atau dibuang filter pencilan Hampel) *(2026-09-28)*:
+  `reduce_deficit_frames` tidak lagi membiarkan 0.0 dari detektor lain yang
+  sekadar tidak mem-flag-nya menutupi NaN itu (dulu 42 string PV15+ tanpa
+  tegangan tercatat 0.0 "aman"). Di `report.py`, bila porsi terukur dari
+  timestamp tersebut >= `poa_coverage_min_pct`, bagian terukur diklaim
+  sebagai batas bawah; di bawahnya `dc_cable_fault` = `None` untuk string-hari
+  itu, dan jumlahnya diperingatkan sekali per run -- bukan crash seluruh run
+  karena satu pencilan.
 - Residual melebihi `residual_warn_pct`: emit `M2Finding` severity INFO dengan
   `fault_type="weak_attribution"`. Ini metrik kualitas, bukan kegagalan.
 

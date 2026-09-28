@@ -904,6 +904,45 @@ def test_measured_ratio_is_nan_when_too_few_string_days(stubbed):
 
 
 # --------------------------------------------------------------------------
+# dc_cable_fault: timestamp ter-flag yang tak terukur (NaN)
+# --------------------------------------------------------------------------
+
+def _deficit_frame_with_unsized(n_unsized, gap_kw=1.0):
+    """PV3 ter-flag di seluruh INDEX; ``n_unsized`` timestamp pertama tak terukur."""
+    n = len(INDEX)
+    actual = np.full(n, ACTUAL_KW)
+    actual[:n_unsized] = np.nan
+    return build_deficit_frame(
+        timestamps=INDEX, poa_source=POA_SOURCE,
+        inverter_id="WB03-INV01", pv_string="PV3",
+        actual_kw=actual, counterfactual_kw=np.full(n, ACTUAL_KW + gap_kw),
+        flagged=np.full(n, True),
+    )
+
+
+def test_dc_cable_fault_claims_sized_steps_when_coverage_is_enough(stubbed):
+    # WHY (2026-07-29, WB03-INV08-PV6): filter Hampel mengubah 1 dari 38
+    # sampel ter-flag menjadi NaN, dan M2f crash untuk SELURUH run. Bagian
+    # yang terukur tetap rugi nyata -- diklaim sebagai batas bawah.
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config(
+        deficit_frames=[_deficit_frame_with_unsized(1)], poa_coverage_min_pct=70.0,
+    ))
+    assert _loss_by_category(sm)["dc_cable_fault"] == pytest.approx(3 * 1.0 * FREQ_HOURS)
+
+
+def test_dc_cable_fault_is_unmeasured_when_flagged_steps_mostly_unsized(stubbed):
+    # WHY (2026-08-31): 42 string PV15-28 ter-flag tanpa satu pun defisit
+    # terukur (tegangan hilang) tercatat 0.0 -- "dicek, aman". Di bawah ambang
+    # cakupan, kategori harus None ("tak terukur"), terdengar lewat
+    # peringatan, dan run tidak crash.
+    sm = M2fLossAttribution()
+    with pytest.warns(UserWarning, match="dc_cable_fault tak terukur"):
+        sm.run(_combined_df(), _config(deficit_frames=[_deficit_frame_with_unsized(4)]))
+    assert "dc_cable_fault" not in _categories(sm)
+
+
+# --------------------------------------------------------------------------
 # curtailment dipisah dari availability_outage
 # --------------------------------------------------------------------------
 

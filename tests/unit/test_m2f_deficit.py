@@ -146,6 +146,45 @@ def test_reduce_deficit_frames_empty_list_returns_zero_series():
     assert reduced.tolist() == [0.0, 0.0]
 
 
+def test_reduce_flagged_nan_is_not_masked_by_unflagged_zero():
+    # WHY (run 2026-08-31): mppt_ratio mem-flag 42 string PV15-28 tetapi
+    # tegangannya NaN; open_circuit/peer_zscore TIDAK mem-flag string yang
+    # sama (0.0). max(skipna=True) lalu memilih 0.0 -> "dicek, aman" untuk
+    # string yang justru ter-flag rusak. Harus tetap NaN ("tak terukur").
+    idx = pd.date_range("2026-05-13 12:00", periods=1, freq="5min")
+    frame_flagged_nan = _frame([np.nan], [3.0], [True])
+    frame_unflagged = _frame([1.0], [3.0], [False])
+    reduced = reduce_deficit_frames(
+        [frame_flagged_nan, frame_unflagged], poa_source="pyranometer", index=idx
+    )
+    assert pd.isna(reduced.iloc[0])
+
+
+def test_reduce_sized_deficit_wins_over_flagged_nan():
+    # WHY: detektor lain yang BISA mengukur rugi yang sama memberi angka
+    # nyata -- itu dipakai, bukan dibuang karena satu detektor tak terukur.
+    idx = pd.date_range("2026-05-13 12:00", periods=1, freq="5min")
+    frame_nan = _frame([np.nan], [3.0], [True])
+    frame_sized = _frame([1.0], [3.0], [True])  # gap 2.0
+    reduced = reduce_deficit_frames(
+        [frame_nan, frame_sized], poa_source="pyranometer", index=idx
+    )
+    assert reduced.iloc[0] == pytest.approx(2.0 * DEFAULT_FREQ_HOURS)
+
+
+def test_reduce_timestamp_absent_from_one_detector_is_not_unsized():
+    # WHY: NaN hasil alignment (detektor sekadar tidak mencakup timestamp
+    # itu) BUKAN "ter-flag tapi tak terukur" -- menyamakannya akan membuat
+    # ledger.claim() me-raise pada string sehat.
+    idx = pd.date_range("2026-05-13 12:00", periods=2, freq="5min")
+    frame_full = _frame([1.0, 1.0], [3.0, 3.0], [False, False])
+    frame_short = _frame([1.0], [3.0], [False])
+    reduced = reduce_deficit_frames(
+        [frame_full, frame_short], poa_source="pyranometer", index=idx
+    )
+    assert reduced.tolist() == [0.0, 0.0]
+
+
 def test_reduce_deficit_frames_all_nan_at_timestamp_is_preserved():
     # WHY: kalau SEMUA detektor tidak bisa mengevaluasi satu timestamp (mis.
     # kolom tegangan hilang di semua), hasilnya harus tetap NaN -- bukan
