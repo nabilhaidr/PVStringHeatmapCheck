@@ -14,6 +14,8 @@ from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from pv_pipeline.m2f.pareto import VITAL_FEW_THRESHOLD_PCT
 
@@ -176,38 +178,51 @@ def build_pareto_figure(
     residual_pct = float(residual.iloc[0]) if len(residual) else 0.0
     title = f"{base_title} | unexplained {residual_pct:.0f}%"
 
-    categories = pareto_df["category"].tolist()
-    values = pareto_df["loss_kwh"].to_numpy(dtype=float)
-    cum = pareto_df["cum_pct"].to_numpy(dtype=float)
+    # Actionable dulu (menurun), non-actionable di kanan: cum_pct hanya
+    # menjumlah baris actionable, jadi garisnya digambar di atas batang
+    # actionable saja -- tidak mulai dari 0 di batang terbesar (unexplained).
+    actionable = pareto_df["actionable"].astype(bool)
+    ordered = pd.concat([pareto_df[actionable], pareto_df[~actionable]])
+    n_act = int(actionable.sum())
+    categories = ordered["category"].tolist()
+    values = ordered["loss_kwh"].to_numpy(dtype=float)
+    cum = ordered["cum_pct"].to_numpy(dtype=float)[:n_act]
 
     fig, ax = plt.subplots(figsize=(11, 6))
     colors = [
-        COLOR_RESIDUAL if cat == "unexplained"
-        else (COLOR_VITAL if vital else COLOR_TRIVIAL)
-        for cat, vital in zip(categories, pareto_df["vital_few"].tolist())
+        COLOR_RESIDUAL if not act else (COLOR_VITAL if vital else COLOR_TRIVIAL)
+        for act, vital in zip(
+            ordered["actionable"].astype(bool), ordered["vital_few"].astype(bool),
+        )
     ]
     bars = ax.bar(range(len(categories)), values, color=colors)
-    for bar, cat in zip(bars, categories):
-        if cat == "unexplained":
-            bar.set_hatch("//")
+    for bar in bars[n_act:]:
+        bar.set_hatch("//")
+    if 0 < n_act < len(categories):
+        ax.axvline(n_act - 0.5, color="0.6", ls=":", lw=1.0)
 
     ax.set_xticks(range(len(categories)))
     ax.set_xticklabels(categories, rotation=30, ha="right")
     ax.set_ylabel("Rugi energi (kWh)")
 
     ax2 = ax.twinx()
-    ax2.plot(range(len(categories)), cum, color=COLOR_CUM, marker="o", lw=1.5)
+    ax2.plot(range(n_act), cum, color=COLOR_CUM, marker="o", lw=1.5)
     ax2.axhline(VITAL_FEW_THRESHOLD_PCT, color="0.4", ls="--", lw=1.0)
-    ax2.set_ylabel("Kumulatif (%)")
+    ax2.set_ylabel("Kumulatif actionable (% total rugi)")
     ax2.set_ylim(0, 105)
 
     n_vital = int(pareto_df["vital_few"].sum())
     ax.set_title(title)
-    ax.annotate(
-        f"{n_vital} kategori vital-few (dapat ditindak)",
-        xy=(0.02, 0.94), xycoords="axes fraction", fontsize=9,
-    )
-    fig.tight_layout()
+    # Legenda di bawah grafik: di dalam sumbu ia menimpa garis ambang 80%.
+    handles = [
+        Patch(facecolor=COLOR_VITAL, label=f"vital-few ({n_vital})"),
+        Patch(facecolor=COLOR_TRIVIAL, label="actionable lainnya"),
+        Patch(facecolor=COLOR_RESIDUAL, hatch="//", label="tidak dapat ditindak"),
+        Line2D([], [], color=COLOR_CUM, marker="o", label="kumulatif actionable"),
+        Line2D([], [], color="0.4", ls="--", label=f"ambang {VITAL_FEW_THRESHOLD_PCT:.0f}%"),
+    ]
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=9)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
     if close_after_show:
         plt.close(fig)
     return fig

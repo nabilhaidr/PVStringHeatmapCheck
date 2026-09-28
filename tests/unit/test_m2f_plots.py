@@ -120,6 +120,25 @@ def test_pareto_figure_reports_residual_share_in_title():
     assert "70" in fig.axes[0].get_title()
 
 
+def test_pareto_figure_separates_non_actionable_bars():
+    # WHY: kumulatif hanya menjumlah kategori actionable. Bila unexplained
+    # (batang terbesar) tetap di kiri, garis mulai di 0 pada batang terbesar
+    # dan pembaca mengira grafiknya rusak; curtailment berwarna "trivial"
+    # terbaca sebagai target maintenance kecil, padahal bukan target sama sekali.
+    table = build_pareto_table(_totals(
+        unexplained=70.0, curtailment=20.0, dc_cable_fault=6.0, soiling=4.0,
+    ))
+    fig = build_pareto_figure(table, scope="site", period_label="2026-05")
+    ax, ax2 = fig.axes[0], fig.axes[1]
+    labels = [t.get_text() for t in ax.get_xticklabels()]
+    assert labels[:2] == ["dc_cable_fault", "soiling"]
+    assert set(labels[-2:]) == {"unexplained", "curtailment"}
+    assert list(ax2.lines[0].get_xdata()) == list(range(len(labels) - 2))
+    by_label = dict(zip(labels, ax.patches))
+    assert by_label["curtailment"].get_facecolor() == by_label["unexplained"].get_facecolor()
+    assert by_label["curtailment"].get_facecolor() != by_label["soiling"].get_facecolor()
+
+
 def test_empty_input_returns_figure_instead_of_raising():
     # WHY: grafik dipanggil dari notebook batch; satu WB tanpa data tidak
     # boleh menghentikan seluruh run.
