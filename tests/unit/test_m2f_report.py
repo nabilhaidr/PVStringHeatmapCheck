@@ -20,6 +20,7 @@ from pv_pipeline.m2f.baseline import compute_expected_energy_kwh
 from pv_pipeline.m2f.deficit import build_deficit_frame
 from pv_pipeline.m2f.ledger import CLOSURE_TOLERANCE_KWH
 from pv_pipeline.m2f.report import M2fLossAttribution
+from pv_pipeline.m2f.setpoint import SetpointCaps
 from pv_pipeline.panel_spec import PanelSpec
 
 
@@ -100,12 +101,14 @@ class _ConstantTcell:
         return pd.Series(self.value, index=pd.DatetimeIndex(timestamps), dtype=float)
 
 
-def _install_providers(monkeypatch, poa=None, tcell=None):
+def _install_providers(monkeypatch, poa=None, tcell=None, setpoint=None):
     providers = {
         "poa": poa if poa is not None else _ConstantPOA(),
         "tcell": tcell if tcell is not None else _ConstantTcell(),
         "spec": PanelSpec.from_yaml(PANEL_SPEC_PATH),
     }
+    if setpoint is not None:
+        providers["setpoint"] = setpoint
     monkeypatch.setattr(
         M2fLossAttribution,
         "_load_providers",
@@ -1051,6 +1054,105 @@ def test_without_curtailment_keywords_category_stays_unmeasured(stubbed):
     loss = _loss_by_category(sm)
     assert "curtailment" not in loss.index
     assert loss["availability_outage"] == pytest.approx(2 * _expected_kwh_per_ts())
+
+
+# --------------------------------------------------------------------------
+# curtailment dari plafon set point busbar (jaringan 20 kV)
+# --------------------------------------------------------------------------
+
+BUS_WB03 = [{"column": "Setpoint Busbar 1", "wbs": ["WB03"], "max_ac_kw": 28240.0}]
+CAP_WB03 = 25000.0 * 330.0 / 28240.0
+
+
+def _setpoint_caps(value=25000.0):
+    """Riwayat 10 menit yang menutupi INDEX dan DAY_TWO."""
+    stamps = [ts for day in (INDEX, DAY_TWO)
+              for ts in pd.date_range(day[0], periods=2, freq="10min")]
+    history = pd.DataFrame({"Setpoint Busbar 1": value}, index=pd.DatetimeIndex(stamps))
+    return SetpointCaps(history, BUS_WB03, {"WB03": 330.0})
+
+
+def _with_ac(df, ac_kw):
+    """Tambah daya AC inverter per baris (urutan sama dengan baris df)."""
+    df = df.copy()
+    df["Active power(kW)"] = ac_kw
+    return df
+
+
+def test_grid_connected_output_held_at_setpoint_cap_is_curtailment(monkeypatch):
+    # WHY: 2026-07-29 bus 1 tertahan di plafon set point dengan status "Grid
+    # connected", bukan "power limited". Dari status saja, energi yang
+    # terpotong jaringan jatuh ke unexplained dan menekan measured_ratio di
+    # hari cerah.
+    _install_providers(monkeypatch, setpoint=_setpoint_caps())
+    df = _with_ac(
+        _status_rows(["On-grid"] * 4, [1.0, 1.0, ACTUAL_KW, ACTUAL_KW]),
+        [CAP_WB03, CAP_WB03, 200.0, 200.0],
+    )
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=CURTAIL_FIRST))
+    loss = _loss_by_category(sm)
+    assert loss["curtailment"] == pytest.approx(
+        2 * (_expected_kwh_per_ts() - 1.0 * FREQ_HOURS)
+    )
+    assert loss["availability_outage"] == pytest.approx(0.0)
+
+
+def test_output_at_full_setpoint_is_not_curtailment(monkeypatch):
+    # WHY: set point = kapasitas penuh bus (bus 2 sepanjang 2025) tidak
+    # membatasi; inverter di Pmax-nya bukan korban jaringan.
+    _install_providers(monkeypatch, setpoint=_setpoint_caps(value=28240.0))
+    df = _with_ac(
+        _status_rows(["On-grid"] * 4, [1.0, 1.0, ACTUAL_KW, ACTUAL_KW]),
+        [330.0, 330.0, 200.0, 200.0],
+    )
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=CURTAIL_FIRST))
+    assert _loss_by_category(sm)["curtailment"] == pytest.approx(0.0)
+
+
+def test_measured_ratio_excludes_setpoint_capped_timestamps(monkeypatch):
+    # WHY: plafon hanya mengikat di hari cerah. Bila sampelnya ikut
+    # kalibrasi, derate menyerap curtailment jaringan dan measured_ratio ikut
+    # langit (~0,85 cerah vs ~1,0 mendung).
+    _install_providers(monkeypatch, setpoint=_setpoint_caps())
+    rows = []
+    for index in (INDEX, DAY_TWO):
+        for ts, kw, ac in zip(index, [1.0, 1.0, ACTUAL_KW, ACTUAL_KW],
+                              [CAP_WB03, CAP_WB03, 200.0, 200.0]):
+            for row in _rows("WB03-INV01", [ts], {"PV3": kw, "PV6": kw}):
+                row["Active power(kW)"] = ac
+                rows.append(row)
+    sm = M2fLossAttribution()
+    sm.run(pd.DataFrame(rows), _config())
+    calib = sm.artifacts["M2f_BaselineCalib"].set_index("wb_id")
+    assert calib.loc["WB03", "measured_ratio"] == pytest.approx(
+        ACTUAL_KW * FREQ_HOURS / _raw_expected_kwh_per_ts()
+    )
+
+
+class _RampPOA(_ConstantPOA):
+    """POA naik 700 -> 1000 W/m2 sepanjang indeks yang diminta."""
+
+    def get_poa(self, timestamps, wb_id, source="auto"):
+        idx = pd.DatetimeIndex(timestamps)
+        return pd.Series(np.linspace(700.0, 1000.0, len(idx)), index=idx)
+
+
+def test_plateau_marks_curtailment_when_setpoint_history_is_missing(monkeypatch):
+    # WHY: riwayat set point berhenti 2026-08-31 dan bisa keliru; sesudahnya
+    # plafon hanya dikenali dari bentuknya -- daya AC datar di bawah Pmax
+    # sementara POA terus naik.
+    rows = []
+    for ts in pd.date_range("2026-05-13 10:00", periods=8, freq="5min"):
+        row = _rows("WB03-INV01", [ts], {"PV3": 3.0})[0]
+        row["Active power(kW)"] = 275.0
+        rows.append(row)
+    no_history = SetpointCaps(pd.DataFrame(), BUS_WB03, {"WB03": 330.0})
+    _install_providers(monkeypatch, poa=_RampPOA(), setpoint=no_history)
+    sm = M2fLossAttribution()
+    sm.run(pd.DataFrame(rows), _config(attribution_order=CURTAIL_FIRST))
+    assert _loss_by_category(sm)["curtailment"] > 0.0
 
 
 # --------------------------------------------------------------------------

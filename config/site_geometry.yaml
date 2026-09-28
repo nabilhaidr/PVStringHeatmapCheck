@@ -177,3 +177,33 @@ generation:
   #            (busbar1 = WB01-05 < 24300 kW, busbar2 = WB06-10 < 25700 kW)
   #   O     : Busbar 1 (WB 01 - WB 5) propotional setpoint (kW)
   #   P     : Busbar 2 (WB 06 - WB 10) propotional setpoint (kW)
+
+# Set point busbar -- pembatasan penyaluran oleh jaringan distribusi eksternal
+# 20 kV. Konsumen: pv_pipeline.m2f.setpoint.SetpointCaps (curtailment M2f).
+# Plafon inverter = set point busbar x Pmax inverter / Pmax busbar (pembagian
+# proporsional, "Setting for the Set Point PLTS IKN.xlsx"). Sampel di plafon
+# sering berstatus "Grid connected", bukan "power limited". Riwayat 10 menit
+# 2024-12-28 s.d. 2026-08-31; sesudahnya hanya penanda plateau yang aktif.
+setpoint:
+  xlsx_path: "raw data input/IKN Generation.xlsx"
+  sheet: "Setpoint"
+  timestamp_col: "Tanggal/Waktu"
+  busbars:
+    - column: "Setpoint Busbar 1"
+      wbs: [WB01, WB02, WB03, WB04, WB05]
+      max_ac_kw: 28240              # 2 x 25 x 215 + (15 + 19 + 19) x 330
+    - column: "Setpoint Busbar 2"
+      wbs: [WB06, WB07, WB08, WB09, WB10]
+      max_ac_kw: 30030              # (20 + 17 + 17 + 20 + 17) x 330
+  # Max. AC active power (cos phi = 1) per datasheet.
+  inverter_max_ac_kw:
+    WB01: 215                       # Huawei SUN2000-215KTL-H0
+    WB02: 215
+    WB03: 330                       # Huawei SUN2000-330KTL-H1
+    WB04: 330
+    WB05: 330
+    WB06: 330
+    WB07: 330
+    WB08: 330
+    WB09: 330
+    WB10: 330

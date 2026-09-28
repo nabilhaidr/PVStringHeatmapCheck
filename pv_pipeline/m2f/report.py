@@ -50,6 +50,7 @@ from pv_pipeline.m2f.ledger import (
 )
 from pv_pipeline.m2f.pareto import build_pareto_table
 from pv_pipeline.m2f.plots import build_waterfall_table
+from pv_pipeline.m2f.setpoint import SetpointCaps, capped_mask, plateau_mask
 from pv_pipeline.panel_spec import PanelSpec
 from pv_pipeline.poa.provider import POAProvider
 from pv_pipeline.transformations import (
@@ -60,6 +61,7 @@ from pv_pipeline.transformations import (
 
 
 PER_STRING_COLUMNS: List[str] = ["string_id", "day", "category", "loss_kwh"]
+AC_POWER_COL = "Active power(kW)"  # daya AC inverter -- bahan deteksi plafon set point
 CLOSURE_COLUMNS: List[str] = [
     "string_id", "day", "l_total_kwh", "claimed_kwh",
     "residual_kwh", "residual_pct", "poa_coverage_pct", "poa_fallback_pct",
@@ -173,6 +175,30 @@ def _curtailed_mask(status: pd.Series, keywords: List[str]) -> pd.Series:
     return status.map(
         lambda value: isinstance(value, str)
         and any(kw in value.lower() for kw in lowered)
+    )
+
+
+def _setpoint_capped(
+    group: pd.DataFrame, poa: pd.Series, caps: Optional[SetpointCaps], wb_id: str,
+) -> Tuple[np.ndarray, bool]:
+    """(mask, terukur): timestamp yang daya AC-nya tertahan plafon set point.
+
+    Riwayat set point (``capped_mask``) DAN bentuk plateau (``plateau_mask``,
+    cadangan saat riwayat kosong/keliru) dipakai bersama. Terukur hanya bila
+    ada provider, Pmax WB dikenal, dan kolom daya AC inverter tersedia --
+    tanpa itu "tidak di plafon" tak bisa dibedakan dari "tidak dicek".
+    """
+    none = np.zeros(len(group), dtype=bool)
+    if caps is None or AC_POWER_COL not in group.columns:
+        return none, False
+    pmax = caps.inverter_max_ac_kw(wb_id)
+    if pmax is None:
+        return none, False
+    p_ac = pd.to_numeric(group[AC_POWER_COL], errors="coerce").to_numpy(dtype=float)
+    cap = caps.cap_kw(group.index, wb_id).to_numpy(dtype=float)
+    return (
+        capped_mask(p_ac, cap, pmax) | plateau_mask(p_ac, poa.to_numpy(dtype=float), pmax),
+        True,
     )
 
 
@@ -404,6 +430,12 @@ class M2fLossAttribution(SubModule):
                 ))
                 continue
 
+            # Plafon set point busbar (jaringan 20 kV): sampel di plafon sering
+            # berstatus "Grid connected", jadi status saja tidak menangkapnya.
+            capped, cap_measurable = _setpoint_capped(
+                group, poa, providers.get("setpoint"), wb_id,
+            )
+
             g = float(gains.get(wb_id, 1.0))
             d = derates.get(wb_id, 1.0)
             # Mentah dulu, tanpa koreksi apa pun: bahan measured_ratio. Rasio
@@ -415,9 +447,11 @@ class M2fLossAttribution(SubModule):
             e_exp = e_raw * (g * d)
             e_act = compute_actual_energy_kwh(group[power_col])
             if "Inverter status" in group.columns:
+                # Tanpa ~capped, derate menyerap plafon jaringan yang hanya
+                # mengikat di hari cerah -- measured_ratio lalu ikut langit.
                 eligible = _calibration_mask(
                     group["Inverter status"], status_map, curtailment_keywords,
-                ).to_numpy(dtype=bool)
+                ).to_numpy(dtype=bool) & ~capped
                 key = f"{string_id}|{day.date()}"
                 calib_expected.setdefault(wb_id, {})[key] = float(
                     e_raw.to_numpy()[eligible].sum()
@@ -439,16 +473,18 @@ class M2fLossAttribution(SubModule):
                 if category == "unexplained":
                     continue
                 if category == "curtailment":
-                    # Tanpa kata kunci, "tidak di-curtail" tak bisa dibedakan
-                    # dari "tidak dicek" -- dilewati (None), bukan klaim 0.0.
-                    if not curtailment_keywords or "Inverter status" not in group.columns:
+                    # Status (kata kunci) ATAU plafon set point. Bila keduanya
+                    # tak bisa dicek, "tidak di-curtail" tak bisa dibedakan dari
+                    # "tidak dicek" -- dilewati (None), bukan klaim 0.0.
+                    status_known = bool(curtailment_keywords) and "Inverter status" in group.columns
+                    if not status_known and not cap_measurable:
                         continue
-                    curtailed = _curtailed_mask(
-                        group["Inverter status"], curtailment_keywords,
-                    )
-                    claim_curtailment(
-                        ledger, curtailed_mask=curtailed.to_numpy(dtype=bool),
-                    )
+                    curtailed = capped.copy()
+                    if status_known:
+                        curtailed |= _curtailed_mask(
+                            group["Inverter status"], curtailment_keywords,
+                        ).to_numpy(dtype=bool)
+                    claim_curtailment(ledger, curtailed_mask=curtailed)
                 elif category == "availability_outage":
                     if not can_classify_status or "Inverter status" not in group.columns:
                         continue
@@ -459,7 +495,9 @@ class M2fLossAttribution(SubModule):
                     down = _down_mask(group["Inverter status"], status_map) & ~_curtailed_mask(
                         group["Inverter status"], curtailment_keywords,
                     )
-                    claim_availability_outage(ledger, down_mask=down.to_numpy(dtype=bool))
+                    claim_availability_outage(
+                        ledger, down_mask=down.to_numpy(dtype=bool) & ~capped,
+                    )
                 elif category == "dc_cable_fault":
                     string_frames = frames_by_string.get(string_id)
                     if not string_frames:
@@ -654,6 +692,8 @@ class M2fLossAttribution(SubModule):
                     "poa": POAProvider.from_yaml(geometry),
                     "tcell": CellTempProvider.from_geometry_yaml(geometry),
                     "spec": PanelSpec.from_yaml(config["panel"]["spec_path"]),
+                    # None bila site_geometry tanpa seksi `setpoint`.
+                    "setpoint": SetpointCaps.from_geometry_yaml(geometry),
                 },
                 None,
             )

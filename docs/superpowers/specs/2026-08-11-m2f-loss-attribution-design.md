@@ -158,7 +158,8 @@ Karena itu koreksinya dipisah dan dinamai jujur:
 - Sheet `M2f_BaselineCalib` (pengganti `M2f_BifacialCalib`) mencatat nilai
   yang dipakai plus `measured_ratio`: median rasio aktual / harapan-MENTAH per
   string-hari, hanya pada timestamp inverter ON dan tidak di-curtail
-  (`m2f.curtailment_keywords`). Rasio dihitung terhadap baseline mentah supaya
+  (`m2f.curtailment_keywords` ATAU plafon set point busbar, baris 0 tabel
+  ledger -- sejak 2026-09-28). Rasio dihitung terhadap baseline mentah supaya
   menyalinnya ke config tidak menggandakan derate.
 - `calibrate_bifacial_gain` diganti nama menjadi `calibrate_dc_derate`.
 
@@ -190,7 +191,7 @@ diklaim tidak dapat diklaim lagi oleh kategori berprioritas lebih rendah.
 
 | # | Kategori | Counterfactual | Sumber detektor |
 |---|---|---|---|
-| 0 | `curtailment` | `E_expected` sepanjang interval dibatasi dari luar (`instructed shutdown`, `power limited`); non-actionable (2026-09-27) | status inverter + `m2f.curtailment_keywords` |
+| 0 | `curtailment` | `E_expected` sepanjang interval dibatasi dari luar: status (`instructed shutdown`, `power limited`) ATAU daya AC tertahan di plafon set point busbar -- pembatasan penyaluran jaringan distribusi eksternal 20 kV; plafon = set point x Pmax inverter / Pmax busbar dari riwayat, ditambah penanda plateau bila riwayat kosong (2026-09-28). Sampel di plafon sering berstatus "Grid connected". Non-actionable (2026-09-27) | status + `m2f.curtailment_keywords`; `pv_pipeline/m2f/setpoint.py` + seksi `setpoint` di `site_geometry.yaml` (`IKN Generation.xlsx`, sheet `Setpoint`) |
 | 1 | `availability_outage` | `E_expected` sepanjang interval mati, KECUALI timestamp curtailment | `availability.py` |
 | 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `mppt_ratio` |
 | 3 | `shading` | referensi-diri: `aktual x (pr_reference / pr_proxy - 1)` pada jam ter-flag; `pr_reference` = median PR-proxy inverter itu hari itu. Hanya pola berarah (`shading_morning`/`_afternoon`); simetris = 0.0 (2026-09-27, menggantikan "median sibling") | `m2a/shading` (HourlyMetrics) |
@@ -350,7 +351,9 @@ Section `m2f` baru di `config/m2_config.yaml`:
 - `dc_derate_per_wb` -- faktor derate bersih per WB, fraksi di (0, 1.5];
   kosong = 1.0. Nilai di luar rentang me-raise (salah satuan persen)
 - `curtailment_keywords` -- substring status inverter yang berarti produksi
-  dibatasi dari luar; dikeluarkan dari kalibrasi `dc_derate`
+  dibatasi dari luar; dikeluarkan dari kalibrasi `dc_derate`. Plafon set point
+  busbar dibaca dari seksi `setpoint` di `site_geometry.yaml` (riwayat, Pmax
+  per busbar dan per WB); tanpa seksi itu hanya status yang dipakai
 - `poa_coverage_min_pct` (default `80.0`) -- ambang cakupan POA/Tcell untuk
   memproses satu (string, hari); di bawah ini string-hari itu di-skip dengan
   `skipped_reason="poa_or_tcell_missing"` alih-alih diam-diam diisi 0 di
