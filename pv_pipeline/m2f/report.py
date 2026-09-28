@@ -62,8 +62,8 @@ from pv_pipeline.transformations import (
 PER_STRING_COLUMNS: List[str] = ["string_id", "day", "category", "loss_kwh"]
 CLOSURE_COLUMNS: List[str] = [
     "string_id", "day", "l_total_kwh", "claimed_kwh",
-    "residual_kwh", "residual_pct", "poa_coverage_pct", "tcell_coverage_pct",
-    "poa_source", "tcell_source", "skipped_reason",
+    "residual_kwh", "residual_pct", "poa_coverage_pct", "poa_fallback_pct",
+    "tcell_coverage_pct", "poa_source", "tcell_source", "skipped_reason",
 ]
 BASELINE_CALIB_COLUMNS: List[str] = [
     "wb_id", "g_bifacial", "dc_derate", "measured_ratio",
@@ -197,6 +197,7 @@ def _skipped_closure_row(
     poa_source: str,
     tcell_source: str,
     poa_coverage_pct: float = _NAN,
+    poa_fallback_pct: float = _NAN,
     tcell_coverage_pct: float = _NAN,
 ) -> dict:
     """Baris closure untuk string-hari yang tidak dievaluasi.
@@ -212,6 +213,7 @@ def _skipped_closure_row(
         "residual_kwh": _NAN,
         "residual_pct": _NAN,
         "poa_coverage_pct": poa_coverage_pct,
+        "poa_fallback_pct": poa_fallback_pct,
         "tcell_coverage_pct": tcell_coverage_pct,
         "poa_source": poa_source,
         "tcell_source": tcell_source,
@@ -382,6 +384,13 @@ class M2fLossAttribution(SubModule):
             # tiap timestamp NaN -- E_expected menyusut diam-diam untuk jam
             # yang tak tercakup dan L_total ikut menyusut tanpa jejak.
             poa_coverage = float(poa.notna().mean())
+            # pyranometer_per_ws mengisi WS yang kosong dari rata-rata 5 WS
+            # (PyranometerLoader.get_per_ws); antar-WS berbeda hingga +-10%,
+            # jadi porsinya dicatat. Sumber lain tidak punya attrs -> 0.
+            poa_fallback_pct = (
+                float(poa.attrs.get("fallback_filled", 0)) / len(idx) * 100.0
+                if len(idx) else 0.0
+            )
             tcell_coverage = float(tcell.notna().mean())
             if poa_coverage < coverage_min or tcell_coverage < coverage_min:
                 closure_rows.append(_skipped_closure_row(
@@ -390,6 +399,7 @@ class M2fLossAttribution(SubModule):
                     poa_source=poa_source,
                     tcell_source=tcell_source,
                     poa_coverage_pct=poa_coverage * 100.0,
+                    poa_fallback_pct=poa_fallback_pct,
                     tcell_coverage_pct=tcell_coverage * 100.0,
                 ))
                 continue
@@ -538,6 +548,7 @@ class M2fLossAttribution(SubModule):
                 # tidak terdefinisi -- NaN, bukan 0.0.
                 "residual_pct": (residual / l_total * 100.0) if l_total > 0 else _NAN,
                 "poa_coverage_pct": poa_coverage * 100.0,
+                "poa_fallback_pct": poa_fallback_pct,
                 "tcell_coverage_pct": tcell_coverage * 100.0,
                 # Dicatat supaya baseline yang berdiri di atas irradiance
                 # MODEL tidak tersaji seolah-olah hasil pengukuran.

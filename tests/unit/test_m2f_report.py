@@ -57,10 +57,11 @@ class _ConstantPOA:
 
     def __init__(
         self, value: float = POA_WM2, n_nan: int = 0, all_nan_for=None,
-        elevation: float = 60.0,
+        elevation: float = 60.0, fallback_filled: int = 0,
     ):
         self.value = value
         self.elevation = elevation
+        self.fallback_filled = fallback_filled
         self.n_nan = n_nan
         # Source yang "tidak punya data" -- meniru berkas pyranometer hilang.
         self.all_nan_for = set(all_nan_for or [])
@@ -74,6 +75,8 @@ class _ConstantPOA:
         series = pd.Series(self.value, index=idx, dtype=float)
         if self.n_nan:
             series.iloc[: self.n_nan] = np.nan
+        # Meniru PyranometerLoader.get_per_ws: posisi yang diisi dari avg.
+        series.attrs["fallback_filled"] = self.fallback_filled
         return series
 
     def get_solar_elevation(self, timestamps):
@@ -569,6 +572,19 @@ def test_partial_coverage_above_threshold_still_records_its_coverage(monkeypatch
     assert len(scored) == 1
     assert scored["poa_coverage_pct"].iloc[0] == pytest.approx(75.0)
     assert scored["tcell_coverage_pct"].iloc[0] == pytest.approx(100.0)
+
+
+def test_poa_filled_from_site_average_is_marked_in_closure(monkeypatch):
+    # WHY: pyranometer_per_ws diam-diam mengisi WS yang kosong dari rata-rata
+    # 5 WS, padahal antar-WS berbeda hingga +-10% -- E_expected string-hari
+    # itu berdiri di atas POA situs, bukan POA WS-nya. Cakupan tetap penuh
+    # (nilainya sah), tapi audit harus bisa melihat porsinya.
+    _install_providers(monkeypatch, poa=_ConstantPOA(fallback_filled=1))  # 1 dari 4
+    sm = M2fLossAttribution()
+    sm.run(_combined_df(), _config())
+    scored = _scored(sm)
+    assert scored["poa_coverage_pct"].iloc[0] == pytest.approx(100.0)
+    assert scored["poa_fallback_pct"].iloc[0] == pytest.approx(25.0)
 
 
 def test_skipped_string_day_does_not_inflate_site_e_expected(monkeypatch):

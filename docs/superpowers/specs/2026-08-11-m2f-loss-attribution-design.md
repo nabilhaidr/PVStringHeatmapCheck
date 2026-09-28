@@ -414,6 +414,12 @@ dihitung sejak awal.
   100,0% pada hari tanpa satu pun pembacaan nyata -- gate cakupan di atas
   tidak pernah menyala padahal seharusnya. `poa_source` yang benar-benar
   dipakai sekarang direkam sebagai kolom di `M2f_Closure`.
+- **Fallback avg di dalam `pyranometer_per_ws` (2026-09-28).**
+  `PyranometerLoader.get_per_ws` mengisi WS yang kosong dari rata-rata 5 WS
+  (sengaja, supaya WB yang WS-nya hilang tidak gagal massal). Nilainya sah,
+  jadi cakupan tetap dihitung penuh, tetapi antar-WS berbeda hingga +-10%.
+  Porsinya kini direkam sebagai `poa_fallback_pct` di `M2f_Closure` (persen
+  timestamp string-hari yang diisi dari avg; NaN pada baris yang di-skip).
 
 **Follow-up yang didefer, bukan ditutup:** `get_tcell` masih memakai
 `source="auto"` -- lubang yang sama kelasnya dengan `poa_source` di atas,

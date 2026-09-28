@@ -101,6 +101,15 @@ def test_auto_fallback_uses_per_ws_when_available(provider_with_pyranometer_only
     assert auto.iloc[0] == per_ws.iloc[0]
 
 
+def test_per_ws_fallback_count_survives_provider(provider_with_pyranometer_only):
+    # WHY: M2f menandai string-hari yang POA-nya diisi dari avg lewat
+    # attrs["fallback_filled"] loader; kalau provider membuangnya, tanda di
+    # M2f_Closure diam-diam selalu 0%.
+    ts = pd.date_range("2026-05-14 10:00", "2026-05-14 11:00", freq="5min")  # WS-2 NaN
+    per_ws = provider_with_pyranometer_only.get_poa(ts, "WB05", source=SOURCE_PYRANOMETER_PER_WS)
+    assert per_ws.attrs["fallback_filled"] == len(ts)
+
+
 def test_auto_fallback_to_avg_when_per_ws_nan(provider_with_pyranometer_only):
     """WB05 (-> WS-2) di noon, WS-2 NaN, fallback ke avg.
 
