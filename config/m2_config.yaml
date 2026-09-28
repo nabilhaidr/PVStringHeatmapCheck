@@ -346,8 +346,13 @@ m2f:
   # berbalik tanda se-armada antar hari. Estimatornya tetap ada; kembalikan
   # ke daftar ini (sesudah soiling) setelah detektor dibuat relatif terhadap
   # tetangga se-WB pada timestamp yang sama.
+  # curtailment = dispatch/henti dari jaringan (set point di bawah level
+  # normalnya, sejalan dengan Deem Dispatch operator); grid_export_limit =
+  # tertahan di plafon set point normal (batas kapasitas penyaluran jaringan
+  # 20 kV). Keduanya non-actionable dan saling lepas (2026-09-28).
   attribution_order:
     - curtailment
+    - grid_export_limit
     - availability_outage
     - dc_cable_fault
     - shading

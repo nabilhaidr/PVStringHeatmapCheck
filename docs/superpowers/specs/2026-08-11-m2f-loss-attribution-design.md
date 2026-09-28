@@ -158,8 +158,8 @@ Karena itu koreksinya dipisah dan dinamai jujur:
 - Sheet `M2f_BaselineCalib` (pengganti `M2f_BifacialCalib`) mencatat nilai
   yang dipakai plus `measured_ratio`: median rasio aktual / harapan-MENTAH per
   string-hari, hanya pada timestamp inverter ON dan tidak di-curtail
-  (`m2f.curtailment_keywords` ATAU plafon set point busbar, baris 0 tabel
-  ledger -- sejak 2026-09-28). Rasio dihitung terhadap baseline mentah supaya
+  (`m2f.curtailment_keywords` ATAU plafon set point busbar, baris 0/0b
+  tabel ledger -- sejak 2026-09-28). Rasio dihitung terhadap baseline mentah supaya
   menyalinnya ke config tidak menggandakan derate.
 - `calibrate_bifacial_gain` diganti nama menjadi `calibrate_dc_derate`.
 
@@ -191,7 +191,8 @@ diklaim tidak dapat diklaim lagi oleh kategori berprioritas lebih rendah.
 
 | # | Kategori | Counterfactual | Sumber detektor |
 |---|---|---|---|
-| 0 | `curtailment` | `E_expected` sepanjang interval dibatasi dari luar: status (`instructed shutdown`, `power limited`) ATAU daya AC tertahan di plafon set point busbar -- pembatasan penyaluran jaringan distribusi eksternal 20 kV; plafon = set point x Pmax inverter / Pmax busbar dari riwayat, ditambah penanda plateau bila riwayat kosong (2026-09-28). Sampel di plafon sering berstatus "Grid connected". Non-actionable (2026-09-27) | status + `m2f.curtailment_keywords`; `pv_pipeline/m2f/setpoint.py` + seksi `setpoint` di `site_geometry.yaml` (`IKN Generation.xlsx`, sheet `Setpoint`) |
+| 0 | `curtailment` | `E_expected` sepanjang interval DISPATCH/henti dari jaringan: daya di batas (plafon riwayat set point ATAU status `instructed shutdown`/`power limited`) saat set point bus di bawah level normalnya -- modus harian tertinggi 30 hari (menangkap 98,6% hari Deem Dispatch > 0 operator, 2024-12..2026-08); tanpa riwayat, status saja. Non-actionable (2026-09-27, dipisah 2026-09-28) | status + `m2f.curtailment_keywords`; `pv_pipeline/m2f/setpoint.py` + seksi `setpoint` di `site_geometry.yaml` (`IKN Generation.xlsx`, sheet `Setpoint`) |
+| 0b | `grid_export_limit` | `E_expected` sepanjang interval daya tertahan di plafon set point NORMAL -- batas kapasitas penyaluran jaringan distribusi eksternal 20 kV yang berlaku terus (plafon = set point x Pmax inverter / Pmax busbar), ditambah penanda plateau bila riwayat kosong/keliru. Sampel ini sering berstatus "Grid connected"; operator tidak mencatatnya sebagai curtailment. Non-actionable (2026-09-28) | `pv_pipeline/m2f/setpoint.py` |
 | 1 | `availability_outage` | `E_expected` sepanjang interval mati, KECUALI timestamp curtailment | `availability.py` |
 | 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `mppt_ratio` |
 | 3 | `shading` | referensi-diri: `aktual x (pr_reference / pr_proxy - 1)` pada jam ter-flag; `pr_reference` = median PR-proxy inverter itu hari itu. Hanya pola berarah (`shading_morning`/`_afternoon`); simetris = 0.0 (2026-09-27, menggantikan "median sibling") | `m2a/shading` (HourlyMetrics) |

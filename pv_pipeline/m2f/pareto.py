@@ -21,7 +21,8 @@ VITAL_FEW_THRESHOLD_PCT: float = 80.0
 # `curtailment` adalah keputusan grid/plant controller, bukan maintenance;
 # ikut dikumulatifkan, ia mendorong rugi yang bisa diperbaiki keluar dari
 # vital-few.
-NON_ACTIONABLE: List[str] = ["unexplained", "curtailment"]
+# `grid_export_limit` (plafon set point normal, batas jaringan 20 kV) sama.
+NON_ACTIONABLE: List[str] = ["unexplained", "curtailment", "grid_export_limit"]
 
 
 def build_pareto_table(totals: Dict[str, Optional[float]]) -> pd.DataFrame:

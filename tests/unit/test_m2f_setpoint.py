@@ -86,6 +86,55 @@ def test_clear_noon_peak_is_not_a_plateau():
     assert not plateau_mask(0.25 * POA, POA, 330.0).any()
 
 
+def _daily_history(values_by_day):
+    """Set point bus 1 per hari (06:00-17:50 @10 menit); nilai boleh dict jam->nilai."""
+    frames = []
+    for day, value in values_by_day.items():
+        idx = pd.date_range(f"{day} 06:00", f"{day} 17:50", freq="10min")
+        bus1 = pd.Series(value if not isinstance(value, dict) else np.nan, index=idx)
+        if isinstance(value, dict):
+            for start, v in sorted(value.items()):
+                bus1[bus1.index >= pd.Timestamp(f"{day} {start}")] = v
+        frames.append(pd.DataFrame({"Setpoint Busbar 1": bus1, "Setpoint Busbar 2": 30030.0}))
+    return SetpointCaps(pd.concat(frames), BUSBARS, PMAX)
+
+
+def test_setpoint_below_recent_normal_is_dispatch():
+    # WHY: operator mencatat Deem Dispatch saat set point diturunkan dari
+    # level biasanya. Level biasa = modus harian tertinggi 30 hari terakhir;
+    # definisi ini menangkap 98,6% hari Deem Dispatch > 0 (2024-12..2026-08).
+    caps = _daily_history({"2026-07-01": 25000.0, "2026-07-10": 12000.0})
+    below, known = caps.below_normal(
+        pd.DatetimeIndex(["2026-07-01 10:00", "2026-07-10 10:00"]), "WB03",
+    )
+    np.testing.assert_array_equal(below, [False, True])
+    assert known.all()
+
+
+def test_reduction_older_than_window_becomes_the_normal_cap():
+    # WHY: plafon yang diturunkan permanen adalah batas kapasitas jaringan
+    # yang baru, bukan dispatch selamanya.
+    caps = _daily_history({"2026-05-01": 25000.0, "2026-06-15": 12000.0})
+    below, _ = caps.below_normal(pd.DatetimeIndex(["2026-06-15 10:00"]), "WB03")
+    assert not below.any()
+
+
+def test_intraday_stop_is_dispatch():
+    # WHY: 2026-07-29 set point bus 2 = 0 pada 12:40-15:10 -- perintah henti di
+    # tengah hari berplafon normal.
+    caps = _daily_history({"2026-07-29": {"06:00": 25000.0, "12:40": 0.0, "15:20": 25000.0}})
+    below, _ = caps.below_normal(
+        pd.DatetimeIndex(["2026-07-29 10:00", "2026-07-29 13:00"]), "WB03",
+    )
+    np.testing.assert_array_equal(below, [False, True])
+
+
+def test_below_normal_is_unknown_outside_history():
+    caps = _daily_history({"2026-07-01": 25000.0})
+    below, known = caps.below_normal(pd.DatetimeIndex(["2026-09-05 10:00"]), "WB03")
+    assert not below.any() and not known.any()
+
+
 def _geometry(tmp_path, xlsx_name):
     geo = tmp_path / "geo.yaml"
     geo.write_text(

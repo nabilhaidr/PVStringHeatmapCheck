@@ -97,6 +97,18 @@ def test_curtailment_is_not_actionable_and_does_not_crowd_out_vital_few():
     assert bool(table.loc["dc_cable_fault", "vital_few"]) is True
 
 
+def test_grid_export_limit_is_not_actionable():
+    # WHY: batas kapasitas penyaluran jaringan 20 kV bukan target
+    # maintenance; ikut dikumulatifkan, ia mendorong rugi yang bisa
+    # diperbaiki keluar dari vital-few, sama seperti curtailment.
+    table = build_pareto_table(
+        _totals(grid_export_limit=50.0, soiling=30.0, dc_cable_fault=20.0)
+    ).set_index("category")
+    assert bool(table.loc["grid_export_limit", "actionable"]) is False
+    assert bool(table.loc["grid_export_limit", "vital_few"]) is False
+    assert bool(table.loc["dc_cable_fault", "vital_few"]) is True
+
+
 def test_cumulative_is_share_of_actionable_loss():
     # WHY: bila kumulatif dibagi TOTAL rugi, porsi non-actionable > 20%
     # membuat garis tak pernah mencapai 80% -- semua kategori actionable jadi

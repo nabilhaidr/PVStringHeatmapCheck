@@ -1079,26 +1079,61 @@ def _with_ac(df, ac_kw):
     return df
 
 
-def test_grid_connected_output_held_at_setpoint_cap_is_curtailment(monkeypatch):
-    # WHY: 2026-07-29 bus 1 tertahan di plafon set point dengan status "Grid
-    # connected", bukan "power limited". Dari status saja, energi yang
-    # terpotong jaringan jatuh ke unexplained dan menekan measured_ratio di
-    # hari cerah.
+SPLIT_ORDER = [
+    "curtailment", "grid_export_limit", "availability_outage", "dc_cable_fault",
+    "soiling", "unexplained",
+]
+
+
+def test_output_held_at_normal_setpoint_cap_is_grid_export_limit(monkeypatch):
+    # WHY: 2026-07-29 bus 1 tertahan di plafon set point normalnya dengan
+    # status "Grid connected". Itu batas kapasitas penyaluran jaringan 20 kV
+    # yang berlaku terus -- bukan dispatch (operator tidak mencatatnya sebagai
+    # curtailment) dan bukan target maintenance. Dari status saja, energinya
+    # jatuh ke unexplained.
     _install_providers(monkeypatch, setpoint=_setpoint_caps())
     df = _with_ac(
         _status_rows(["On-grid"] * 4, [1.0, 1.0, ACTUAL_KW, ACTUAL_KW]),
         [CAP_WB03, CAP_WB03, 200.0, 200.0],
     )
     sm = M2fLossAttribution()
-    sm.run(df, _config(attribution_order=CURTAIL_FIRST))
+    sm.run(df, _config(attribution_order=SPLIT_ORDER))
+    loss = _loss_by_category(sm)
+    assert loss["grid_export_limit"] == pytest.approx(
+        2 * (_expected_kwh_per_ts() - 1.0 * FREQ_HOURS)
+    )
+    assert loss["curtailment"] == pytest.approx(0.0)
+    assert loss["availability_outage"] == pytest.approx(0.0)
+
+
+def test_output_held_below_normal_setpoint_is_curtailment(monkeypatch):
+    # WHY: set point diturunkan dari level normalnya (dispatch/henti) adalah
+    # yang operator catat sebagai Deem Dispatch -- dipisah dari batas
+    # kapasitas supaya angka M2f bisa dibandingkan dengan laporan itu.
+    days = {"2026-05-01": 25000.0, "2026-05-13": 12000.0}
+    history = pd.concat([
+        pd.DataFrame({"Setpoint Busbar 1": value},
+                     index=pd.date_range(f"{day} 06:00", f"{day} 17:50", freq="10min"))
+        for day, value in days.items()
+    ])
+    _install_providers(
+        monkeypatch, setpoint=SetpointCaps(history, BUS_WB03, {"WB03": 330.0}),
+    )
+    cap_low = 12000.0 * 330.0 / 28240.0
+    df = _with_ac(
+        _status_rows(["On-grid"] * 4, [1.0, 1.0, ACTUAL_KW, ACTUAL_KW]),
+        [cap_low, cap_low, 100.0, 100.0],
+    )
+    sm = M2fLossAttribution()
+    sm.run(df, _config(attribution_order=SPLIT_ORDER))
     loss = _loss_by_category(sm)
     assert loss["curtailment"] == pytest.approx(
         2 * (_expected_kwh_per_ts() - 1.0 * FREQ_HOURS)
     )
-    assert loss["availability_outage"] == pytest.approx(0.0)
+    assert loss["grid_export_limit"] == pytest.approx(0.0)
 
 
-def test_output_at_full_setpoint_is_not_curtailment(monkeypatch):
+def test_output_at_full_setpoint_is_not_limited(monkeypatch):
     # WHY: set point = kapasitas penuh bus (bus 2 sepanjang 2025) tidak
     # membatasi; inverter di Pmax-nya bukan korban jaringan.
     _install_providers(monkeypatch, setpoint=_setpoint_caps(value=28240.0))
@@ -1107,8 +1142,10 @@ def test_output_at_full_setpoint_is_not_curtailment(monkeypatch):
         [330.0, 330.0, 200.0, 200.0],
     )
     sm = M2fLossAttribution()
-    sm.run(df, _config(attribution_order=CURTAIL_FIRST))
-    assert _loss_by_category(sm)["curtailment"] == pytest.approx(0.0)
+    sm.run(df, _config(attribution_order=SPLIT_ORDER))
+    loss = _loss_by_category(sm)
+    assert loss["curtailment"] == pytest.approx(0.0)
+    assert loss["grid_export_limit"] == pytest.approx(0.0)
 
 
 def test_measured_ratio_excludes_setpoint_capped_timestamps(monkeypatch):
@@ -1139,10 +1176,11 @@ class _RampPOA(_ConstantPOA):
         return pd.Series(np.linspace(700.0, 1000.0, len(idx)), index=idx)
 
 
-def test_plateau_marks_curtailment_when_setpoint_history_is_missing(monkeypatch):
+def test_plateau_marks_grid_export_limit_when_setpoint_history_is_missing(monkeypatch):
     # WHY: riwayat set point berhenti 2026-08-31 dan bisa keliru; sesudahnya
     # plafon hanya dikenali dari bentuknya -- daya AC datar di bawah Pmax
-    # sementara POA terus naik.
+    # sementara POA terus naik. Tanpa riwayat, dispatch tak bisa dibedakan;
+    # plateau stabil paling mungkin batas kapasitas.
     rows = []
     for ts in pd.date_range("2026-05-13 10:00", periods=8, freq="5min"):
         row = _rows("WB03-INV01", [ts], {"PV3": 3.0})[0]
@@ -1151,8 +1189,10 @@ def test_plateau_marks_curtailment_when_setpoint_history_is_missing(monkeypatch)
     no_history = SetpointCaps(pd.DataFrame(), BUS_WB03, {"WB03": 330.0})
     _install_providers(monkeypatch, poa=_RampPOA(), setpoint=no_history)
     sm = M2fLossAttribution()
-    sm.run(pd.DataFrame(rows), _config(attribution_order=CURTAIL_FIRST))
-    assert _loss_by_category(sm)["curtailment"] > 0.0
+    sm.run(pd.DataFrame(rows), _config(attribution_order=SPLIT_ORDER))
+    loss = _loss_by_category(sm)
+    assert loss["grid_export_limit"] > 0.0
+    assert loss["curtailment"] == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import warnings
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,7 @@ from pv_pipeline.m2f.estimators import (
     claim_availability_outage,
     claim_curtailment,
     claim_dc_cable_fault,
+    claim_grid_export_limit,
     claim_low_irradiance_eff,
     claim_shading,
     low_irradiance_deficit_kwh,
@@ -178,27 +179,43 @@ def _curtailed_mask(status: pd.Series, keywords: List[str]) -> pd.Series:
     )
 
 
-def _setpoint_capped(
-    group: pd.DataFrame, poa: pd.Series, caps: Optional[SetpointCaps], wb_id: str,
-) -> Tuple[np.ndarray, bool]:
-    """(mask, terukur): timestamp yang daya AC-nya tertahan plafon set point.
+class _Limits(NamedTuple):
+    """Pembatasan dari luar satu string-hari (lihat :func:`_setpoint_limits`)."""
 
-    Riwayat set point (``capped_mask``) DAN bentuk plateau (``plateau_mask``,
-    cadangan saat riwayat kosong/keliru) dipakai bersama. Terukur hanya bila
-    ada provider, Pmax WB dikenal, dan kolom daya AC inverter tersedia --
-    tanpa itu "tidak di plafon" tak bisa dibedakan dari "tidak dicek".
+    dispatch: np.ndarray       # -> curtailment
+    export_limit: np.ndarray   # -> grid_export_limit
+    measurable: bool           # riwayat/plateau bisa dicek sama sekali
+
+
+def _setpoint_limits(
+    group: pd.DataFrame, poa: pd.Series, caps: Optional[SetpointCaps], wb_id: str,
+    status_curtailed: np.ndarray,
+) -> _Limits:
+    """Pisahkan pembatasan dari luar: dispatch vs batas kapasitas penyaluran.
+
+    "Di batas" = daya AC di plafon riwayat set point ATAU status curtailment
+    (sampel di plafon sering berstatus "Grid connected"). Dispatch = di batas
+    saat set point bus di bawah level normalnya (modus harian tertinggi 30
+    hari, :meth:`SetpointCaps.below_normal`) atau saat riwayat tak tersedia --
+    status tetap curtailment seperti sebelum riwayat ada. Batas kapasitas =
+    di batas pada set point normal, ditambah plateau (cadangan saat riwayat
+    kosong/keliru; plateau stabil paling mungkin batas kapasitas). Terukur
+    hanya bila ada provider, Pmax WB dikenal, dan kolom daya AC tersedia.
     """
     none = np.zeros(len(group), dtype=bool)
-    if caps is None or AC_POWER_COL not in group.columns:
-        return none, False
-    pmax = caps.inverter_max_ac_kw(wb_id)
-    if pmax is None:
-        return none, False
+    pmax = caps.inverter_max_ac_kw(wb_id) if caps is not None else None
+    if pmax is None or AC_POWER_COL not in group.columns:
+        return _Limits(status_curtailed, none, False)
     p_ac = pd.to_numeric(group[AC_POWER_COL], errors="coerce").to_numpy(dtype=float)
     cap = caps.cap_kw(group.index, wb_id).to_numpy(dtype=float)
-    return (
-        capped_mask(p_ac, cap, pmax) | plateau_mask(p_ac, poa.to_numpy(dtype=float), pmax),
-        True,
+    at_limit = capped_mask(p_ac, cap, pmax) | status_curtailed
+    below, known = caps.below_normal(group.index, wb_id)
+    at_normal = known & ~below
+    plateau = plateau_mask(p_ac, poa.to_numpy(dtype=float), pmax)
+    return _Limits(
+        dispatch=at_limit & ~at_normal,
+        export_limit=(at_limit & at_normal) | (plateau & ~at_limit),
+        measurable=True,
     )
 
 
@@ -430,11 +447,17 @@ class M2fLossAttribution(SubModule):
                 ))
                 continue
 
-            # Plafon set point busbar (jaringan 20 kV): sampel di plafon sering
-            # berstatus "Grid connected", jadi status saja tidak menangkapnya.
-            capped, cap_measurable = _setpoint_capped(
-                group, poa, providers.get("setpoint"), wb_id,
+            # Pembatasan dari luar (jaringan 20 kV): dispatch -> curtailment,
+            # plafon set point normal -> grid_export_limit.
+            status_known = bool(curtailment_keywords) and "Inverter status" in group.columns
+            status_curtailed = (
+                _curtailed_mask(group["Inverter status"], curtailment_keywords).to_numpy(dtype=bool)
+                if status_known else np.zeros(len(idx), dtype=bool)
             )
+            limits = _setpoint_limits(
+                group, poa, providers.get("setpoint"), wb_id, status_curtailed,
+            )
+            limited = limits.dispatch | limits.export_limit
 
             g = float(gains.get(wb_id, 1.0))
             d = derates.get(wb_id, 1.0)
@@ -447,11 +470,11 @@ class M2fLossAttribution(SubModule):
             e_exp = e_raw * (g * d)
             e_act = compute_actual_energy_kwh(group[power_col])
             if "Inverter status" in group.columns:
-                # Tanpa ~capped, derate menyerap plafon jaringan yang hanya
+                # Tanpa ~limited, derate menyerap plafon jaringan yang hanya
                 # mengikat di hari cerah -- measured_ratio lalu ikut langit.
                 eligible = _calibration_mask(
                     group["Inverter status"], status_map, curtailment_keywords,
-                ).to_numpy(dtype=bool) & ~capped
+                ).to_numpy(dtype=bool) & ~limited
                 key = f"{string_id}|{day.date()}"
                 calib_expected.setdefault(wb_id, {})[key] = float(
                     e_raw.to_numpy()[eligible].sum()
@@ -473,18 +496,16 @@ class M2fLossAttribution(SubModule):
                 if category == "unexplained":
                     continue
                 if category == "curtailment":
-                    # Status (kata kunci) ATAU plafon set point. Bila keduanya
+                    # Dispatch/henti dari jaringan. Bila status maupun riwayat
                     # tak bisa dicek, "tidak di-curtail" tak bisa dibedakan dari
                     # "tidak dicek" -- dilewati (None), bukan klaim 0.0.
-                    status_known = bool(curtailment_keywords) and "Inverter status" in group.columns
-                    if not status_known and not cap_measurable:
+                    if not status_known and not limits.measurable:
                         continue
-                    curtailed = capped.copy()
-                    if status_known:
-                        curtailed |= _curtailed_mask(
-                            group["Inverter status"], curtailment_keywords,
-                        ).to_numpy(dtype=bool)
-                    claim_curtailment(ledger, curtailed_mask=curtailed)
+                    claim_curtailment(ledger, curtailed_mask=limits.dispatch)
+                elif category == "grid_export_limit":
+                    if not limits.measurable:
+                        continue
+                    claim_grid_export_limit(ledger, limited_mask=limits.export_limit)
                 elif category == "availability_outage":
                     if not can_classify_status or "Inverter status" not in group.columns:
                         continue
@@ -496,7 +517,7 @@ class M2fLossAttribution(SubModule):
                         group["Inverter status"], curtailment_keywords,
                     )
                     claim_availability_outage(
-                        ledger, down_mask=down.to_numpy(dtype=bool) & ~capped,
+                        ledger, down_mask=down.to_numpy(dtype=bool) & ~limited,
                     )
                 elif category == "dc_cable_fault":
                     string_frames = frames_by_string.get(string_id)

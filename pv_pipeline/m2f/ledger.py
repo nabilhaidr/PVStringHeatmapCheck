@@ -24,6 +24,7 @@ LOCKED_CATEGORIES: List[str] = ["microcrack", "bifacial_underperf"]
 # Kategori yang punya estimator di v1.
 CLAIMABLE_CATEGORIES: List[str] = [
     "curtailment",
+    "grid_export_limit",
     "availability_outage",
     "dc_cable_fault",
     "shading",

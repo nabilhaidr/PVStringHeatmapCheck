@@ -54,6 +54,27 @@ def claim_curtailment(
     return ledger.claim("curtailment", np.where(mask, remaining, 0.0))
 
 
+def claim_grid_export_limit(
+    ledger: LossLedger,
+    *,
+    limited_mask: np.ndarray,
+) -> float:
+    """Klaim seluruh sisa rugi saat daya tertahan di plafon set point NORMAL.
+
+    Batas kapasitas penyaluran jaringan distribusi 20 kV yang berlaku terus
+    (bukan dispatch yang menurunkan set point -- itu ``curtailment``).
+    Counterfactual dan alasan mengklaim seluruh sisa sama dengan
+    :func:`claim_curtailment`. Non-actionable (``pareto.NON_ACTIONABLE``).
+    """
+    mask = np.asarray(limited_mask, dtype=bool)
+    remaining = ledger.remaining()
+    if mask.shape != remaining.shape:
+        raise ValueError(
+            f"[m2f] panjang limited_mask {mask.shape} != ledger {remaining.shape}"
+        )
+    return ledger.claim("grid_export_limit", np.where(mask, remaining, 0.0))
+
+
 def claim_dc_cable_fault(
     ledger: LossLedger,
     *,
