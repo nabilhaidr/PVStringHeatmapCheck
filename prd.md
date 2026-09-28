@@ -1258,14 +1258,14 @@ The product is considered usable for engineering review when:
 - Mature soiling SRR workflow. (Done 2026-07: temperature correction, M2e availability mask, monthly loss breakdown, per-string cleaning recommendation, sawtooth replotting from workbook.)
 - Separate soiling from shading per string, below inverter-aggregate resolution. (Done 2026-08: `string_intraday_diagnostic` module, cable voltage-drop evidence, and ground-geometry evidence derived from the as-built DXF and the survey DSM. See 8.15.)
 - Add curtailment-aware gating to detector decisions.
-- Add complete loss waterfall. (Done 2026-08: modul `pv_pipeline/m2f/` — ledger klaim sekuensial, tabel Pareto, grafik waterfall, terangkai lewat `notebook/m2f_loss_attribution.ipynb`. Menunggu data POA/Tcell untuk menghasilkan angka.)
+- Add complete loss waterfall. (Done 2026-08: modul `pv_pipeline/m2f/` — ledger klaim sekuensial, tabel Pareto, grafik waterfall, terangkai lewat `notebook/m2f_loss_attribution.ipynb`. Run nyata pertama 2026-08-31 dengan POA/Tcell terukur; angkanya belum layak untuk keputusan biaya sampai `m2f.dc_derate_per_wb` dikalibrasi dari batch multi-hari — lihat spec M2f "Revisi 2026-09-27".)
 
 ### Phase 3: Advanced Analytics
 
 - Train LSTM Autoencoder using healthy baseline.
 - Add bifacial gain analytics.
 - Add microcrack/degradation-specific indicators.
-- Add stronger residual attribution engine. (Sebagian 2026-08: v1 mengatribusikan availability_outage, dc_cable_fault, dan soiling; shading dan low_irradiance_eff masih jatuh ke `unexplained` — v2.)
+- Add stronger residual attribution engine. (v2 selesai 2026-09-27: selain availability_outage, dc_cable_fault, dan soiling (v1), kini shading, low_irradiance_eff, dan curtailment (non-actionable) diatribusikan; rekap bulanan lewat `rekap_m2f.py`. `unexplained` masih besar karena baseline belum dikalibrasi, bukan karena kategori tanpa estimator.)
 
 ### Phase 4: Dashboard and Operations
 
