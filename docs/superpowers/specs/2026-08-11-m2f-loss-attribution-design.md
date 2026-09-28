@@ -184,7 +184,7 @@ diklaim tidak dapat diklaim lagi oleh kategori berprioritas lebih rendah.
 | 2 | `dc_cable_fault` | `(I_sibling_median - I_string) * V * dt` | `peer_zscore`, `open_circuit`, `mppt_ratio` |
 | 3 | `shading` | referensi-diri: `aktual x (pr_reference / pr_proxy - 1)` pada jam ter-flag; `pr_reference` = median PR-proxy inverter itu hari itu. Hanya pola berarah (`shading_morning`/`_afternoon`); simetris = 0.0 (2026-09-27, menggantikan "median sibling") | `m2a/shading` (HourlyMetrics) |
 | 4 | `soiling` | `p_loss * E_expected` (energi baseline bersih per timestamp, dipotong ke sisa ledger) | `m2a/soiling` |
-| 5 | `low_irradiance_eff` | hanya inverter `low_irradiance_underperform`: `aktual x (pr_fit / pr_aktual - 1)` pada POA [50,250], `pr_fit` = fit PR-proxy pita menengah diekstrapolasi (2026-09-27) | `m2a/low_irradiance` (LowIrradianceFit) |
+| 5 | `low_irradiance_eff` | hanya inverter-hari `low_irradiance_underperform`: `aktual x (1 / low_ratio - 1)` pada POA [50,250] saat elevasi matahari >= `low_band_min_elevation_deg` (30°); counterfactual = setara median tetangga se-WB (2026-09-28, menggantikan ekstrapolasi fit pita menengah) | `m2a/low_irradiance` (LowIrradianceFit) |
 | 6 | `microcrack`, `bifacial_underperf` | -- | `None` |
 | 7 | `unexplained` | sisa ledger (termasuk `ground_fault`, lihat di bawah) | -- |
 
@@ -470,6 +470,11 @@ Tes menguji maksud, bukan sekadar perilaku (Rule 9).
   `low_irradiance_underperform`; 2025-12-01: nol), dan tafsir "slope_low < 0 =
   Rs tinggi" terbalik secara fisika. Estimator tetap ada dan kembali ke urutan
   setelah detektornya dibuat relatif terhadap tetangga se-WB.
+  **2026-09-28 (lanjutan): detektor sudah relatif-tetangga** dan estimator
+  disesuaikan (baris 5 tabel ledger). Uji 5 hari lokal: 0 inverter di-flag,
+  termasuk kedua hari hujan. Kategori tetap di luar `attribution_order`
+  sampai batch banyak hari menunjukkan flag yang berulang pada inverter yang
+  sama (keputusan owner).
 - **v3** -- `microcrack` dan `bifacial_underperf`; terkunci sampai tersedia EL
   imaging + IV tracer dan sensor rear-POA.
 

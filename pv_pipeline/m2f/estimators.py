@@ -137,32 +137,28 @@ def shading_deficit_kwh(actual_kwh: pd.Series, hourly: pd.DataFrame) -> np.ndarr
 def low_irradiance_deficit_kwh(
     actual_kwh: np.ndarray,
     poa_wm2: np.ndarray,
-    inverter_kw: np.ndarray,
+    elevation_deg: np.ndarray,
     *,
-    intercept_mid: float,
-    slope_mid: float,
+    low_ratio: float,
     poa_low_min: float,
     poa_low_max: float,
+    min_elevation_deg: float,
 ) -> np.ndarray:
-    """Defisit pita cahaya rendah pada inverter yang di-flag M2aLowIrradiance.
+    """Defisit cahaya rendah pada inverter-hari yang di-flag M2aLowIrradiance.
 
-    Counterfactual: PR-proxy (kW per W/m2) fit pita menengah, diekstrapolasi
-    ke POA pita rendah (``intercept_mid + slope_mid x POA``). Defisit per
-    timestamp = ``aktual x (pr_fit / pr_aktual - 1)`` di dalam pita, nol di
-    luar pita. Timestamp tanpa daya inverter dilewati (outage, bukan
-    low-light). ``inverter_kw`` harus jumlah daya PV yang sama dengan yang
-    dipakai detektor, dan POA dari sumber yang sama dengan fit-nya.
+    Counterfactual: di pita rendah, inverter berkinerja setara median
+    tetangga se-WB -- ``low_ratio`` adalah rasio efisiensinya terhadap median
+    itu. Defisit = ``aktual x (1 / low_ratio - 1)``, HANYA pada sampel yang
+    sama dengan yang dipakai detektor mengukur ``low_ratio``: POA di pita
+    rendah DAN elevasi matahari >= ``min_elevation_deg`` (awan siang, bukan
+    matahari rendah). Nol di tempat lain.
     """
     actual = np.asarray(actual_kwh, dtype=float)
     poa = np.asarray(poa_wm2, dtype=float)
-    inverter = np.asarray(inverter_kw, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        factor = (intercept_mid + slope_mid * poa) / (inverter / poa) - 1.0
-    usable = (
-        (poa >= poa_low_min) & (poa <= poa_low_max)
-        & (inverter > 0.0) & np.isfinite(factor)
-    )
-    return np.where(usable, actual * np.clip(factor, 0.0, None), 0.0)
+    elevation = np.asarray(elevation_deg, dtype=float)
+    factor = max(0.0, 1.0 / float(low_ratio) - 1.0) if low_ratio > 0 else 0.0
+    usable = (poa >= poa_low_min) & (poa <= poa_low_max) & (elevation >= min_elevation_deg)
+    return np.where(usable, actual * factor, 0.0)
 
 
 def _claim_deficit(ledger: LossLedger, category: str, deficit_kwh: np.ndarray) -> float:

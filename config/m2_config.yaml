@@ -286,19 +286,22 @@ m2a_soiling:
   pv_max: 28                         # PV string inventory upper bound
 
 # Fase 3 Part 2 Task #6 - M2a Low Irradiance Performance Check.
-# Default OFF (opt-in). Detects modules underperforming specifically di low
-# POA range (50-250 W/m^2) via linear regression PR_proxy vs POA. Distinguish
-# vs uniform soiling: low band slope flagged + mid band slope OK =
-# low_irradiance_underperform (high series resistance modules); both bands
-# flagged = general_underperform (soiling-like).
+# Rancang ulang 2026-09-28: efisiensi pita rendah (50-250 W/m^2, elevasi
+# matahari >= 30 derajat = awan, bukan matahari rendah) RELATIF terhadap
+# tetangga se-WB pada timestamp yang sama. Flag bila low_ratio < 0.90 DAN
+# pencilan bawah se-WB (robust z < -3). Versi lama (tanda kemiringan OLS
+# absolut) mengikuti cuaca: 31 + 128 flag di hari hujan 2026-07-01, nol di
+# 2025-12-01. general_underperform tidak lagi dihasilkan.
 m2a_low_irradiance:
   enabled: true                     # Opt-in feature flag
   poa_low_range: [50.0, 250.0]       # Low POA band (W/m^2) -- target analysis range
   poa_mid_range: [300.0, 800.0]      # Mid POA band -- soiling vs low-light cross-check
-  min_low_samples: 30                # Min samples di low band for regression
+  min_low_samples: 12                # Sampel pita rendah bermatahari tinggi (1 jam @5 menit); 30 membuat 4 dari 5 hari uji tak terevaluasi
   min_mid_samples: 30                # Min samples di mid band for cross-check
-  slope_threshold: 0.0               # slope_low < threshold -> flag (default 0 = negative)
-  r_squared_min: 0.3                 # Min R^2 for finding emission
+  low_ratio_threshold: 0.90          # low_ratio < ini -> kandidat flag
+  robust_z_min: 3.0                  # ...DAN pencilan bawah se-WB (z < -3)
+  low_band_min_elevation_deg: 30.0   # pita rendah hanya saat matahari tinggi
+  min_peers: 5                       # minimal inverter se-WB per timestamp
   hour_range: [6.0, 18.0]            # Analysis window (sunrise..sunset)
   hour_cutoff_end: 18.0              # Defensive sunset
   solar_elevation_min_deg: 5.0       # Fase 2 elevation filter

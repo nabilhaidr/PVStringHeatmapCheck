@@ -1,5 +1,7 @@
 # M2 Reverse Engineering — Iterasi 7: M2aLowIrradiance
 
+> **USANG sejak 2026-09-28.** Dokumen ini mendeskripsikan detektor OLS lama (`slope_low`, `r_squared`, `general_underperform`), yang dihapus. Detektor kini relatif-tetangga: `low_ratio` = median rasio efisiensi pita rendah (matahari ≥ 30°) terhadap median tetangga se-WB pada timestamp yang sama; flag bila < 0,90 DAN robust-z < −3 per WB-hari. Alasan dan uji data nyata: `M2_Family_Summary.md` #6. Sheet workbook iterasi 7 belum dibangun ulang.
+
 **Modul**: `pv_pipeline/m2a/low_irradiance.py` (516 baris)
 **Class utama**: `M2aLowIrradiance(SubModule)` — `name = "M2a_low_irradiance"`
 **Sifat**: detektor **fisika/statistik** (regresi linier), **opt-in** (`enabled` default `False`; di config IKN `True`).

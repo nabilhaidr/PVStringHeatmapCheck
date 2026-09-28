@@ -207,19 +207,19 @@ DEFAULT_M2_CONFIG: Dict[str, Any] = {
         "pv_max": 28,
     },
     # Fase 3 Part 2 Task #6 - M2a Low Irradiance Performance Check.
-    # Default OFF (opt-in). Per inverter, regress PR_proxy vs POA dalam low band
-    # (default 50-250 W/m^2); flag slope_low < threshold dengan minimum R^2.
-    # Disambiguate via mid-band (300-800 W/m^2) regression:
-    #   - low flagged + mid OK   -> "low_irradiance_underperform" (high Rs modules)
-    #   - low flagged + mid flagged -> "general_underperform" (soiling-like)
+    # Rancang ulang 2026-09-28: efisiensi pita rendah RELATIF terhadap tetangga
+    # se-WB pada timestamp yang sama (lihat docstring m2a/low_irradiance.py).
+    # Tanda kemiringan absolut versi lama mengikuti cuaca, bukan modul.
     "m2a_low_irradiance": {
         "enabled": True,                       # Opt-in feature flag
         "poa_low_range": [50.0, 250.0],         # Low POA band (W/m^2)
         "poa_mid_range": [300.0, 800.0],        # Mid POA band for soiling cross-check
-        "min_low_samples": 30,                  # Min samples di low band
+        "min_low_samples": 12,                  # Min samples pita rendah (1 jam @5 menit)
         "min_mid_samples": 30,                  # Min samples di mid band
-        "slope_threshold": 0.0,                 # slope_low < 0 -> flag
-        "r_squared_min": 0.3,                   # Min fit quality untuk emit finding
+        "low_ratio_threshold": 0.90,            # low_ratio < ini -> kandidat flag
+        "robust_z_min": 3.0,                    # ...DAN pencilan bawah se-WB
+        "low_band_min_elevation_deg": 30.0,     # pita rendah = awan, bukan matahari rendah
+        "min_peers": 5,                         # inverter se-WB per timestamp
         "hour_range": [6.0, 18.0],              # Analysis window (sunrise..sunset)
         "hour_cutoff_end": 18.0,                # Defensive sunset
         "solar_elevation_min_deg": 5.0,         # Fase 2 elevation filter

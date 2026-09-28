@@ -45,20 +45,20 @@ def test_shading_deficit_skips_hours_without_production():
     np.testing.assert_allclose(shading_deficit_kwh(actual, hourly), [0.0, 0.0])
 
 
-def test_low_irradiance_deficit_only_inside_low_band():
-    # WHY: counterfactual = PR-proxy pita menengah diekstrapolasi ke POA
-    # rendah. Di luar pita [50, 250] estimator ini tidak berlaku sama
-    # sekali; timestamp tanpa daya inverter adalah outage, bukan low-light.
-    actual = np.array([0.5, 0.5, 0.5, 0.5])
-    poa = np.array([100.0, 200.0, 500.0, 150.0])
-    inverter_kw = np.array([1.0, 4.0, 1.0, 0.0])
+def test_low_irradiance_deficit_only_in_high_sun_low_band():
+    # WHY: counterfactual = inverter berkinerja setara median tetangga se-WB,
+    # yaitu aktual / low_ratio. Hanya pada sampel yang dipakai detektor
+    # mengukur low_ratio: pita rendah DAN matahari tinggi (awan siang).
+    actual = np.array([0.8, 0.8, 0.8, 0.8])
+    poa = np.array([150.0, 150.0, 500.0, np.nan])
+    elevation = np.array([60.0, 20.0, 60.0, 60.0])
     deficit = low_irradiance_deficit_kwh(
-        actual, poa, inverter_kw,
-        intercept_mid=0.02, slope_mid=0.0, poa_low_min=50.0, poa_low_max=250.0,
+        actual, poa, elevation, low_ratio=0.8,
+        poa_low_min=50.0, poa_low_max=250.0, min_elevation_deg=30.0,
     )
-    # t0: pr_aktual 0.01, pr_fit 0.02 -> faktor 1.0; t1: pr_aktual 0.02 -> 0;
-    # t2: di luar pita; t3: inverter tidak berproduksi.
-    np.testing.assert_allclose(deficit, [0.5, 0.0, 0.0, 0.0])
+    # t0: 0.8 x (1/0.8 - 1) = 0.2; t1: matahari rendah; t2: di luar pita;
+    # t3: POA tak terukur.
+    np.testing.assert_allclose(deficit, [0.2, 0.0, 0.0, 0.0])
 
 
 def test_v2_claims_land_in_their_own_categories():

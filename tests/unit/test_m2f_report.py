@@ -55,8 +55,12 @@ class _ConstantPOA:
     dapat membuktikan orchestrator tidak jatuh ke ``source="auto"``.
     """
 
-    def __init__(self, value: float = POA_WM2, n_nan: int = 0, all_nan_for=None):
+    def __init__(
+        self, value: float = POA_WM2, n_nan: int = 0, all_nan_for=None,
+        elevation: float = 60.0,
+    ):
         self.value = value
+        self.elevation = elevation
         self.n_nan = n_nan
         # Source yang "tidak punya data" -- meniru berkas pyranometer hilang.
         self.all_nan_for = set(all_nan_for or [])
@@ -71,6 +75,9 @@ class _ConstantPOA:
         if self.n_nan:
             series.iloc[: self.n_nan] = np.nan
         return series
+
+    def get_solar_elevation(self, timestamps):
+        return pd.Series(self.elevation, index=pd.DatetimeIndex(timestamps), dtype=float)
 
 
 class _ConstantTcell:
@@ -1096,15 +1103,15 @@ def test_shading_from_other_poa_source_or_day_stays_unmeasured(stubbed):
 
 
 LOW_FIT = {
-    "inverter_id": "WB03-INV01", "poa_source": POA_SOURCE,
-    "intercept_mid": 0.01, "slope_mid": 0.0,
+    "inverter_id": "WB03-INV01", "day": pd.Timestamp("2026-05-13"),
+    "poa_source": POA_SOURCE, "low_ratio": 0.8,
     "classification": "low_irradiance_underperform",
 }
 
 
-def _low_light_run(monkeypatch, **fit_overrides):
-    """POA 150 W/m2 (di pita rendah), PV3 = 1.0 kW -> PR-proxy 1/150."""
-    _install_providers(monkeypatch, poa=_ConstantPOA(value=150.0))
+def _low_light_run(monkeypatch, elevation=60.0, **fit_overrides):
+    """POA 150 W/m2 (pita rendah), matahari tinggi, PV3 = 1.0 kW."""
+    _install_providers(monkeypatch, poa=_ConstantPOA(value=150.0, elevation=elevation))
     df = pd.DataFrame(_rows("WB03-INV01", INDEX, {"PV3": 1.0}))
     sm = M2fLossAttribution()
     sm.run(df, _config(
@@ -1114,13 +1121,20 @@ def _low_light_run(monkeypatch, **fit_overrides):
     return sm
 
 
-def test_low_irradiance_claims_deficit_against_mid_band_fit(monkeypatch):
-    # WHY: counterfactual = PR-proxy pita menengah (0.01) diekstrapolasi ke
-    # POA rendah; aktual 1/150 -> faktor 0.01 / (1/150) - 1 = 0.5.
+def test_low_irradiance_claims_deficit_against_peer_median(monkeypatch):
+    # WHY: counterfactual = setara median tetangga se-WB; low_ratio 0.8 ->
+    # aktual x (1/0.8 - 1) = aktual x 0.25 di pita rendah bermatahari tinggi.
     sm = _low_light_run(monkeypatch)
     assert _loss_by_category(sm)["low_irradiance_eff"] == pytest.approx(
-        len(INDEX) * 1.0 * FREQ_HOURS * 0.5
+        len(INDEX) * 1.0 * FREQ_HOURS * 0.25
     )
+
+
+def test_low_irradiance_ignores_low_sun_samples(monkeypatch):
+    # WHY: low_ratio diukur hanya saat matahari >= 30 derajat; mengklaimnya
+    # di pagi/sore akan menyamakan bayangan geometri dengan cacat low-light.
+    sm = _low_light_run(monkeypatch, elevation=20.0)
+    assert _loss_by_category(sm)["low_irradiance_eff"] == pytest.approx(0.0)
 
 
 def test_low_irradiance_normal_inverter_is_measured_zero(monkeypatch):
@@ -1131,7 +1145,10 @@ def test_low_irradiance_normal_inverter_is_measured_zero(monkeypatch):
 def test_low_irradiance_unevaluated_or_other_source_stays_unmeasured(monkeypatch):
     # WHY: "insufficient_data" berarti fit tidak pernah dihitung; fit dari
     # sumber POA lain tidak sebanding dengan POA yang dipakai M2f.
-    for overrides in ({"classification": "insufficient_data"}, {"poa_source": "auto"}):
+    for overrides in (
+        {"classification": "insufficient_data"}, {"poa_source": "auto"},
+        {"day": pd.Timestamp("2026-05-14")},
+    ):
         sm = _low_light_run(monkeypatch, **overrides)
         assert "low_irradiance_eff" not in _categories(sm)
 

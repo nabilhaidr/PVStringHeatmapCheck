@@ -29,7 +29,10 @@ from pv_pipeline.m2f.baseline import (
     compute_expected_energy_kwh,
 )
 from pv_pipeline.m2f.deficit import reduce_deficit_frames
-from pv_pipeline.m2a.low_irradiance import DEFAULT_POA_LOW_RANGE
+from pv_pipeline.m2a.low_irradiance import (
+    DEFAULT_LOW_BAND_MIN_ELEVATION_DEG,
+    DEFAULT_POA_LOW_RANGE,
+)
 from pv_pipeline.m2f.estimators import (
     claim_availability_outage,
     claim_curtailment,
@@ -126,12 +129,12 @@ def _index_shading(
 
 def _index_low_irradiance(
     fit: Optional[pd.DataFrame], poa_source: str,
-) -> Dict[str, pd.Series]:
-    """LowIrradianceFit per inverter yang BENAR-BENAR dievaluasi.
+) -> Dict[Tuple[str, pd.Timestamp], pd.Series]:
+    """LowIrradianceFit per (inverter_id, hari) yang BENAR-BENAR dievaluasi.
 
-    "insufficient_data" berarti fit tidak pernah dihitung -- dibuang supaya
-    low_irradiance_eff tetap None, bukan 0.0. Fit dari sumber POA lain tidak
-    sebanding dengan POA yang M2f pakai untuk mengevaluasinya.
+    "insufficient_data" berarti low_ratio tidak pernah dihitung -- dibuang
+    supaya low_irradiance_eff tetap None, bukan 0.0. Baris dari sumber POA
+    lain dibuang: pita rendah dan elevasinya diukur terhadap POA itu.
     """
     if fit is None or fit.empty:
         return {}
@@ -139,21 +142,10 @@ def _index_low_irradiance(
         (fit["poa_source"] == poa_source)
         & (fit["classification"] != "insufficient_data")
     ]
-    return {str(row["inverter_id"]): row for _, row in subset.iterrows()}
-
-
-def _inverter_power_kw(group: pd.DataFrame, empty_slots: set) -> pd.Series:
-    """Jumlah daya PV inverter per timestamp (kW), slot kosong dilewati.
-
-    Definisi yang sama dengan ``M2aLowIrradiance.build_inverter_power_series``
-    -- PR-proxy fit detektor dan PR-proxy aktual di sini harus sebanding.
-    """
-    cols = [
-        col for col in group.columns
-        if (match := PV_POWER_RE.search(str(col)))
-        and int(match.group(1)) not in empty_slots
-    ]
-    return group[cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    return {
+        (str(row["inverter_id"]), pd.Timestamp(row["day"]).normalize()): row
+        for _, row in subset.iterrows()
+    }
 
 
 def _down_mask(status: pd.Series, status_map: dict) -> pd.Series:
@@ -331,12 +323,12 @@ class M2fLossAttribution(SubModule):
         empty_pv_map = load_empty_pv_map(config)
         shading_by_day = _index_shading(cfg.get("shading_hourly"), poa_source)
         low_irr_fits = _index_low_irradiance(cfg.get("low_irradiance_fit"), poa_source)
-        # Pita yang sama dengan detektornya -- satu sumber config.
-        poa_low_min, poa_low_max = (
-            (config.get("m2a_low_irradiance") or {}).get(
-                "poa_low_range", DEFAULT_POA_LOW_RANGE,
-            )
-        )
+        # Pita dan batas elevasi yang sama dengan detektornya -- satu sumber config.
+        low_irr_cfg = config.get("m2a_low_irradiance") or {}
+        poa_low_min, poa_low_max = low_irr_cfg.get("poa_low_range", DEFAULT_POA_LOW_RANGE)
+        low_band_min_elevation = float(low_irr_cfg.get(
+            "low_band_min_elevation_deg", DEFAULT_LOW_BAND_MIN_ELEVATION_DEG,
+        ))
 
         per_string_rows: List[dict] = []
         closure_rows: List[dict] = []
@@ -496,21 +488,21 @@ class M2fLossAttribution(SubModule):
                         deficit = np.zeros(len(idx))
                     claim_shading(ledger, deficit_kwh=deficit)
                 elif category == "low_irradiance_eff":
-                    fit = low_irr_fits.get(inverter_id)
+                    fit = low_irr_fits.get((inverter_id, day))
                     if fit is None:
                         continue
                     if fit["classification"] == "low_irradiance_underperform":
-                        empty_slots = {
-                            int(n) for n in empty_pv_map.get(inverter_id.upper(), [])
-                        }
                         deficit = low_irradiance_deficit_kwh(
                             e_act.to_numpy(),
                             poa.to_numpy(dtype=float),
-                            _inverter_power_kw(group, empty_slots).to_numpy(dtype=float),
-                            intercept_mid=float(fit["intercept_mid"]),
-                            slope_mid=float(fit["slope_mid"]),
+                            np.asarray(
+                                providers["poa"].get_solar_elevation(idx).reindex(idx),
+                                dtype=float,
+                            ),
+                            low_ratio=float(fit["low_ratio"]),
                             poa_low_min=float(poa_low_min),
                             poa_low_max=float(poa_low_max),
+                            min_elevation_deg=low_band_min_elevation,
                         )
                     else:
                         # Dievaluasi, tanpa anomali cahaya rendah.

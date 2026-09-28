@@ -1,66 +1,49 @@
 """M2a Low-Irradiance Performance Check (Fase 3 Part 2 Task #6).
 
-Detects modules underperforming specifically at LOW POA range (50-250 W/m^2)
-via linear regression of PR-proxy vs POA. Disambiguates low-light
-underperformance from uniform soiling by comparing low-range slope vs
-mid-range slope.
+Rancang ulang 2026-09-28: deviasi RELATIF TERHADAP TETANGGA se-WB.
 
-Algorithm
----------
-Per inverter, per analysis window (typically 1 day):
+Versi lama menilai tanda kemiringan PR-proxy (P/POA) terhadap POA per
+inverter. Uji 4 hari nyata: tanda itu mengikuti cuaca, bukan modul --
+kemiringan pita menengah negatif di ~100% inverter setiap hari, pita rendah
+negatif di 91% inverter pada hari hujan dan 0% pada hari lain, dan klasifikasi
+berbalik antar hari untuk modul yang sama (31 + 128 flag vs 0). Efek bersama
+se-armada (pyranometer titik vs array, porsi difus/bifacial) jauh lebih besar
+dari sinyal per inverter; tafsir "slope_low < 0 = Rs tinggi" juga terbalik
+secara fisika (Rs merugikan di iradiansi TINGGI).
 
-1. Filter daylight samples (POA gate + solar_elevation + shutdown).
-2. Compute per-sample PR_proxy = P_inv_kw / POA_W_per_m2 (relative metric,
-   no per-inverter capacity needed -- consistent dengan M2aShading).
-3. Split samples into two POA bands:
-       low_band  = [poa_low_min, poa_low_max]   default [50, 250]  W/m^2
-       mid_band  = [poa_mid_min, poa_mid_max]   default [300, 800] W/m^2
-4. Per band, fit linear regression:
-       PR_proxy = a + b * POA
-   Compute slope (b), intercept (a), R^2.
-5. Flag rule:
-       slope_low < slope_threshold (default 0.0 -> negative slope flag)
-       AND r_squared_low >= r_squared_min (default 0.3)
-   Means PR-proxy decreases or stays flat as POA rises di low range --
-   signature of high series-resistance modules / low-light underperformance.
+Algoritma (per inverter, per HARI):
 
-Classification (disambiguation vs soiling)
-------------------------------------------
-   - slope_low < threshold AND slope_mid >= threshold:
-       fault_type = "low_irradiance_underperform"
-       Low-light-specific issue. Module Rs high -> poor low-light response,
-       but mid-range PR normal. Action: thermography drone scan.
-   - slope_low < threshold AND slope_mid < threshold:
-       fault_type = "general_underperform"
-       Both bands underperform -> uniform PR drop. Likely soiling, sensor
-       calibration drift, or DC cable degradation. M2a Soiling (Task #5)
-       will give better signal once >=6 mo data + precipitation available.
-   - slope_low >= threshold (or insufficient samples):
-       no finding.
+1. Sampel siang: gerbang POA + elevasi + shutdown (seperti sebelumnya).
+2. PR-proxy = P_inv / POA; efisiensi relatif e = PR-proxy / median PR-proxy
+   inverter itu di pita menengah -- kapasitas inverter ternormalisasi.
+3. dev(t) = e_i(t) / median e_j(t) inverter se-WB pada timestamp yang SAMA
+   (minimal ``min_peers``). Satu WB berbagi satu pyranometer, jadi POA dan
+   cuaca saling meniadakan.
+4. low_ratio = median dev di pita rendah dengan elevasi matahari >=
+   ``low_band_min_elevation_deg``: POA rendah karena AWAN di siang hari, bukan
+   karena matahari rendah (pagi/sore tercampur bayangan geometri -- WB07-INV15
+   turun hanya di hari cerah, normal di hari hujan).
+5. Flag "low_irradiance_underperform" bila low_ratio < ``low_ratio_threshold``
+   DAN robust z terhadap median/MAD low_ratio se-WB hari itu < -``robust_z_min``
+   -- hari berawan konvektif memberi sebaran simetris lebar yang bukan cacat.
 
-Default OFF (opt-in via config["m2a_low_irradiance"]["enabled"]=True),
-mirror Wave 9 / M2IForest / M2aShading pattern.
+Kelas ``general_underperform`` tidak lagi dihasilkan: normalisasi per inverter
+menghapus rugi seragam by design (wilayah detektor lain). Kuncinya tetap di
+LowIrradianceSummary (nilai 0) demi kompatibilitas dasbor trends.
+
+Default OFF (opt-in via config["m2a_low_irradiance"]["enabled"]=True).
 
 Outputs
 -------
-    Findings : one M2Finding per flagged inverter.
-               fault_type = "low_irradiance_underperform"
-                          or "general_underperform".
-               severity   = CRITICAL/HIGH/MEDIUM/INFO by |slope_low|
-                            magnitude + R^2.
-               value      = slope_low (negative = bad).
-               threshold  = slope_threshold (decision boundary).
-               evidence   = {slope_low, intercept_low, r_squared_low,
-                             n_low_samples, slope_mid, intercept_mid,
-                             r_squared_mid, n_mid_samples, classification}.
-
-    artifacts["LowIrradianceFit"] : per inverter regression results.
-    artifacts["LowIrradianceSummary"] : aggregate counts + thresholds.
+    Findings : satu M2Finding per inverter-hari ter-flag;
+               value = low_ratio, threshold = low_ratio_threshold.
+    artifacts["LowIrradianceFit"]     : per (inverter, hari) -- low_ratio,
+                                        median WB, robust z, jumlah sampel.
+    artifacts["LowIrradianceSummary"] : jumlah per klasifikasi.
 """
 from __future__ import annotations
 
 import warnings
-from datetime import datetime
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -74,10 +57,14 @@ from pv_pipeline.core import M2Finding, Severity, SubModule, load_empty_pv_map
 DEFAULT_ENABLED: bool = False
 DEFAULT_POA_LOW_RANGE: Tuple[float, float] = (50.0, 250.0)
 DEFAULT_POA_MID_RANGE: Tuple[float, float] = (300.0, 800.0)
-DEFAULT_MIN_LOW_SAMPLES: int = 30
+DEFAULT_MIN_LOW_SAMPLES: int = 12   # 1 jam @5 menit; 30 = 2,5 jam awan siang, jarang tercapai
 DEFAULT_MIN_MID_SAMPLES: int = 30
-DEFAULT_SLOPE_THRESHOLD: float = 0.0       # slope < 0 -> flag
-DEFAULT_R_SQUARED_MIN: float = 0.3          # min fit quality
+DEFAULT_LOW_RATIO_THRESHOLD: float = 0.90   # low_ratio < ini -> kandidat flag
+DEFAULT_ROBUST_Z_MIN: float = 3.0           # ...DAN pencilan bawah se-WB (z < -3)
+DEFAULT_LOW_BAND_MIN_ELEVATION_DEG: float = 30.0  # pita rendah = awan, bukan matahari rendah
+DEFAULT_MIN_PEERS: int = 5                  # inverter se-WB per timestamp
+# Batas bawah MAD supaya WB yang seragam sempurna tidak membuat z tak terhingga.
+_MAD_FLOOR: float = 0.005
 DEFAULT_HOUR_RANGE: Tuple[float, float] = (6.0, 18.0)
 DEFAULT_HOUR_CUTOFF_END: float = 18.0
 DEFAULT_SOLAR_ELEV_MIN_DEG: float = 5.0
@@ -151,82 +138,17 @@ def build_inverter_power_series(
     return np.nansum(p_mat, axis=1)
 
 
-def linear_regression_slope(
-    x: np.ndarray,
-    y: np.ndarray,
-) -> Tuple[float, float, float, int]:
-    """OLS linear regression y = a + b*x. Returns (slope, intercept, r_squared, n).
-
-    Returns NaN slope/intercept/r2 if fewer than 2 finite samples or
-    zero-variance x.
-    """
-    mask = np.isfinite(x) & np.isfinite(y)
-    x = x[mask]
-    y = y[mask]
-    n = int(x.size)
-    if n < 2:
-        return float("nan"), float("nan"), float("nan"), n
-    x_mean = float(np.mean(x))
-    y_mean = float(np.mean(y))
-    x_var = float(np.sum((x - x_mean) ** 2))
-    if x_var <= 0:
-        return float("nan"), float("nan"), float("nan"), n
-    slope = float(np.sum((x - x_mean) * (y - y_mean)) / x_var)
-    intercept = y_mean - slope * x_mean
-    y_pred = intercept + slope * x
-    ss_res = float(np.sum((y - y_pred) ** 2))
-    ss_tot = float(np.sum((y - y_mean) ** 2))
-    if ss_tot <= 0:
-        r_squared = 1.0 if ss_res == 0 else 0.0
-    else:
-        r_squared = float(1.0 - (ss_res / ss_tot))
-    return slope, float(intercept), r_squared, n
-
-
-def classify_underperformance(
-    slope_low: float,
-    slope_mid: float,
-    *,
-    slope_threshold: float = DEFAULT_SLOPE_THRESHOLD,
-) -> str:
-    """Disambiguate low-light underperformance vs general (soiling).
-
-    - low slope flagged + mid slope OK -> "low_irradiance_underperform"
-    - low slope flagged + mid slope flagged -> "general_underperform"
-    - low slope OK or NaN -> "normal"
-    """
-    low_flagged = np.isfinite(slope_low) and slope_low < slope_threshold
-    mid_flagged = np.isfinite(slope_mid) and slope_mid < slope_threshold
-    if low_flagged and not mid_flagged:
-        return "low_irradiance_underperform"
-    if low_flagged and mid_flagged:
-        return "general_underperform"
-    return "normal"
-
-
-def _severity_from_slope(
-    slope_low: float,
-    r_squared_low: float,
-    *,
-    slope_threshold: float = DEFAULT_SLOPE_THRESHOLD,
-) -> Severity:
-    """Severity ladder by how far below threshold + fit quality."""
-    if not np.isfinite(slope_low) or slope_low >= slope_threshold:
-        return Severity.INFO
-    delta = abs(slope_low - slope_threshold)
-    fit_strength = max(0.0, min(1.0, r_squared_low)) if np.isfinite(r_squared_low) else 0.0
-    score = delta * fit_strength
-    if score >= 0.0008:
+def _severity_from_ratio(low_ratio: float) -> Severity:
+    """Tangga severity dari seberapa jauh efisiensi low-light di bawah tetangga."""
+    if low_ratio < 0.80:
         return Severity.CRITICAL
-    if score >= 0.0004:
+    if low_ratio < 0.85:
         return Severity.HIGH
-    if score >= 0.0001:
-        return Severity.MEDIUM
-    return Severity.INFO
+    return Severity.MEDIUM
 
 
 class M2aLowIrradiance(SubModule):
-    """Low-irradiance performance detector via PR-proxy slope in low POA range.
+    """Low-irradiance detector: efisiensi pita rendah relatif terhadap tetangga se-WB.
 
     Dependency injection (optional):
         prov = POAProvider.from_yaml(...)
@@ -316,20 +238,19 @@ class M2aLowIrradiance(SubModule):
         if not enabled:
             return []
 
-        poa_low_min, poa_low_max = cfg.get("poa_low_range", DEFAULT_POA_LOW_RANGE)
-        poa_low_min = float(poa_low_min)
-        poa_low_max = float(poa_low_max)
-        poa_mid_min, poa_mid_max = cfg.get("poa_mid_range", DEFAULT_POA_MID_RANGE)
-        poa_mid_min = float(poa_mid_min)
-        poa_mid_max = float(poa_mid_max)
+        poa_low_min, poa_low_max = (float(v) for v in cfg.get("poa_low_range", DEFAULT_POA_LOW_RANGE))
+        poa_mid_min, poa_mid_max = (float(v) for v in cfg.get("poa_mid_range", DEFAULT_POA_MID_RANGE))
         min_low_samples = int(cfg.get("min_low_samples", DEFAULT_MIN_LOW_SAMPLES))
         min_mid_samples = int(cfg.get("min_mid_samples", DEFAULT_MIN_MID_SAMPLES))
-        slope_threshold = float(cfg.get("slope_threshold", DEFAULT_SLOPE_THRESHOLD))
-        r_squared_min = float(cfg.get("r_squared_min", DEFAULT_R_SQUARED_MIN))
-        hour_lo, hour_hi = cfg.get("hour_range", DEFAULT_HOUR_RANGE)
-        hour_lo = float(hour_lo)
-        hour_hi = float(hour_hi)
+        ratio_threshold = float(cfg.get("low_ratio_threshold", DEFAULT_LOW_RATIO_THRESHOLD))
+        z_min = float(cfg.get("robust_z_min", DEFAULT_ROBUST_Z_MIN))
+        low_elev_min = float(cfg.get(
+            "low_band_min_elevation_deg", DEFAULT_LOW_BAND_MIN_ELEVATION_DEG,
+        ))
+        min_peers = int(cfg.get("min_peers", DEFAULT_MIN_PEERS))
+        hour_lo, hour_hi = (float(v) for v in cfg.get("hour_range", DEFAULT_HOUR_RANGE))
         pv_max = int(cfg.get("pv_max", DEFAULT_PV_MAX))
+        poa_source = str(cfg.get("poa_source", "auto"))
 
         if "Inverter_ID" not in combined_df.columns or "Start Time" not in combined_df.columns:
             warnings.warn(
@@ -352,12 +273,18 @@ class M2aLowIrradiance(SubModule):
             )
             return []
 
-        findings: List[M2Finding] = []
-        fit_rows: List[dict] = []
         summary_counts = {"normal": 0, "low_irradiance_underperform": 0,
+                          # Tidak lagi dihasilkan (2026-09-28); kunci dipertahankan
+                          # supaya dasbor trends tidak rusak.
                           "general_underperform": 0, "skipped": 0}
 
-        for inverter_id, group in combined_df.groupby("Inverter_ID"):
+        # Tahap 1 -- efisiensi relatif per (inverter, hari, timestamp).
+        units: List[dict] = []
+        samples: List[pd.DataFrame] = []
+        day_key = pd.to_datetime(combined_df["Start Time"], errors="coerce").dt.normalize()
+        for (inverter_id, day), group in combined_df.groupby(
+            [combined_df["Inverter_ID"], day_key], sort=True,
+        ):
             wb_id = _wb_from_inverter_id(inverter_id)
             inv_empties = set(int(n) for n in empty_map.get(str(inverter_id).upper(), []))
             pv_indices = [n for n in range(1, pv_max + 1) if n not in inv_empties]
@@ -367,9 +294,6 @@ class M2aLowIrradiance(SubModule):
 
             timestamps = pd.to_datetime(group["Start Time"], errors="coerce")
             valid_idx = timestamps.notna()
-            if valid_idx.sum() == 0:
-                summary_counts["skipped"] += 1
-                continue
             ts_clean = pd.DatetimeIndex(timestamps[valid_idx].values)
             group_clean = group.loc[valid_idx].copy()
             group_clean.index = ts_clean
@@ -380,10 +304,8 @@ class M2aLowIrradiance(SubModule):
                 summary_counts["skipped"] += 1
                 continue
             ts_h = ts_clean[mask_hour]
-            # 2026-06-01 fix: boolean mask posisional, BUKAN .loc[ts_h]
-            # (label-based). Duplicate "Start Time" timestamps bikin
-            # .loc[ts_h] inflate row count -> .iloc[mask_gate_arr] IndexError.
-            # Lihat shading.py untuk penjelasan lengkap.
+            # Boolean mask posisional, BUKAN .loc[ts_h]: duplicate "Start Time"
+            # menggelembungkan jumlah baris (fix 2026-06-01, lihat shading.py).
             group_h = group_clean.loc[mask_hour]
 
             mask_gate, poa_values = self._build_gate_mask(
@@ -394,133 +316,121 @@ class M2aLowIrradiance(SubModule):
                 summary_counts["skipped"] += 1
                 continue
             ts_qual = ts_h[mask_gate_arr]
-            group_qual = group_h.iloc[mask_gate_arr]
             poa_qual = poa_values[mask_gate_arr]
-
-            p_inv = build_inverter_power_series(group_qual, pv_indices)
-            if not np.any(np.isfinite(p_inv) & (p_inv > 0)):
-                summary_counts["skipped"] += 1
-                continue
-
+            p_inv = build_inverter_power_series(group_h.iloc[mask_gate_arr], pv_indices)
             with np.errstate(divide="ignore", invalid="ignore"):
                 pr_proxy = np.where(poa_qual > 0, p_inv / poa_qual, np.nan)
 
-            low_mask = (poa_qual >= poa_low_min) & (poa_qual <= poa_low_max)
-            mid_mask = (poa_qual >= poa_mid_min) & (poa_qual <= poa_mid_max)
-
-            slope_low, intercept_low, r2_low, n_low = linear_regression_slope(
-                poa_qual[low_mask], pr_proxy[low_mask],
+            mid = (
+                (poa_qual >= poa_mid_min) & (poa_qual <= poa_mid_max)
+                & np.isfinite(pr_proxy) & (pr_proxy > 0)
             )
-            slope_mid, intercept_mid, r2_mid, n_mid = linear_regression_slope(
-                poa_qual[mid_mask], pr_proxy[mid_mask],
-            )
-
-            if n_low < min_low_samples:
-                fit_rows.append({
-                    "inverter_id": inverter_id,
-                    "poa_source": str(cfg.get("poa_source", "auto")),
-                    "n_low_samples": n_low,
-                    "n_mid_samples": n_mid,
-                    "slope_low": slope_low,
-                    "intercept_low": intercept_low,
-                    "r_squared_low": r2_low,
-                    "slope_mid": slope_mid,
-                    "intercept_mid": intercept_mid,
-                    "r_squared_mid": r2_mid,
-                    "classification": "insufficient_data",
-                    "severity": "NORMAL",
-                })
-                summary_counts["skipped"] += 1
-                continue
-
-            classification = classify_underperformance(
-                slope_low, slope_mid, slope_threshold=slope_threshold,
-            )
-            severity = _severity_from_slope(
-                slope_low, r2_low, slope_threshold=slope_threshold,
-            )
-
-            summary_counts[classification] = summary_counts.get(classification, 0) + 1
-
-            fit_rows.append({
-                "inverter_id": inverter_id,
-                "poa_source": str(cfg.get("poa_source", "auto")),
-                "n_low_samples": n_low,
-                "n_mid_samples": n_mid,
-                "slope_low": slope_low,
-                "intercept_low": intercept_low,
-                "r_squared_low": r2_low,
-                "slope_mid": slope_mid,
-                "intercept_mid": intercept_mid,
-                "r_squared_mid": r2_mid,
-                "slope_threshold": slope_threshold,
-                "r_squared_min": r_squared_min,
-                "classification": classification,
-                "severity": severity.value,
+            units.append({
+                "inverter_id": inverter_id, "wb_id": wb_id, "day": day,
+                "n_mid_samples": int(mid.sum()),
             })
-
-            if classification == "normal":
+            if mid.sum() < min_mid_samples:
                 continue
-            if not np.isfinite(r2_low) or r2_low < r_squared_min:
-                continue
+            try:
+                elev = np.asarray(
+                    self.poa.get_solar_elevation(ts_qual).reindex(ts_qual), dtype=float,
+                )
+            except Exception:
+                # Tanpa elevasi, pita rendah tak bisa dibedakan dari matahari
+                # rendah -- inverter-hari ini berakhir insufficient_data.
+                elev = np.full(len(ts_qual), np.nan)
+            samples.append(pd.DataFrame({
+                "inverter_id": inverter_id, "wb_id": wb_id, "day": day,
+                "ts": ts_qual, "poa": poa_qual, "elev": elev,
+                "e": pr_proxy / float(np.median(pr_proxy[mid])),
+            }))
 
-            day_ts = ts_qual[0].normalize() if len(ts_qual) > 0 else datetime.utcnow()
-            ts_finding = day_ts + pd.Timedelta(hours=12)
+        # Tahap 2 -- deviasi terhadap median tetangga se-WB pada timestamp sama.
+        low_stats = pd.DataFrame(columns=["low_ratio", "n_low"])
+        if samples:
+            frame = pd.concat(samples, ignore_index=True)
+            peers = frame.groupby(["wb_id", "ts"])["e"]
+            enough = peers.transform("count") >= min_peers
+            frame["dev"] = (frame["e"] / peers.transform("median")).where(enough)
+            low = frame[
+                (frame["poa"] >= poa_low_min) & (frame["poa"] <= poa_low_max)
+                & (frame["elev"] >= low_elev_min) & frame["dev"].notna()
+            ]
+            low_stats = low.groupby(["inverter_id", "day"])["dev"].agg(
+                low_ratio="median", n_low="size",
+            )
 
-            findings.append(M2Finding(
-                timestamp=ts_finding.to_pydatetime() if hasattr(ts_finding, "to_pydatetime") else ts_finding,
-                inverter_id=str(inverter_id),
-                pv_string=None,
-                sub_module=self.name,
-                severity=severity,
-                value=slope_low,
-                threshold=slope_threshold,
-                message=(
-                    f"Low-irradiance underperformance ({classification}); "
-                    f"slope_low={slope_low:.5f} < {slope_threshold} "
-                    f"(r2={r2_low:.3f}, n={n_low}); "
-                    f"slope_mid={slope_mid:.5f} (r2={r2_mid:.3f}, n={n_mid})"
-                ),
-                fault_type=classification,
-                confidence=float(50.0 + (r2_low * 50.0)) if np.isfinite(r2_low) else 50.0,
-                evidence={
-                    "slope_low": slope_low,
-                    "intercept_low": intercept_low,
-                    "r_squared_low": r2_low,
-                    "n_low_samples": n_low,
-                    "poa_low_min": poa_low_min,
-                    "poa_low_max": poa_low_max,
-                    "slope_mid": slope_mid,
-                    "intercept_mid": intercept_mid,
-                    "r_squared_mid": r2_mid,
-                    "n_mid_samples": n_mid,
-                    "poa_mid_min": poa_mid_min,
-                    "poa_mid_max": poa_mid_max,
-                    "slope_threshold": slope_threshold,
-                    "classification": classification,
-                },
-            ))
+        # Tahap 3 -- robust z per (WB, hari), klasifikasi, findings.
+        fit_rows: List[dict] = []
+        for unit in units:
+            key = (unit["inverter_id"], unit["day"])
+            n_low = int(low_stats.loc[key, "n_low"]) if key in low_stats.index else 0
+            evaluated = n_low >= min_low_samples and unit["n_mid_samples"] >= min_mid_samples
+            fit_rows.append({
+                **unit, "poa_source": poa_source, "n_low_samples": n_low,
+                "low_ratio": float(low_stats.loc[key, "low_ratio"]) if evaluated else np.nan,
+                "wb_median_low_ratio": np.nan, "robust_z": np.nan,
+                "classification": "normal" if evaluated else "insufficient_data",
+                "severity": "NORMAL",
+            })
+        fit = pd.DataFrame(fit_rows)
 
-        if fit_rows:
-            self.artifacts["LowIrradianceFit"] = pd.DataFrame(fit_rows)
-        if summary_counts:
-            self.artifacts["LowIrradianceSummary"] = pd.DataFrame([summary_counts])
+        findings: List[M2Finding] = []
+        if not fit.empty:
+            ev = fit["classification"] == "normal"
+            by_wb_day = fit[ev].groupby(["wb_id", "day"])["low_ratio"]
+            median = by_wb_day.transform("median")
+            mad = (fit.loc[ev, "low_ratio"] - median).abs().groupby(
+                [fit.loc[ev, "wb_id"], fit.loc[ev, "day"]],
+            ).transform("median")
+            fit.loc[ev, "wb_median_low_ratio"] = median
+            fit.loc[ev, "robust_z"] = (fit.loc[ev, "low_ratio"] - median) / (
+                1.4826 * mad.clip(lower=_MAD_FLOOR)
+            )
+            flagged = ev & (fit["low_ratio"] < ratio_threshold) & (fit["robust_z"] < -z_min)
+            fit.loc[flagged, "classification"] = "low_irradiance_underperform"
+
+            for idx, row in fit[flagged].iterrows():
+                severity = _severity_from_ratio(row["low_ratio"])
+                fit.loc[idx, "severity"] = severity.value
+                ts_finding = pd.Timestamp(row["day"]) + pd.Timedelta(hours=12)
+                findings.append(M2Finding(
+                    timestamp=ts_finding.to_pydatetime(),
+                    inverter_id=str(row["inverter_id"]),
+                    pv_string=None,
+                    sub_module=self.name,
+                    severity=severity,
+                    value=float(row["low_ratio"]),
+                    threshold=ratio_threshold,
+                    message=(
+                        f"Low-light relatif tetangga: low_ratio={row['low_ratio']:.3f} "
+                        f"< {ratio_threshold} (median {row['wb_id']} "
+                        f"{row['wb_median_low_ratio']:.3f}, z={row['robust_z']:.1f}, "
+                        f"n={int(row['n_low_samples'])})"
+                    ),
+                    fault_type="low_irradiance_underperform",
+                    confidence=float(min(95.0, 50.0 + 5.0 * abs(row["robust_z"]))),
+                    evidence={
+                        "low_ratio": float(row["low_ratio"]),
+                        "wb_median_low_ratio": float(row["wb_median_low_ratio"]),
+                        "robust_z": float(row["robust_z"]),
+                        "n_low_samples": int(row["n_low_samples"]),
+                        "n_mid_samples": int(row["n_mid_samples"]),
+                        "poa_low_range": [poa_low_min, poa_low_max],
+                        "low_band_min_elevation_deg": low_elev_min,
+                        "low_ratio_threshold": ratio_threshold,
+                        "robust_z_min": z_min,
+                        "poa_source": poa_source,
+                    },
+                ))
+
+            counts = fit["classification"].value_counts()
+            summary_counts["normal"] += int(counts.get("normal", 0))
+            summary_counts["low_irradiance_underperform"] += int(
+                counts.get("low_irradiance_underperform", 0)
+            )
+            summary_counts["skipped"] += int(counts.get("insufficient_data", 0))
+            self.artifacts["LowIrradianceFit"] = fit
+        self.artifacts["LowIrradianceSummary"] = pd.DataFrame([summary_counts])
 
         return findings
-
-
-if __name__ == "__main__":  # pragma: no cover
-    assert classify_underperformance(-0.001, 0.0001) == "low_irradiance_underperform"
-    assert classify_underperformance(-0.001, -0.001) == "general_underperform"
-    assert classify_underperformance(0.001, 0.001) == "normal"
-    assert classify_underperformance(float("nan"), 0.001) == "normal"
-    print("[m2a.low_irradiance] classify smoke OK")
-
-    x = np.linspace(50, 250, 100)
-    rng = np.random.default_rng(0)
-    y = 0.0005 * x + 0.05 + rng.normal(0, 0.005, 100)
-    slope, intercept, r2, n = linear_regression_slope(x, y)
-    assert abs(slope - 0.0005) < 0.0001, f"slope={slope}"
-    assert r2 > 0.9, f"r2={r2}"
-    assert n == 100
-    print(f"[m2a.low_irradiance] regression smoke OK (slope={slope:.5f}, r2={r2:.3f})")
