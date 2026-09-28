@@ -343,9 +343,11 @@ m2f:
   # low_irradiance_eff SENGAJA dikeluarkan (2026-09-28): klasifikasi
   # M2aLowIrradiance mengikuti cuaca, bukan modul -- 2026-07-01 (hujan) 31
   # inverter low_irradiance_underperform, 2025-12-01 nol, kemiringan PR-proxy
-  # berbalik tanda se-armada antar hari. Estimatornya tetap ada; kembalikan
-  # ke daftar ini (sesudah soiling) setelah detektor dibuat relatif terhadap
-  # tetangga se-WB pada timestamp yang sama.
+  # berbalik tanda se-armada antar hari. Detektornya sudah dibuat relatif
+  # terhadap tetangga se-WB pada timestamp yang sama (2026-09-28; uji 5 hari
+  # lokal: 0 flag) dan estimatornya disesuaikan. Kembalikan ke daftar ini
+  # (sesudah soiling) setelah batch banyak hari menunjukkan flag yang berulang
+  # pada inverter yang sama.
   # curtailment = dispatch/henti dari jaringan (set point di bawah level
   # normalnya, sejalan dengan Deem Dispatch operator); grid_export_limit =
   # tertahan di plafon set point normal (batas kapasitas penyaluran jaringan
