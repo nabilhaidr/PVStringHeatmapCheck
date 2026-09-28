@@ -171,6 +171,17 @@ diisi**. Hipotesis yang perlu diuji dengan batch multi-hari: rasio mengikuti
 fraksi difus (gain bifacial relatif lebih besar di langit mendung) dan/atau
 ketidakcocokan spasial pyranometer titik vs array pada awan pecah.
 
+Tambahan 2026-09-28: stempel POA ~5 menit lebih awal dari telemetri
+(`run_poa_offset_check.py`, koreksi `pyranometer.time_offset_minutes`), dan
+daya berhenti naik di atas ~750 W/m2 -- batas atas 4-7,5% energi harapan
+harian di hari tidak mendung, bercampur antara clipping AC (plafon di 60/194
+inverter pada 2026-07-29), lonjakan tepi awan di sensor titik, dan kekurangan
+steady-state. Hari lokal tidak ada yang cerah-stabil, jadi pemisahannya
+diserahkan ke `run_saturation_check.py` (`pv_pipeline/m2f/saturation.py`) atas
+baseline Drive: hanya hari dengan POA mulus (~16-30 hari per WS di 2025-2026)
+yang dibaca; di sana `r_high_stable_unclipped` ~1 berarti clipping,
+< 1 berarti steady-state.
+
 ## Ledger klaim dan urutan prioritas
 
 `LossLedger` memelihara sisa energi yang belum diklaim per (string, timestamp).
@@ -421,14 +432,11 @@ dihitung sejak awal.
   Porsinya kini direkam sebagai `poa_fallback_pct` di `M2f_Closure` (persen
   timestamp string-hari yang diisi dari avg; NaN pada baris yang di-skip).
 
-**Follow-up yang didefer, bukan ditutup:** `get_tcell` masih memakai
-`source="auto"` -- lubang yang sama kelasnya dengan `poa_source` di atas,
-tapi lebih sempit. Rantai fallback `"auto"`-nya berakhir di Tcell model SAPM,
-dan SAPM sendiri butuh POA + suhu ambient + kecepatan angin lalu mengembalikan
-NaN bila salah satu tidak ada -- karena tidak ada berkas cuaca di tree hari
-ini, gate cakupan tetap menyala dengan benar untuk sekarang. Lubangnya baru
-terbuka bila berkas cuaca datang sementara Tcell terukur belum. Rekomendasi:
-`tcell_source` yang dapat dikonfigurasi, simetris dengan `poa_source`.
+**Follow-up `get_tcell` -- ditutup 2026-08-26 (`dd34a6f`).** Dulu `get_tcell`
+memakai `source="auto"`, yang rantai fallbacknya berakhir di Tcell model SAPM
+-- lubang sekelas `poa_source` di atas. Kini `m2f.tcell_source` (default
+`measured_per_ws`) dipakai eksplisit di `report.py`, simetris dengan
+`poa_source`, dan direkam sebagai kolom `tcell_source` di `M2f_Closure`.
 
 ## Strategi pengujian
 
