@@ -117,6 +117,12 @@ pyranometer:
     - "raw data input/POA PLTS IKN 2025.xlsx"
     - "raw data input/POA PLTS IKN 2026.xlsx"
   sheet: "POA PLTS IKN"
+  # Menit yang DITAMBAHKAN ke stempel "Date time" (koreksi offset vs telemetri
+  # inverter). Uji lokal 2026-09-28: stempel POA ~5 menit lebih awal di kelima
+  # WS pada 4 dari 5 hari (2026); 2025-12-01 campuran. Tetap 0 sampai
+  # run_poa_offset_check.py atas baseline Drive memastikannya. Skalar = semua
+  # file; list = per file, sejajar xlsx_path (mis. [0, 5]).
+  time_offset_minutes: 0
   # Kolom expected di sheet:
   #   - "Date time"                        (timestamp 5-min interval)
   #   - "POA Irradiance (W/m2) WS 1"..."POA Irradiance (W/m2) WS 5"

@@ -109,6 +109,7 @@ class PyranometerLoader:
         xlsx_path: XlsxPathLike,
         sheet: str = "POA PLTS IKN",
         ws_to_wb: Optional[Dict[str, List[str]]] = None,
+        time_offset_minutes: Union[float, Sequence[float]] = 0.0,
     ):
         # Normalize ke list of paths.
         if isinstance(xlsx_path, (list, tuple)):
@@ -117,6 +118,20 @@ class PyranometerLoader:
             paths = [str(xlsx_path)]
         if not paths:
             raise ValueError("[pyranometer] xlsx_path must be non-empty str or list.")
+
+        # Offset stempel waktu (menit) yang DITAMBAHKAN ke "Date time" tiap
+        # file: POA per WS terukur ~5 menit lebih awal dari telemetri inverter
+        # (run_poa_offset_check.py). Skalar = semua file; list = per file,
+        # sejajar xlsx_path (konvensi 2025 vs 2026 bisa berbeda).
+        if isinstance(time_offset_minutes, (list, tuple)):
+            offsets = [float(v) for v in time_offset_minutes]
+            if len(offsets) != len(paths):
+                raise ValueError(
+                    f"[pyranometer] time_offset_minutes punya {len(offsets)} nilai, "
+                    f"xlsx_path punya {len(paths)} file."
+                )
+        else:
+            offsets = [float(time_offset_minutes)] * len(paths)
 
         for p in paths:
             if not os.path.exists(p):
@@ -128,12 +143,17 @@ class PyranometerLoader:
 
         # Read + concat (multi-year support).
         raw_parts: List[pd.DataFrame] = []
-        for p in paths:
+        for p, offset in zip(paths, offsets):
             part = pd.read_excel(p, sheet_name=sheet)
             if COL_TIMESTAMP not in part.columns:
                 raise KeyError(
                     f"[pyranometer] Sheet {sheet!r} di {p!r} missing column "
                     f"{COL_TIMESTAMP!r}. Found: {list(part.columns)}"
+                )
+            if offset:
+                part[COL_TIMESTAMP] = (
+                    pd.to_datetime(part[COL_TIMESTAMP], errors="coerce")
+                    + pd.Timedelta(minutes=offset)
                 )
             raw_parts.append(part)
         raw = pd.concat(raw_parts, ignore_index=True) if len(raw_parts) > 1 else raw_parts[0]
@@ -169,6 +189,7 @@ class PyranometerLoader:
 
         self.df: pd.DataFrame = pd.DataFrame(ws_data, index=raw.index)
         self.xlsx_paths: List[str] = paths
+        self.time_offset_minutes: List[float] = offsets
         # Backwards-compat: keep xlsx_path scalar (first file) for callers
         # yang inspect attribute langsung. Multi-file caller harus pakai xlsx_paths.
         self.xlsx_path: str = paths[0]
@@ -214,7 +235,10 @@ class PyranometerLoader:
         sheet = str(pyr.get("sheet", "POA PLTS IKN"))
         ws_to_wb = cfg.get("ws_to_wb") or {}
 
-        return cls(xlsx_path=xlsx_path, sheet=sheet, ws_to_wb=ws_to_wb)
+        return cls(
+            xlsx_path=xlsx_path, sheet=sheet, ws_to_wb=ws_to_wb,
+            time_offset_minutes=pyr.get("time_offset_minutes", 0.0),
+        )
 
     # ---------- Query API ----------
 

@@ -169,3 +169,64 @@ def test_get_per_ws_fallback_skipped_when_per_ws_has_data(synthetic_pyranometer_
     assert poa_wb06.attrs["ws_label"] == "WS-3"
     # No NaN positions, so no fill.
     assert poa_wb06.attrs["fallback_filled"] == 0
+
+
+# ---------- time_offset_minutes (2026-09-28) ----------
+
+
+def _ws1(loader, stamp):
+    return loader.get_for_ws(pd.DatetimeIndex([stamp]), "WS-1").iloc[0]
+
+
+def test_time_offset_shifts_poa_stamps_later(synthetic_pyranometer_xlsx):
+    # WHY: POA per WS terukur ~5 menit lebih awal dari telemetri inverter.
+    # Koreksi MENAMBAH offset ke stempel POA -- nilai berstempel 09:00 kini
+    # berstempel 09:05. Tanda terbalik menggandakan galatnya jadi 10 menit.
+    base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
+    shifted = PyranometerLoader(
+        synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, time_offset_minutes=5,
+    )
+    original = _ws1(base, "2026-05-14 09:00")
+    assert _ws1(shifted, "2026-05-14 09:05") == pytest.approx(original)
+    assert _ws1(shifted, "2026-05-14 09:00") != pytest.approx(original)
+
+
+def test_time_offset_per_file_shifts_only_its_own_file(synthetic_pyranometer_xlsx, tmp_path):
+    # WHY: file POA 2025 dan 2026 bisa memakai konvensi stempel berbeda
+    # (2025-12-01 hasilnya campuran); offset per file tidak boleh ikut
+    # menggeser file lain.
+    older = pd.read_excel(synthetic_pyranometer_xlsx, sheet_name="POA PLTS IKN")
+    older["Date time"] = older["Date time"] - pd.Timedelta(days=365)
+    older_path = tmp_path / "older.xlsx"
+    older.to_excel(older_path, sheet_name="POA PLTS IKN", index=False)
+
+    base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
+    loader = PyranometerLoader(
+        [str(older_path), synthetic_pyranometer_xlsx],
+        ws_to_wb=WS_TO_WB_MAP, time_offset_minutes=[0, 5],
+    )
+    original = _ws1(base, "2026-05-14 09:00")
+    assert _ws1(loader, "2025-05-14 09:00") == pytest.approx(original)
+    assert _ws1(loader, "2026-05-14 09:05") == pytest.approx(original)
+
+
+def test_time_offset_list_must_match_file_count(synthetic_pyranometer_xlsx):
+    with pytest.raises(ValueError, match="time_offset_minutes"):
+        PyranometerLoader(
+            synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, time_offset_minutes=[0, 5],
+        )
+
+
+def test_from_geometry_yaml_reads_time_offset(synthetic_pyranometer_xlsx, tmp_path):
+    # WHY: nilai offset diatur lewat config setelah batch verifikasi; kalau
+    # kuncinya tak terbaca, koreksi diam-diam tidak pernah berlaku.
+    geo = tmp_path / "geo.yaml"
+    geo.write_text(
+        "pyranometer:\n"
+        f"  xlsx_path: {synthetic_pyranometer_xlsx!r}\n"
+        "  time_offset_minutes: 5\n",
+        encoding="utf-8",
+    )
+    loader = PyranometerLoader.from_geometry_yaml(str(geo))
+    base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
+    assert _ws1(loader, "2026-05-14 09:05") == pytest.approx(_ws1(base, "2026-05-14 09:00"))
