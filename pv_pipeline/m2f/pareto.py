@@ -59,11 +59,20 @@ def build_pareto_table(totals: Dict[str, Optional[float]]) -> pd.DataFrame:
     # DIHARAPKAN, bukan yang patologis. Mengumulasikan seluruh baris
     # (termasuk unexplained) membuat ambang 80% habis oleh unexplained
     # sendiri sebelum kategori actionable manapun sempat dipertimbangkan --
-    # vital_few jadi kosong permanen. Baris non-actionable tidak menambah
-    # apa pun ke kumulatif (kontribusinya 0), jadi cum_pct-nya sama dengan
-    # baris actionable terakhir sebelum dia -- tetap monoton untuk chart.
-    actionable_pct = table["pct"].where(table["actionable"], 0.0)
-    table["cum_pct"] = actionable_pct.cumsum()
+    # vital_few jadi kosong permanen. Penyebutnya juga rugi actionable
+    # positif, bukan total rugi: kalau tidak, porsi non-actionable > 20%
+    # membuat kumulatif tak pernah mencapai 80% dan SEMUA kategori actionable
+    # jadi vital-few (2026-09-28). Baris non-actionable tidak menambah apa
+    # pun ke kumulatif, jadi cum_pct-nya sama dengan baris actionable
+    # terakhir sebelum dia -- tetap monoton untuk chart.
+    actionable_loss = table["loss_kwh"].where(
+        table["actionable"] & (table["loss_kwh"] > 0.0), 0.0,
+    )
+    actionable_denom = float(actionable_loss.sum())
+    if actionable_denom <= 0.0:
+        table["cum_pct"] = 0.0
+    else:
+        table["cum_pct"] = actionable_loss.cumsum() / actionable_denom * 100.0
 
     # Vital few = kategori actionable yang dapat ditindak sampai kumulatif
     # (actionable-only) menembus 80%. Baris pertama yang menembus ambang ikut

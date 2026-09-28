@@ -97,6 +97,23 @@ def test_curtailment_is_not_actionable_and_does_not_crowd_out_vital_few():
     assert bool(table.loc["dc_cable_fault", "vital_few"]) is True
 
 
+def test_cumulative_is_share_of_actionable_loss():
+    # WHY: bila kumulatif dibagi TOTAL rugi, porsi non-actionable > 20%
+    # membuat garis tak pernah mencapai 80% -- semua kategori actionable jadi
+    # vital-few dan Pareto kehilangan daya pilahnya. Penyebutnya harus rugi
+    # actionable saja; pct tetap porsi total rugi (untuk judul/residual).
+    table = build_pareto_table(_totals(
+        unexplained=60.0, curtailment=20.0,
+        dc_cable_fault=12.0, soiling=5.0, availability_outage=3.0,
+    )).set_index("category")
+    assert table.loc["dc_cable_fault", "pct"] == pytest.approx(12.0)
+    assert table.loc["dc_cable_fault", "cum_pct"] == pytest.approx(60.0)
+    assert table.loc["soiling", "cum_pct"] == pytest.approx(85.0)
+    assert bool(table.loc["dc_cable_fault", "vital_few"]) is True
+    assert bool(table.loc["soiling", "vital_few"]) is True
+    assert bool(table.loc["availability_outage", "vital_few"]) is False
+
+
 def test_negative_residual_does_not_break_percentages():
     # String melebihi ekspektasi -> residual negatif. Persentase dihitung
     # terhadap total rugi POSITIF supaya tetap terbaca.

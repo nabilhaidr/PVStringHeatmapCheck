@@ -208,7 +208,7 @@ def build_pareto_figure(
     ax2 = ax.twinx()
     ax2.plot(range(n_act), cum, color=COLOR_CUM, marker="o", lw=1.5)
     ax2.axhline(VITAL_FEW_THRESHOLD_PCT, color="0.4", ls="--", lw=1.0)
-    ax2.set_ylabel("Kumulatif actionable (% total rugi)")
+    ax2.set_ylabel("Kumulatif (% rugi actionable)")
     ax2.set_ylim(0, 105)
 
     n_vital = int(pareto_df["vital_few"].sum())

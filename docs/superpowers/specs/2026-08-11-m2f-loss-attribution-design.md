@@ -272,7 +272,7 @@ tidak melipatgandakan energinya) sebelum diklaim ke ledger.
 | Sheet | Isi |
 |---|---|
 | `M2f_Waterfall` | per WB per bulan: kWh dan % tiap kategori, terurut prioritas |
-| `M2f_Pareto` | terurut kWh desc: kWh, %, % kumulatif, flag vital-few |
+| `M2f_Pareto` | terurut kWh desc: kWh, % (dari total rugi), % kumulatif (dari rugi actionable saja, 2026-09-28), flag vital-few |
 | `M2f_PerString` | per string per kategori, untuk targeting ROI |
 | `M2f_Closure` | audit: `L_total`, jumlah klaim, residual absolut dan % |
 | `M2f_BaselineCalib` | `g_bifacial` dan `dc_derate` yang dipakai per WB, `measured_ratio` run ini, jumlah string-hari kalibrasi, hari dan string |
