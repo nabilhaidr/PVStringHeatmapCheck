@@ -1,11 +1,12 @@
-"""Batch pemilah kekurangan daya di POA tinggi: clipping vs sensor vs steady-state.
+"""Batch pemilah kekurangan daya di POA tinggi: plafon set point vs sensor vs steady-state.
 
 Menjalankan ``pv_pipeline.m2f.saturation`` atas baseline Drive per
-inverter-hari. Hari yang menjawab pertanyaannya adalah hari cerah STABIL
-(kolom ``clear_stable`` di sheet ``summary``):
-  * ``r_high_stable_unclipped`` ~ 1  -> kekurangan di POA tinggi = clipping AC;
-  * ``r_high_stable_unclipped`` < 1  -> steady-state (kalibrasi sensor,
-    spektrum, suhu) -- ikut menjelaskan measured_ratio ~0,85 di hari cerah;
+inverter-hari. Plafon = set point busbar (pembatasan jaringan 20 kV) dari
+riwayat ``setpoint`` di site_geometry.yaml DAN bentuk plateau. Hari yang
+menjawab pertanyaannya adalah hari cerah STABIL (``clear_stable``):
+  * ``ceiling_loss_pct`` -> energi yang terpotong plafon set point;
+  * ``r_high_stable_uncapped`` < 1 -> kekurangan steady-state di bawah plafon
+    (kalibrasi sensor, spektrum, suhu);
   * ``r_high_all`` < ``r_high_stable`` -> efek keterwakilan pyranometer titik.
 
 POA dibaca per WS TANPA fallback avg. Offset waktu POA dari
@@ -29,6 +30,7 @@ from pv_pipeline.cell_temp import CellTempProvider
 from pv_pipeline.core import load_empty_pv_map
 from pv_pipeline.m2_config import load_m2_config
 from pv_pipeline.m2f.saturation import SATURATION_METRICS, saturation_metrics
+from pv_pipeline.m2f.setpoint import SetpointCaps
 from pv_pipeline.panel_spec import PanelSpec
 from pv_pipeline.poa.loader import PyranometerLoader
 from pv_pipeline.poa.pvlib_estimator import PvlibClearSkyEstimator
@@ -75,13 +77,13 @@ def inverter_frames(
 def summarize(per_inv: pd.DataFrame) -> pd.DataFrame:
     g = per_inv.groupby("day")
     medians = g[[
-        "stable_high_share", "r_high_all", "r_high_stable", "r_high_stable_unclipped",
-        "clip_loss_pct", "nonclip_high_loss_pct", "high_share_pct",
+        "stable_high_share", "r_high_all", "r_high_stable", "r_high_stable_uncapped",
+        "ceiling_loss_pct", "uncapped_high_loss_pct", "high_share_pct",
     ]].median()
     summary = pd.concat([
         g.size().rename("n_inverters"),
-        g["clipping"].count().rename("n_calibrated"),
-        g["clipping"].mean().rename("clipping_share"),
+        g["at_ceiling"].count().rename("n_calibrated"),
+        g["at_ceiling"].mean().rename("ceiling_share"),
         medians,
     ], axis=1).reset_index()
     summary["clear_stable"] = summary["stable_high_share"] >= CLEAR_STABLE_SHARE
@@ -121,6 +123,7 @@ def main(argv=None) -> None:
     )
     tcell_p = CellTempProvider.from_geometry_yaml(args.geometry)
     solar = PvlibClearSkyEstimator.from_geometry_yaml(args.geometry)
+    caps = SetpointCaps.from_geometry_yaml(args.geometry)  # None = plateau saja
     print(f"[saturation] {len(files)} hari, offset POA {offset} menit, Tcell {tcell_source}")
 
     rows = []
@@ -139,21 +142,26 @@ def main(argv=None) -> None:
         for inv, idx, p_dc, p_ac in frames:
             wb = inv[:4].upper()
             if wb not in by_wb:
+                pmax = caps.inverter_max_ac_kw(wb) if caps is not None else None
                 by_wb[wb] = (
                     loader.get_per_ws(idx_all, wb, fallback_to_avg=False),
                     tcell_p.get_tcell(idx_all, wb, source=tcell_source),
+                    caps.cap_kw(idx_all, wb) if caps is not None else None,
+                    np.inf if pmax is None else pmax,
                 )
-            poa_s, tc_s = by_wb[wb]
+            poa_s, tc_s, cap_s, pmax = by_wb[wb]
             metrics = saturation_metrics(
                 poa_s.reindex(idx).to_numpy(), p_dc, p_ac,
                 tc_s.reindex(idx).to_numpy(), elev.reindex(idx).to_numpy(), gamma=gamma,
+                cap_kw=None if cap_s is None else cap_s.reindex(idx).to_numpy(),
+                pmax_kw=pmax,
             )
             rows.append({"day": day, "inverter_id": inv, "wb_id": wb, **metrics})
         day_rows = pd.DataFrame(rows[-len(frames):])
         print(f"{day.date()}: stabil {day_rows['stable_high_share'].median():.2f}  "
-              f"clipping {day_rows['clipping'].mean():.2f}  "
+              f"di plafon {day_rows['at_ceiling'].mean():.2f}  "
               f"r_all {day_rows['r_high_all'].median():.3f}  "
-              f"r_stabil_tanpa_clip {day_rows['r_high_stable_unclipped'].median():.3f}")
+              f"r_stabil_bawah_plafon {day_rows['r_high_stable_uncapped'].median():.3f}")
     if not rows:
         raise SystemExit("[saturation] tidak ada inverter-hari yang terevaluasi")
 
@@ -170,8 +178,8 @@ def main(argv=None) -> None:
     clear = summary[summary["clear_stable"]]
     print(f"\nHari cerah-stabil: {len(clear)}/{len(summary)}")
     if len(clear):
-        cols = ["r_high_all", "r_high_stable", "r_high_stable_unclipped",
-                "clip_loss_pct", "nonclip_high_loss_pct", "clipping_share"]
+        cols = ["r_high_all", "r_high_stable", "r_high_stable_uncapped",
+                "ceiling_loss_pct", "uncapped_high_loss_pct", "ceiling_share"]
         print(clear[cols].median().round(3).to_string())
     print("ditulis:", out)
 

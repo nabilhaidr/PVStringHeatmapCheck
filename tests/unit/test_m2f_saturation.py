@@ -1,4 +1,4 @@
-"""Tes pemilah penyebab kekurangan daya di POA tinggi: clipping vs sensor."""
+"""Tes pemilah kekurangan daya di POA tinggi: plafon set point vs sensor."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,29 +12,39 @@ ELEV = 85.0 * np.sin(np.pi * (HRS - 6.0) / 12.0)
 T25 = np.full(len(TS), 25.0)                                 # tanpa efek suhu
 
 
-def _metrics(poa_sensor, p_dc, p_ac=None):
+def _metrics(poa_sensor, p_dc, p_ac=None, **kwargs):
     p_ac = p_dc if p_ac is None else p_ac
-    return saturation_metrics(poa_sensor, p_dc, p_ac, T25, ELEV, gamma=-0.0029)
+    return saturation_metrics(poa_sensor, p_dc, p_ac, T25, ELEV, gamma=-0.0029, **kwargs)
 
 
-def test_ac_ceiling_is_attributed_to_clipping_not_sensor():
-    # WHY: clipping adalah rugi ukuran inverter (keputusan desain), bukan galat
-    # baseline atau sensor. Kalau tercampur ke "kekurangan non-clipping",
-    # derate yang dikalibrasi ikut menyerap rugi yang sebenarnya bisa dipilah.
+def test_setpoint_ceiling_is_attributed_to_curtailment_not_sensor():
+    # WHY: plafon set point busbar adalah pembatasan jaringan 20 kV, bukan
+    # galat baseline atau sensor. Kalau tercampur ke "kekurangan lain", derate
+    # yang dikalibrasi ikut menyerap curtailment jaringan.
     m = _metrics(POA, np.minimum(0.3 * POA, 270.0))
     assert list(m) == SATURATION_METRICS
-    assert m["clipping"] == 1.0
-    assert m["clip_loss_pct"] > 0.5
-    assert m["nonclip_high_loss_pct"] == pytest.approx(0.0, abs=1e-9)
-    assert m["r_high_stable_unclipped"] == pytest.approx(1.0, abs=1e-9)
+    assert m["at_ceiling"] == 1.0
+    assert m["ceiling_loss_pct"] > 0.5
+    assert m["uncapped_high_loss_pct"] == pytest.approx(0.0, abs=1e-9)
+    assert m["r_high_stable_uncapped"] == pytest.approx(1.0, abs=1e-9)
 
 
-def test_flat_noon_top_without_ceiling_is_not_clipping():
+def test_setpoint_history_marks_ceiling_too_short_for_plateau():
+    # WHY: plafon yang hanya disentuh sebentar tidak membentuk plateau; riwayat
+    # set point tetap mengenalinya, jadi keduanya dipakai bersama.
+    p = np.minimum(0.3 * POA, 295.0)
+    assert _metrics(POA, p)["at_ceiling"] == 0.0
+    m = _metrics(POA, p, cap_kw=np.full(len(TS), 295.0), pmax_kw=330.0)
+    assert m["at_ceiling"] == 1.0
+    assert m["uncapped_high_loss_pct"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_flat_noon_top_without_ceiling_is_not_a_ceiling():
     # WHY: di hari cerah daya berada dalam 1% dari maksimumnya sekitar satu jam
-    # di sekitar tengah hari -- itu puncak kurva, bukan plafon inverter.
+    # di sekitar tengah hari -- itu puncak kurva, bukan plafon.
     m = _metrics(POA, 0.3 * POA)
-    assert m["clipping"] == 0.0
-    assert m["clip_loss_pct"] == pytest.approx(0.0)
+    assert m["at_ceiling"] == 0.0
+    assert m["ceiling_loss_pct"] == pytest.approx(0.0)
     assert m["r_high_stable"] == pytest.approx(1.0, abs=1e-9)
 
 
@@ -44,9 +54,9 @@ def test_steady_high_irradiance_deficit_stays_visible_on_stable_samples():
     # sensor, spektrum, suhu). Pemilah harus menyisakannya, bukan menghapusnya.
     derate = 1.0 - 0.1 * np.clip((POA - 700.0) / 300.0, 0.0, 1.0)
     m = _metrics(POA, 0.3 * POA * derate)
-    assert m["clipping"] == 0.0
-    assert m["r_high_stable_unclipped"] < 0.97
-    assert m["nonclip_high_loss_pct"] > 0.5
+    assert m["at_ceiling"] == 0.0
+    assert m["r_high_stable_uncapped"] < 0.97
+    assert m["uncapped_high_loss_pct"] > 0.5
 
 
 def test_cloud_enhancement_spikes_are_excluded_from_stable_samples():
@@ -68,4 +78,4 @@ def test_day_without_stable_readings_gives_nan_not_numbers():
     m = _metrics(sensor, 0.3 * POA)
     assert m["n_calib"] == 0
     assert np.isnan(m["r_high_stable"])
-    assert np.isnan(m["clip_loss_pct"])
+    assert np.isnan(m["ceiling_loss_pct"])
