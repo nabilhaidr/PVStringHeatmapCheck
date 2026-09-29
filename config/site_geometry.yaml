@@ -118,11 +118,13 @@ pyranometer:
     - "raw data input/POA PLTS IKN 2026.xlsx"
   sheet: "POA PLTS IKN"
   # Menit yang DITAMBAHKAN ke stempel "Date time" (koreksi offset vs telemetri
-  # inverter). Uji lokal 2026-09-28: stempel POA ~5 menit lebih awal di kelima
-  # WS pada 4 dari 5 hari (2026); 2025-12-01 campuran. Tetap 0 sampai
-  # run_poa_offset_check.py atas baseline Drive memastikannya. Skalar = semua
-  # file; list = per file, sejajar xlsx_path (mis. [0, 5]).
-  time_offset_minutes: 0
+  # inverter). Batch run_poa_offset_check.py 2025-01..2026-07 (1.087 WS-hari):
+  # lag +5 menang 89% WS-hari 2026 dan 71% di 2025. Offset tampak BERGESER per
+  # WS (WS-4 ~0 Jan-Jul 2025; WS-5 ~0 Jan 2026; +10 mulai Jun-Jul 2026), jadi
+  # +5 adalah pendekatan satu angka (2026-09-29), bukan nilai pasti. Sesudah
+  # ini run_poa_offset_check.py mengukur SISA offset (harapan: lag 0).
+  # Skalar = semua file; list = per file, sejajar xlsx_path (mis. [0, 5]).
+  time_offset_minutes: 5
   # Kolom expected di sheet:
   #   - "Date time"                        (timestamp 5-min interval)
   #   - "POA Irradiance (W/m2) WS 1"..."POA Irradiance (W/m2) WS 5"

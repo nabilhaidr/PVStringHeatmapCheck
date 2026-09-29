@@ -37,8 +37,9 @@ from pv_pipeline.poa.pvlib_estimator import PvlibClearSkyEstimator
 from pv_pipeline.transformations import PV_POWER_RE
 from train_lstm_ae import discover_baseline_csvs
 
-# Hari cerah-stabil: median porsi sampel POA tinggi yang stabil >= ini.
-CLEAR_STABLE_SHARE = 0.5
+# Hari cerah-stabil: median porsi sampel POA tinggi yang stabil >= ini. Batch
+# 2025-01..2026-07 tak pernah mencapai 0,5 (maks 0,457), jadi 0,25.
+CLEAR_STABLE_SHARE = 0.25
 
 
 def poa_smooth_share(poa_df: pd.DataFrame, day: pd.Timestamp, smooth_tol: float = 0.02) -> float:
