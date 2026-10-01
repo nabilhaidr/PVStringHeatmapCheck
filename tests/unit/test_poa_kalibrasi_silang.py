@@ -3,7 +3,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pv_pipeline.poa.kalibrasi_silang import rasio_ke_median, sampel_stabil
+from pv_pipeline.poa.kalibrasi_silang import (
+    gain_bulanan, gain_relatif, penghalang, profil_jam, rasio_ke_median, sampel_stabil,
+)
 
 _GAIN = (1.0, 0.8, 1.05, 1.0, 1.0)
 
@@ -51,3 +53,53 @@ class TestRasioKeMedian:
         """Dua stasiun saja: tiap stasiun hanya punya satu pembanding -> tidak dinilai."""
         p = _poa(hari=1)[["WS-1", "WS-2"]]
         assert rasio_ke_median(p, sampel_stabil(p)).isna().all().all()
+
+
+def _rasio(p):
+    return rasio_ke_median(p, sampel_stabil(p))
+
+
+def _turunkan(p, ws, jam, faktor, sampai=None):
+    """POA ``ws`` dikali ``faktor`` pada jam ``jam`` (penghalang), hingga tanggal ``sampai``."""
+    m = p.index.hour == jam
+    if sampai is not None:
+        m &= p.index < pd.Timestamp(sampai)
+    p.loc[m, ws] *= faktor
+    return p
+
+
+class TestGainBulanan:
+    def test_tiga_bulan_gain_kembali(self):
+        g = gain_bulanan(_rasio(_poa()))
+        ws2 = g[g["ws"] == "WS-2"]
+        assert list(ws2["bulan"]) == ["2026-01", "2026-02", "2026-03"]
+        assert ws2["median"].to_numpy() == pytest.approx([0.8] * 3, rel=0.01)
+
+    def test_bulan_data_tipis_nan(self):
+        g = gain_bulanan(_rasio(_poa(hari=2)))          # ~146 sampel stabil per WS < 200
+        assert g["median"].isna().all() and set(g["alasan"]) == {"data tipis"}
+
+
+class TestPenghalang:
+    def test_penurunan_jam_11_tiga_bulan_ditandai(self):
+        """Penghalang bergantung jam; satu faktor gain tak bisa memperbaikinya."""
+        r = _rasio(_turunkan(_poa(), "WS-3", 11, 0.6))
+        hal = penghalang(profil_jam(r))
+        assert list(zip(hal["ws"], hal["jam"])) == [("WS-3", 11)]
+        g = gain_relatif(r, hal).set_index("ws")
+        assert g.loc["WS-3", "gain"] == pytest.approx(1.05, rel=0.01)
+
+    def test_satu_bulan_tidak_ditandai(self):
+        """Satu bulan berawan di jam tertentu bukan penghalang tetap."""
+        r = _rasio(_turunkan(_poa(), "WS-3", 11, 0.6, sampai="2026-02-01"))
+        assert penghalang(profil_jam(r)).empty
+
+
+class TestGainRelatif:
+    def test_gain_bergeser_antar_bulan_ditandai(self):
+        """Sensor yang mengotor/berubah kalibrasi tidak boleh diberi satu faktor."""
+        p = _poa()
+        p.loc[p.index >= "2026-02-01", "WS-2"] *= 0.9       # WS-2: 0,80 Januari -> 0,72 sejak Februari
+        r = _rasio(p)
+        g = gain_relatif(r, penghalang(profil_jam(r))).set_index("ws")
+        assert bool(g.loc["WS-2", "bergeser"]) and not bool(g.loc["WS-1", "bergeser"])
