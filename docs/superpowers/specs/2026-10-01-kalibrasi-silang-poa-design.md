@@ -142,9 +142,46 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
 2. **Kesepakatan berantai.** WS-1 disebut "abs, larik, rel" sepakat, padahal rel–larik berselisih 0,042 > 0,03. Gabungan pasangan membuat ketiganya dihitung. **Cacat logika:** semestinya hanya acuan yang SALING dalam toleransi yang dihitung.
 3. **Kriteria stabil sangat ketat untuk langit IKN.** Stabil di sampel dan kedua tetangganya, di ≥ 3 WS sekaligus, hanya terpenuhi ±5 % waktu. Ambang tidak diubah demi hasil; pelonggaran adalah keputusan pengguna.
 
-**Temuan yang tetap kuat:**
-- **WB05/WB07 (WS-2) ~20 % di bawah armada, bukan karena sensor WS-2.** Dua acuan sensor sepakat WS-2 hampir tanpa bias (1,017 / 1,034), sedangkan acuan larik 1,205. Jadi `rasio_bersih` rendah WB05/07 di kalibrasi derate (0,74–0,76) berasal dari larik atau model (kWp/jumlah string di config, debu, ketersediaan, dan lain-lain), bukan sensor. Perlu diselidiki tersendiri.
-- **WS-1 hanya ~5 % di bawah stasiun lain pada sampel stabil** (0,951 relatif, 0,968 absolut). Kt WS-1 yang rendah di Jun–Jul (rata-rata 0,56 vs 0,68–0,79) jadi bukan bias amplitudo sederhana. Kemungkinannya perilaku saat langit tak stabil, celah data di dalam hari, atau penghalang sesekali.
+**Temuan run pertama (dua butir di bawah DIKOREKSI 2 Okt 2026, lihat "Koreksi: WB05/WB07 dan sensor yang berubah"):**
+- ~~**WB05/WB07 (WS-2) ~20 % di bawah armada, bukan karena sensor WS-2.**~~ SALAH. Gain 1,017 / 1,034 adalah median sampel stabil 2025-01..2026-07 yang didominasi periode SEBELUM WS-2 kosong; perubahan sensor sesudah Jun 2026 tertutup olehnya.
+- ~~**WS-1 hanya ~5 % di bawah stasiun lain**~~ berlaku untuk periode gabungan saja; di Jun–Agu 2026 WS-1 ~20 % di bawah.
+
+### Koreksi: WB05/WB07 dan sensor yang berubah (2 Okt 2026)
+
+**Larik WB05/WB07 normal** (42 workbook M2f Jun–Jul 2026, besaran yang tak memakai POA):
+- arus string (`M2b_open_circuit_StringStatus`), median relatif armada WB03–10: WB05 0,974 / 0,991 (median / q95), WB07 0,996 / 0,999; WB lain 0,976–1,030. Sebaran per string dan per inverter normal, tak ada inverter yang anjlok;
+- tegangan operasi (`M2b_peer_zscore_StringStatus`, 11 hari): WB05 1.105 V, WB07 1.110 V, WB03–10 lain 1.106–1.110 V. Jumlah modul per string setara;
+- config sama dengan WB03–10 lain: 26 modul/string, inverter 330 kW. Harapan per string tidak memakai `capacity_kwp_per_wb`.
+
+**WS-2 berubah sesudah kosong.** Energi harian 08–16 tiap WS ÷ median WS lain (hanya sampel saat kelima WS ada):
+
+| bulan | WS-1 | WS-2 | WS-3 | WS-4 | WS-5 |
+|---|---|---|---|---|---|
+| 2025-01..03 | 0,90–0,92 | 1,01–1,03 | 1,01–1,02 | 0,96–0,98 | 1,03–1,05 |
+| 2026-01..02 | 0,95–0,96 | 0,99 | 0,95–0,97 | 1,04 | 1,07–1,08 |
+| 2026-06 | 0,76 | **1,14** | 0,99 | 0,96 | 1,05 |
+| 2026-07 | 0,79 | **1,12** | 0,99 | 0,97 | 1,04 |
+| 2026-08 | 0,80 | **1,08** | 1,05 | 0,96 | 1,02 |
+
+- WS-2 kosong Mar – awal Jun 2026 (hari tanpa data: Mar 31, Apr 30, Mei 31, Jun 9). Sesudah kembali, ia membaca +8..14 % dari stasiun lain; sebelumnya ±2 %. Dugaan: dipasang ulang/diganti dengan orientasi atau kalibrasi berbeda (perlu dicek di lapangan). Per jam, Jun–Jul: +17 % pukul 8, +3..10 % pukul 9–15.
+- WS-1 juga turun ke 0,76–0,80 di Jun–Agu 2026 (sebelumnya 0,90–0,96), konsisten dengan penghalang pukul 11–12 (profil 0,48–0,61) dan Kt rendah di kalibrasi derate.
+- Suhu sel WS-2 normal (±2 °C dari WS lain pada 1/5/10 Jul): bukan penyebab.
+
+**Uji POA bersama** (`coba/wb0507_poa_bersama_20260701.py`, M2f 1 Jul 2026 dengan satu POA untuk semua WB):
+
+| | WB03/04/06 | WB05/07 | WB08–10 | sebaran WB03–10 |
+|---|---|---|---|---|
+| POA per WS (asli) | 1,04–1,06 | 0,88–0,90 | 1,03–1,06 | 17 % |
+| median 5 WS | 1,01–1,02 | 0,94–0,96 | 0,93–0,95 | 10 % |
+| median WS-3..5 | 1,02–1,04 | 0,96–0,97 | 0,94–0,97 | 10 % |
+
+Sebagian besar selisih WB05/07 hilang saat POA disamakan. Sisa ~6 % di hari itu tidak tampak di arus string (1 Jul: WB05/07 1,00 vs WB03/04/06 1,01–1,02); diduga dari masker kalibrasi M2f (run lokal tanpa data set point tidak membuang jam plafon). Belum diselidiki.
+
+**Kesimpulan:**
+1. `rasio_bersih` rendah WB05/07 (0,74–0,76) terutama artefak POA WS-2 sesudah Jun 2026, bukan larik, config, debu, atau ketersediaan.
+2. Kalibrasi silang atas rentang gabungan tidak sah untuk WS yang berubah di tengah rentang. Gain harus per periode (sebelum/sesudah celah), dan pemeriksaan `bergeser` hanya bekerja bila ada ≥ 2 bulan sah di tiap periode.
+3. Harapan M2f Jun 2026 dst. untuk WB05/07 terlalu tinggi ~10–14 % dan untuk WB08–10 terlalu rendah. Hasil M2f/soiling/derate per WB untuk periode itu jangan dibandingkan antar-WS tanpa koreksi.
+4. Perlu pemeriksaan lapangan WS-2 (kemiringan, azimut, kebersihan, nomor seri sensor pengganti) dan WS-1 (penghalang).
 
 **Usulan YAML dari alat (BELUM diterapkan; JANGAN diterapkan sebelum kedua cacat logika diperbaiki dan data bulanan cukup):** `pyranometer.ws_gain` WS-1 1,033; WS-2 0,975; WS-3 1,043; WS-4 1,000; WS-5 0,990.
 
