@@ -47,18 +47,19 @@ Masukan POA berupa `DataFrame` 5 menit berkolom `WS-1..WS-5` (seperti `Pyranomet
 - **`profil_jam(rasio: pd.DataFrame) -> pd.DataFrame`**: per stasiun cuaca, bulan, dan jam (09..14), median rasio jam itu dibagi median rasio SELURUH sampel stasiun itu di bulan itu (kolom `ws, bulan, jam, n, profil`). Penghalang tampak sebagai profil < 1 pada jam tertentu.
 - **`penghalang(profil: pd.DataFrame, *, ambang=0.10, min_bulan=3) -> pd.DataFrame`**: pasangan (stasiun cuaca, jam) yang profilnya < 1 − `ambang` pada ≥ `min_bulan` bulan.
 - **`gain_relatif(rasio: pd.DataFrame, jam_penghalang: pd.DataFrame, *, min_sampel=200, ambang_geser=0.05) -> pd.DataFrame`**
-  - Per stasiun cuaca: median rasio selama rentang tanpa jam penghalang, dengan kolom `ws, gain, n, ayunan_bulanan, bergeser`.
-  - `ayunan_bulanan` = maks − min dari median bulanan yang sah. `bergeser` = ayunan > `ambang_geser`.
+  - Per stasiun cuaca: median rasio selama rentang tanpa jam penghalang, dengan kolom `ws, gain, n, n_bulan_sah, ayunan_bulanan, bergeser`.
+  - `ayunan_bulanan` = maks − min dari median bulanan yang sah; NaN bila `n_bulan_sah` < 2, karena satu bulan memberi ayunan 0 yang menipu. `bergeser` = ayunan > `ambang_geser`.
 - **`gain_absolut(poa: pd.DataFrame, poa_cerah: pd.Series, stabil: pd.DataFrame, *, kt_min=0.75) -> pd.DataFrame`**: per stasiun cuaca, median POA_WS ÷ POA langit cerah pada sampel stabil saat MEDIAN Kt seluruh WS ≥ `kt_min`. Kecerahan dinilai dari median semua WS, bukan dari rasio WS itu sendiri, supaya sensor yang membaca jauh terlalu rendah tidak tersaring keluar; perbaikan saat rencana ditulis, 1 Okt 2026. Kolom `ws, gain, n`.
 - **`gain_larik(kalibrasi_harian: pd.DataFrame, wb_to_ws: dict) -> pd.DataFrame`**
   - `kalibrasi_harian` berkolom `date, wb_id, measured_ratio`.
   - Per hari: median situs ÷ rasio WB. Per stasiun cuaca: median atas WB dan hari yang dipetakan. Kolom `ws, gain, n`.
   - Bila larik setara, nilai ini sebanding dengan gain sensornya: POA tinggi → harapan tinggi → rasio rendah.
-- **`sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik: pd.DataFrame | None, *, tol=0.03) -> pd.DataFrame`**
-  - Per stasiun cuaca, kolom `ws, gain_rel, gain_abs, gain_larik, bergeser, status, usulan, alasan`.
+- **`sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik: pd.DataFrame | None, *, tol=0.03, min_bulan=2) -> pd.DataFrame`**
+  - Per stasiun cuaca, kolom `ws, gain_rel, gain_abs, gain_larik, n_bulan_sah, bergeser, status, usulan, alasan`.
   - Untuk perbandingan, `gain_abs` dinormalkan ke median `gain_abs` semua stasiun, karena langit cerah pvlib punya bias bersama (kekeruhan, albedo).
-  - `usulan_koreksi`: ≥ 2 acuan berpasangan dalam ±`tol`, dan tidak `bergeser`. `usulan` = 1 ÷ median acuan yang sepakat, yaitu faktor pengali POA.
-  - Selain itu `perlu_lapangan`, dengan alasan (acuan berselisih, atau gain bergeser antarbulan).
+  - Acuan yang sepakat = himpunan terbesar yang SEMUA pasangannya dalam ±`tol`; bila seri, yang sebarannya terkecil. Pasangan tidak digabung berantai: rel–abs dan abs–larik yang masing-masing lolos tidak membuat rel–larik sepakat (perbaikan 1 Okt 2026).
+  - `usulan_koreksi`: `n_bulan_sah` ≥ `min_bulan`, ≥ 2 acuan saling sepakat, dan tidak `bergeser`. `usulan` = 1 ÷ median acuan yang sepakat, yaitu faktor pengali POA.
+  - Selain itu `perlu_lapangan`, dengan alasan diperiksa berurutan: data bulanan kurang (perbaikan 1 Okt 2026), acuan berselisih, atau gain bergeser antarbulan.
 
 ### `run_poa_cross_calibration.py` (CLI di akar repo, pola `run_derate_calibration.py`)
 
@@ -90,7 +91,7 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
   - Penurunan yang sama hanya 1 bulan → tidak ditandai.
 - **Awan.** Lonjakan di satu stasiun pada satu sampel → sampel itu dan tetangganya tidak stabil.
 - **Data tipis.** Bulan dengan < 200 sampel stabil → median NaN, alasan "data tipis".
-- **Bergeser.** Gain bulanan 1,0 lalu 0,9 → `bergeser` benar.
+- **Bergeser.** Gain bulanan 1,0 lalu 0,9 → `bergeser` benar. Hanya satu bulan sah → `n_bulan_sah` 1 dan `ayunan_bulanan` NaN.
 - **Acuan lain.**
   - `gain_absolut`: POA = 0,8 × langit cerah → 0,8; sampel dengan rasio < `kt_min` tidak dihitung.
   - `gain_larik`: rasio WB sintetis = 0,9 ÷ gain_WS → mengembalikan gain_WS yang ditanam.
@@ -99,7 +100,9 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
   - dua sepakat dan satu menyimpang → `usulan_koreksi`;
   - semua berselisih > 3 % → `perlu_lapangan`;
   - sepakat tetapi `bergeser` → `perlu_lapangan`;
-  - `larik` None → hanya dua acuan.
+  - `larik` None → hanya dua acuan;
+  - sepakat tetapi hanya 1 bulan sah → `perlu_lapangan`, "data bulanan kurang";
+  - kasus WS-1 run pertama (rel 0,951, abs 0,968, larik 0,993) → hanya (abs, rel) yang sepakat, `usulan` = 1 ÷ 0,9595.
 - **CLI.** POA dan langit cerah sintetis (monkeypatch loader dan estimator), tanpa `--m2f-dir`. Delapan sheet ada, sheet `Larik` kosong, dan config tidak berubah.
 
 ## Langkah sesudah laporan (di luar implementasi ini)

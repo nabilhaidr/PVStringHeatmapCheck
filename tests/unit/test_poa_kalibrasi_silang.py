@@ -109,6 +109,12 @@ class TestGainRelatif:
         g = gain_relatif(r, penghalang(profil_jam(r))).set_index("ws")
         assert bool(g.loc["WS-2", "bergeser"]) and not bool(g.loc["WS-1", "bergeser"])
 
+    def test_satu_bulan_sah_ayunan_tak_terukur(self):
+        """Ayunan antar-bulan butuh >= 2 bulan sah; satu bulan bukan bukti gain stabil (ayunan 0 menipu)."""
+        r = _rasio(_poa(hari=20))                            # hanya Januari, ~1460 sampel
+        g = gain_relatif(r, penghalang(profil_jam(r))).set_index("ws")
+        assert g.loc["WS-2", "n_bulan_sah"] == 1 and np.isnan(g.loc["WS-2", "ayunan_bulanan"])
+
 
 class TestGainAbsolut:
     def test_poa_delapan_persepuluh_langit_cerah(self):
@@ -143,9 +149,9 @@ class TestGainLarik:
         assert g["WS-2"] == pytest.approx(0.8, rel=0.01) and g["WS-3"] == pytest.approx(1.05, rel=0.01)
 
 
-def _rel(gain_ws2=0.8, bergeser=False):
+def _rel(gain_ws2=0.8, bergeser=False, n_bulan_sah=3):
     return pd.DataFrame({"ws": ["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"],
-                         "gain": [1.0, gain_ws2, 1.05, 1.0, 1.0], "n": 1000,
+                         "gain": [1.0, gain_ws2, 1.05, 1.0, 1.0], "n": 1000, "n_bulan_sah": n_bulan_sah,
                          "ayunan_bulanan": 0.01, "bergeser": [False, bergeser, False, False, False]})
 
 
@@ -176,6 +182,21 @@ class TestSepakati:
     def test_tanpa_larik_dua_acuan(self):
         s = sepakati(_rel(), _acuan(0.8), None).set_index("ws")
         assert s.loc["WS-2", "status"] == "usulan_koreksi" and np.isnan(s.loc["WS-2", "gain_larik"])
+
+    def test_satu_bulan_sah_perlu_lapangan(self):
+        """Pergeseran sensor tak bisa disingkirkan dari satu bulan; acuan yang sepakat pun tak cukup."""
+        s = sepakati(_rel(n_bulan_sah=1), _acuan(0.8), _acuan(0.8)).set_index("ws")
+        assert s.loc["WS-2", "status"] == "perlu_lapangan" and np.isnan(s.loc["WS-2", "usulan"])
+        assert "data bulanan kurang" in s.loc["WS-2", "alasan"]
+
+    def test_kesepakatan_berantai_hanya_pasangan_terdekat(self):
+        """Kasus WS-1 run 1 Okt: rel-abs 0,017 dan abs-larik 0,025 lolos, tetapi rel-larik 0,042 tidak.
+
+        Ketiganya tak SALING sepakat; yang dihitung hanya pasangan terdekat (rel, abs).
+        """
+        s = sepakati(_rel(0.951), _acuan(0.968), _acuan(0.993)).set_index("ws")
+        assert s.loc["WS-2", "alasan"] == "sepakat: abs, rel"
+        assert s.loc["WS-2", "usulan"] == pytest.approx(1 / np.median([0.951, 0.968]))
 
 
 class _Loader:

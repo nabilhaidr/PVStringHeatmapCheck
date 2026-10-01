@@ -88,18 +88,22 @@ def penghalang(profil: pd.DataFrame, *, ambang: float = 0.10, min_bulan: int = 3
 
 def gain_relatif(rasio: pd.DataFrame, jam_penghalang: pd.DataFrame, *, min_sampel: int = 200,
                  ambang_geser: float = 0.05) -> pd.DataFrame:
-    """Median rasio selama rentang tanpa jam penghalang; ``bergeser`` bila median bulanan berayun > ambang."""
+    """Median rasio selama rentang tanpa jam penghalang; ``bergeser`` bila median bulanan berayun > ambang.
+
+    Ayunan butuh >= 2 bulan sah; dengan kurang dari itu ``ayunan_bulanan`` NaN
+    (bukan 0) dan ``sepakati`` menolak mengusulkan.
+    """
     baris = []
     for ws in rasio.columns:
         s = rasio[ws].dropna()
         buang = set(jam_penghalang.loc[jam_penghalang["ws"] == ws, "jam"]) if len(jam_penghalang) else set()
         s = s[~s.index.hour.isin(sorted(buang))]
         bulanan = gain_bulanan(s.to_frame(ws), min_sampel=min_sampel)["median"].dropna()
-        ayunan = float(bulanan.max() - bulanan.min()) if len(bulanan) else np.nan
+        ayunan = float(bulanan.max() - bulanan.min()) if len(bulanan) >= 2 else np.nan
         baris.append({"ws": ws, "gain": float(s.median()) if len(s) >= min_sampel else np.nan,
-                      "n": int(len(s)), "ayunan_bulanan": ayunan,
+                      "n": int(len(s)), "n_bulan_sah": int(len(bulanan)), "ayunan_bulanan": ayunan,
                       "bergeser": bool(np.isfinite(ayunan) and ayunan > ambang_geser)})
-    return pd.DataFrame(baris, columns=["ws", "gain", "n", "ayunan_bulanan", "bergeser"])
+    return pd.DataFrame(baris, columns=["ws", "gain", "n", "n_bulan_sah", "ayunan_bulanan", "bergeser"])
 
 
 def gain_absolut(poa: pd.DataFrame, poa_cerah: pd.Series, stabil: pd.DataFrame, *,
@@ -136,11 +140,27 @@ def gain_larik(kalibrasi_harian: pd.DataFrame, wb_to_ws: dict) -> pd.DataFrame:
     return out[["ws", "gain", "n"]]
 
 
-def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.03) -> pd.DataFrame:
-    """Usulan faktor (1/gain) bila >= 2 acuan sepakat dalam ``tol`` dan gain tak bergeser.
+def _saling_sepakat(ada: dict, tol: float) -> set:
+    """Himpunan acuan terbesar yang SEMUA pasangannya dalam ``tol``; seri -> sebaran terkecil.
 
-    ``gain_abs`` dinormalkan ke median semua WS: langit cerah pvlib punya bias
-    bersama (kekeruhan, albedo) yang bukan milik satu sensor.
+    Bukan gabungan pasangan: rel-abs dan abs-larik yang masing-masing lolos tidak
+    membuat rel-larik sepakat.
+    """
+    for n in range(len(ada), 1, -1):
+        cocok = [c for c in itertools.combinations(ada, n)
+                 if max(ada[k] for k in c) - min(ada[k] for k in c) <= tol]
+        if cocok:
+            return set(min(cocok, key=lambda c: max(ada[k] for k in c) - min(ada[k] for k in c)))
+    return set()
+
+
+def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.03,
+             min_bulan: int = 2) -> pd.DataFrame:
+    """Usulan faktor (1/gain) bila >= 2 acuan saling sepakat dalam ``tol`` dan gain terbukti tak bergeser.
+
+    "Terbukti tak bergeser" butuh >= ``min_bulan`` bulan sah. ``gain_abs``
+    dinormalkan ke median semua WS: langit cerah pvlib punya bias bersama
+    (kekeruhan, albedo) yang bukan milik satu sensor.
     """
     a = absolut.set_index("ws")["gain"]
     a = a / a.median()
@@ -149,19 +169,20 @@ def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.
     for r in rel.itertuples(index=False):
         nilai = {"rel": r.gain, "abs": a.get(r.ws, np.nan), "larik": lr.get(r.ws, np.nan)}
         ada = {k: float(v) for k, v in nilai.items() if np.isfinite(v)}
-        sepakat = set()
-        for (k1, v1), (k2, v2) in itertools.combinations(ada.items(), 2):
-            if abs(v1 - v2) <= tol:
-                sepakat |= {k1, k2}
+        sepakat = _saling_sepakat(ada, tol)
         dasar = {"ws": r.ws, "gain_rel": nilai["rel"], "gain_abs": nilai["abs"], "gain_larik": nilai["larik"],
-                 "bergeser": bool(r.bergeser)}
-        if len(sepakat) >= 2 and not r.bergeser:
+                 "n_bulan_sah": int(r.n_bulan_sah), "bergeser": bool(r.bergeser)}
+        if r.n_bulan_sah < min_bulan:
+            alasan = f"data bulanan kurang: {int(r.n_bulan_sah)} bulan sah < {min_bulan}"
+        elif len(sepakat) < 2:
+            alasan = f"acuan berselisih > {tol}: " + ", ".join(f"{k} {v:.3f}" for k, v in ada.items())
+        elif r.bergeser:
+            alasan = "gain bergeser antar-bulan"
+        else:
             g = float(np.median([ada[k] for k in sepakat]))
             baris.append({**dasar, "status": "usulan_koreksi", "usulan": 1.0 / g,
                           "alasan": "sepakat: " + ", ".join(sorted(sepakat))})
-        else:
-            alasan = ("gain bergeser antar-bulan" if len(sepakat) >= 2 else
-                      f"acuan berselisih > {tol}: " + ", ".join(f"{k} {v:.3f}" for k, v in ada.items()))
-            baris.append({**dasar, "status": "perlu_lapangan", "usulan": np.nan, "alasan": alasan})
-    return pd.DataFrame(baris, columns=["ws", "gain_rel", "gain_abs", "gain_larik", "bergeser",
+            continue
+        baris.append({**dasar, "status": "perlu_lapangan", "usulan": np.nan, "alasan": alasan})
+    return pd.DataFrame(baris, columns=["ws", "gain_rel", "gain_abs", "gain_larik", "n_bulan_sah", "bergeser",
                                         "status", "usulan", "alasan"])
