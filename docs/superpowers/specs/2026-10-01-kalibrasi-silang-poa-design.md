@@ -49,7 +49,7 @@ Masukan POA berupa `DataFrame` 5 menit berkolom `WS-1..WS-5` (seperti `Pyranomet
 - **`gain_relatif(rasio: pd.DataFrame, jam_penghalang: pd.DataFrame, *, min_sampel=200, ambang_geser=0.05) -> pd.DataFrame`**
   - Per stasiun cuaca: median rasio selama rentang tanpa jam penghalang, dengan kolom `ws, gain, n, ayunan_bulanan, bergeser`.
   - `ayunan_bulanan` = maks − min dari median bulanan yang sah. `bergeser` = ayunan > `ambang_geser`.
-- **`gain_absolut(poa: pd.DataFrame, poa_cerah: pd.Series, stabil: pd.DataFrame, *, kt_min=0.75) -> pd.DataFrame`**: per stasiun cuaca, median POA_WS ÷ POA langit cerah pada sampel stabil dengan rasio ≥ `kt_min` (hari sangat cerah). Kolom `ws, gain, n`.
+- **`gain_absolut(poa: pd.DataFrame, poa_cerah: pd.Series, stabil: pd.DataFrame, *, kt_min=0.75) -> pd.DataFrame`**: per stasiun cuaca, median POA_WS ÷ POA langit cerah pada sampel stabil saat MEDIAN Kt seluruh WS ≥ `kt_min`. Kecerahan dinilai dari median semua WS, bukan dari rasio WS itu sendiri, supaya sensor yang membaca jauh terlalu rendah tidak tersaring keluar; perbaikan saat rencana ditulis, 1 Okt 2026. Kolom `ws, gain, n`.
 - **`gain_larik(kalibrasi_harian: pd.DataFrame, wb_to_ws: dict) -> pd.DataFrame`**
   - `kalibrasi_harian` berkolom `date, wb_id, measured_ratio`.
   - Per hari: median situs ÷ rasio WB. Per stasiun cuaca: median atas WB dan hari yang dipetakan. Kolom `ws, gain, n`.

@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 
 from pv_pipeline.poa.kalibrasi_silang import (
-    gain_bulanan, gain_relatif, penghalang, profil_jam, rasio_ke_median, sampel_stabil,
+    gain_absolut, gain_bulanan, gain_larik, gain_relatif, penghalang, profil_jam,
+    rasio_ke_median, sampel_stabil, sepakati,
 )
 
 _GAIN = (1.0, 0.8, 1.05, 1.0, 1.0)
@@ -103,3 +104,71 @@ class TestGainRelatif:
         r = _rasio(p)
         g = gain_relatif(r, penghalang(profil_jam(r))).set_index("ws")
         assert bool(g.loc["WS-2", "bergeser"]) and not bool(g.loc["WS-1", "bergeser"])
+
+
+class TestGainAbsolut:
+    def test_poa_delapan_persepuluh_langit_cerah(self):
+        p = _poa(hari=2, gains=(0.8,) * 5)
+        cerah = _poa(hari=2, gains=(1.0,) * 5)["WS-1"]
+        g = gain_absolut(p, cerah, sampel_stabil(p)).set_index("ws")
+        assert g.loc["WS-1", "gain"] == pytest.approx(0.8, rel=0.01)
+
+    def test_hari_berawan_tidak_dihitung(self):
+        """Kekeruhan dan awan merusak acuan absolut; hanya saat sangat cerah yang dipakai."""
+        p = _poa(hari=2, gains=(0.5,) * 5)
+        cerah = _poa(hari=2, gains=(1.0,) * 5)["WS-1"]
+        assert gain_absolut(p, cerah, sampel_stabil(p))["n"].eq(0).all()
+
+    def test_sensor_rendah_tidak_tersaring(self):
+        """Kecerahan dinilai dari median semua WS, jadi WS yang membaca 0,7 tetap terukur."""
+        p = _poa(hari=2, gains=(1.0, 0.7, 1.0, 1.0, 1.0))
+        cerah = _poa(hari=2, gains=(1.0,) * 5)["WS-1"]
+        g = gain_absolut(p, cerah, sampel_stabil(p)).set_index("ws")
+        assert g.loc["WS-2", "gain"] == pytest.approx(0.7, rel=0.01)
+
+
+class TestGainLarik:
+    def test_rasio_wb_mengembalikan_gain_sensor(self):
+        """POA tinggi -> harapan tinggi -> rasio aktual/harapan rendah: larik adalah standar transfer."""
+        gain_ws = dict(zip(["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"], _GAIN))
+        wb_to_ws = {f"WB{i:02d}": ws for i, ws in enumerate(
+            ["WS-1", "WS-1", "WS-2", "WS-2", "WS-3", "WS-3", "WS-4", "WS-4", "WS-5", "WS-5"], start=1)}
+        k = pd.DataFrame([{"date": d, "wb_id": wb, "measured_ratio": 0.9 / gain_ws[ws]}
+                          for d in pd.date_range("2026-06-01", periods=3) for wb, ws in wb_to_ws.items()])
+        g = gain_larik(k, wb_to_ws).set_index("ws")["gain"]
+        assert g["WS-2"] == pytest.approx(0.8, rel=0.01) and g["WS-3"] == pytest.approx(1.05, rel=0.01)
+
+
+def _rel(gain_ws2=0.8, bergeser=False):
+    return pd.DataFrame({"ws": ["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"],
+                         "gain": [1.0, gain_ws2, 1.05, 1.0, 1.0], "n": 1000,
+                         "ayunan_bulanan": 0.01, "bergeser": [False, bergeser, False, False, False]})
+
+
+def _acuan(ws2):
+    return pd.DataFrame({"ws": ["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"],
+                         "gain": [1.0, ws2, 1.05, 1.0, 1.0], "n": 500})
+
+
+class TestSepakati:
+    def test_tiga_acuan_sepakat_usulan_kebalikan_gain(self):
+        s = sepakati(_rel(), _acuan(0.8), _acuan(0.8)).set_index("ws")
+        assert s.loc["WS-2", "status"] == "usulan_koreksi"
+        assert s.loc["WS-2", "usulan"] == pytest.approx(1 / 0.8)
+
+    def test_dua_sepakat_satu_menyimpang(self):
+        s = sepakati(_rel(), _acuan(0.8), _acuan(0.9)).set_index("ws")
+        assert s.loc["WS-2", "status"] == "usulan_koreksi"
+
+    def test_semua_berselisih_perlu_lapangan(self):
+        """Tanpa dua acuan yang sepakat, faktor koreksi bisa memindahkan bias, bukan menghapusnya."""
+        s = sepakati(_rel(0.8), _acuan(0.85), _acuan(0.9)).set_index("ws")
+        assert s.loc["WS-2", "status"] == "perlu_lapangan" and np.isnan(s.loc["WS-2", "usulan"])
+
+    def test_sepakat_tetapi_bergeser_perlu_lapangan(self):
+        s = sepakati(_rel(bergeser=True), _acuan(0.8), _acuan(0.8)).set_index("ws")
+        assert s.loc["WS-2", "status"] == "perlu_lapangan"
+
+    def test_tanpa_larik_dua_acuan(self):
+        s = sepakati(_rel(), _acuan(0.8), None).set_index("ws")
+        assert s.loc["WS-2", "status"] == "usulan_koreksi" and np.isnan(s.loc["WS-2", "gain_larik"])

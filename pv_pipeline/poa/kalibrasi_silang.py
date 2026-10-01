@@ -10,6 +10,8 @@ hanya diusulkan bila >= 2 acuan sepakat.
 """
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pandas as pd
 
@@ -98,3 +100,68 @@ def gain_relatif(rasio: pd.DataFrame, jam_penghalang: pd.DataFrame, *, min_sampe
                       "n": int(len(s)), "ayunan_bulanan": ayunan,
                       "bergeser": bool(np.isfinite(ayunan) and ayunan > ambang_geser)})
     return pd.DataFrame(baris, columns=["ws", "gain", "n", "ayunan_bulanan", "bergeser"])
+
+
+def gain_absolut(poa: pd.DataFrame, poa_cerah: pd.Series, stabil: pd.DataFrame, *,
+                 kt_min: float = 0.75) -> pd.DataFrame:
+    """Median POA_WS / POA langit cerah pada sampel stabil di saat langit sangat cerah.
+
+    "Sangat cerah" dinilai dari MEDIAN Kt seluruh WS di sampel itu (>= ``kt_min``),
+    bukan dari rasio WS itu sendiri: sensor yang membaca jauh terlalu rendah
+    tidak boleh tersaring keluar dari pengukuran biasnya.
+    """
+    c = poa_cerah.reindex(poa.index).to_numpy(dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        kt_situs = poa.median(axis=1).to_numpy(dtype=float) / c
+        cerah = kt_situs >= kt_min
+        baris = []
+        for ws in poa.columns:
+            r = poa[ws].to_numpy(dtype=float) / c
+            m = cerah & stabil[ws].to_numpy(dtype=bool) & np.isfinite(r)
+            baris.append({"ws": ws, "gain": float(np.median(r[m])) if m.any() else np.nan, "n": int(m.sum())})
+    return pd.DataFrame(baris, columns=["ws", "gain", "n"])
+
+
+def gain_larik(kalibrasi_harian: pd.DataFrame, wb_to_ws: dict) -> pd.DataFrame:
+    """Per WS: median atas WB-hari dari (median rasio situs hari itu / rasio WB).
+
+    Bila larik setara, rasio aktual/harapan WB berbanding terbalik dengan gain
+    sensor POA-nya: nilai ini sebanding dengan gain sensor, relatif terhadap armada.
+    """
+    k = kalibrasi_harian.dropna(subset=["measured_ratio"]).copy()
+    k["ws"] = k["wb_id"].astype(str).str.upper().map({str(w).upper(): s for w, s in wb_to_ws.items()})
+    k = k.dropna(subset=["ws"])
+    k["g"] = k.groupby("date")["measured_ratio"].transform("median") / k["measured_ratio"]
+    out = k.groupby("ws")["g"].agg(gain="median", n="size").reset_index()
+    return out[["ws", "gain", "n"]]
+
+
+def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.03) -> pd.DataFrame:
+    """Usulan faktor (1/gain) bila >= 2 acuan sepakat dalam ``tol`` dan gain tak bergeser.
+
+    ``gain_abs`` dinormalkan ke median semua WS: langit cerah pvlib punya bias
+    bersama (kekeruhan, albedo) yang bukan milik satu sensor.
+    """
+    a = absolut.set_index("ws")["gain"]
+    a = a / a.median()
+    lr = larik.set_index("ws")["gain"] if larik is not None and len(larik) else pd.Series(dtype=float)
+    baris = []
+    for r in rel.itertuples(index=False):
+        nilai = {"rel": r.gain, "abs": a.get(r.ws, np.nan), "larik": lr.get(r.ws, np.nan)}
+        ada = {k: float(v) for k, v in nilai.items() if np.isfinite(v)}
+        sepakat = set()
+        for (k1, v1), (k2, v2) in itertools.combinations(ada.items(), 2):
+            if abs(v1 - v2) <= tol:
+                sepakat |= {k1, k2}
+        dasar = {"ws": r.ws, "gain_rel": nilai["rel"], "gain_abs": nilai["abs"], "gain_larik": nilai["larik"],
+                 "bergeser": bool(r.bergeser)}
+        if len(sepakat) >= 2 and not r.bergeser:
+            g = float(np.median([ada[k] for k in sepakat]))
+            baris.append({**dasar, "status": "usulan_koreksi", "usulan": 1.0 / g,
+                          "alasan": "sepakat: " + ", ".join(sorted(sepakat))})
+        else:
+            alasan = ("gain bergeser antar-bulan" if len(sepakat) >= 2 else
+                      f"acuan berselisih > {tol}: " + ", ".join(f"{k} {v:.3f}" for k, v in ada.items()))
+            baris.append({**dasar, "status": "perlu_lapangan", "usulan": np.nan, "alasan": alasan})
+    return pd.DataFrame(baris, columns=["ws", "gain_rel", "gain_abs", "gain_larik", "bergeser",
+                                        "status", "usulan", "alasan"])
