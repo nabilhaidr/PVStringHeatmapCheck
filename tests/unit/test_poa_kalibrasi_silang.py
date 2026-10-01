@@ -1,7 +1,11 @@
 """Uji kalibrasi silang POA (docs/superpowers/specs/2026-10-01-kalibrasi-silang-poa-design.md)."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
+
+import run_poa_cross_calibration as cli
 
 from pv_pipeline.poa.kalibrasi_silang import (
     gain_absolut, gain_bulanan, gain_larik, gain_relatif, penghalang, profil_jam,
@@ -172,3 +176,34 @@ class TestSepakati:
     def test_tanpa_larik_dua_acuan(self):
         s = sepakati(_rel(), _acuan(0.8), None).set_index("ws")
         assert s.loc["WS-2", "status"] == "usulan_koreksi" and np.isnan(s.loc["WS-2", "gain_larik"])
+
+
+class _Loader:
+    def __init__(self):
+        self.df = _poa().assign(avg=0.0)
+        self.wb_to_ws = {"WB08": "WS-1", "WB05": "WS-2"}
+
+
+class _Langit:
+    def estimate(self, idx):
+        return _poa(gains=(1.0,) * 5)["WS-1"].reindex(idx)
+
+
+def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatch):
+    """Usulan hanya dicetak; config dan loader baru berubah lewat spesifikasi terpisah."""
+    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset: (_Loader(), 5.0))
+    monkeypatch.setattr(cli.PvlibClearSkyEstimator, "from_geometry_yaml",
+                        classmethod(lambda cls, *a, **k: _Langit()))
+    config = Path("config/site_geometry.yaml")
+    sebelum = config.read_bytes()
+
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-03-31", "--output-dir", str(tmp_path)])
+
+    x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx")
+    assert x.sheet_names == ["Bulanan", "ProfilJam", "Penghalang", "Relatif", "Absolut", "Larik",
+                             "Kesepakatan", "Catatan"]
+    assert x.parse("Larik").empty
+    s = x.parse("Kesepakatan").set_index("ws")
+    assert s.loc["WS-2", "status"] == "usulan_koreksi"
+    assert s.loc["WS-2", "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
+    assert config.read_bytes() == sebelum
