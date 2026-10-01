@@ -186,7 +186,11 @@ Sebagian besar selisih WB05/07 hilang saat POA disamakan. Sisa ~6 % di hari itu 
 1. `rasio_bersih` rendah WB05/07 (0,74–0,76) terutama artefak POA WS-2 sesudah Jun 2026, bukan larik, config, debu, atau ketersediaan.
 2. Kalibrasi silang atas rentang gabungan tidak sah untuk WS yang berubah di tengah rentang. Gain harus per periode (sebelum/sesudah celah), dan pemeriksaan `bergeser` hanya bekerja bila ada ≥ 2 bulan sah di tiap periode.
 3. Harapan M2f Jun 2026 dst. untuk WB05/07 terlalu tinggi ~10–14 % dan untuk WB08–10 terlalu rendah. Hasil M2f/soiling/derate per WB untuk periode itu jangan dibandingkan antar-WS tanpa koreksi.
-4. Perlu pemeriksaan lapangan WS-2 (kemiringan, azimut, kebersihan, nomor seri sensor pengganti) dan WS-1 (penghalang).
+4. Perlu pemeriksaan lapangan WS-2 (kemiringan, azimut, kebersihan, nomor seri sensor pengganti) dan WS-1 (penghalang). Daftar periksa: `docs/Pemeriksaan_Lapangan_WS1_WS2.md`.
+
+**Taksiran orientasi dari data** (`coba/orientasi_ws_20261002.py`; hari cerah = median WS-3/4/5 ≥ 0,75 × POA cerah pvlib; rasio per 5 menit dicocokkan dengan gain × POA cerah(tilt, az, geser waktu) ÷ POA cerah(10°, 0°)):
+- WS-2, Jun–Agu 2025 (11 hari cerah): miring ~4°, gain 1,02. Jun–Agu 2026 (54 hari cerah): miring ~26° menghadap ~utara (az 10°), gain 1,085. Galat median 0,065 di keduanya; angka ini petunjuk, bukan ukuran.
+- WS-1, Jun–Agu 2026: turun ke 0,34–0,45 pukul 11:24–12:49 (matahari az 43° el 60° → az 336° el 67°): benda di atas dan sedikit utara sensor. Di luar jendela itu gain 0,966. Jun–Agu 2025 hanya 1 hari cerah, tak bisa disimpulkan.
 
 **Usulan YAML dari alat (BELUM diterapkan; JANGAN diterapkan sebelum kedua cacat logika diperbaiki dan data bulanan cukup):** `pyranometer.ws_gain` WS-1 1,033; WS-2 0,975; WS-3 1,043; WS-4 1,000; WS-5 0,990.
 
