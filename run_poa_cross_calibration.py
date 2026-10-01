@@ -4,7 +4,8 @@ Rancangan: docs/superpowers/specs/2026-10-01-kalibrasi-silang-poa-design.md
 
 Usage:
     python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
-        [--mulai 2025-01-01] [--akhir 2026-07-31] [--m2f-dir "F:/Downloads part 2/cek pv/m2f"]
+        [--mulai 2025-01-01] [--akhir 2026-07-31] [--m2f-dir "F:/Downloads part 2/cek pv/m2f"] \
+        [--toleransi 0.03] [--min-sampel 100]
 
 Config dan loader TIDAK diubah: usulan pyranometer.ws_gain / ws_jam_penghalang
 dicetak (BELUM dibaca loader) untuk diputuskan pemilik dokumen.
@@ -54,6 +55,10 @@ def main(argv=None) -> None:
     ap.add_argument("--mulai", default="2025-01-01")
     ap.add_argument("--akhir", default="2026-07-31")
     ap.add_argument("--m2f-dir", default=None, help="folder workbook M2f harian untuk acuan larik")
+    # Dilonggarkan 2 Okt 2026 dari 2 % / 200 (hanya 1 bulan sah per WS): uji kepekaan
+    # 2025-01..2026-07 memberi 6-9 bulan sah dengan gain bulanan bergeser <= 0,008.
+    ap.add_argument("--toleransi", type=float, default=0.03, help="ambang mulus sampel stabil (fraksi)")
+    ap.add_argument("--min-sampel", type=int, default=100, help="sampel stabil minimum per WS per bulan")
     ap.add_argument("--geometry", default=os.path.join("config", "site_geometry.yaml"))
     ap.add_argument("--output-dir", default="coba")
     a = ap.parse_args(argv)
@@ -63,12 +68,12 @@ def main(argv=None) -> None:
     poa = loader.df.loc[a.mulai:f"{a.akhir} 23:59:59", kolom]
     galat = int(((poa < 0) | (poa > POA_MAKS)).sum().sum())
 
-    stabil = sampel_stabil(poa)
+    stabil = sampel_stabil(poa, toleransi=a.toleransi)
     rasio = rasio_ke_median(poa, stabil)
-    bulanan = gain_bulanan(rasio)
+    bulanan = gain_bulanan(rasio, min_sampel=a.min_sampel)
     profil = profil_jam(rasio)
     hal = penghalang(profil)
-    rel = gain_relatif(rasio, hal)
+    rel = gain_relatif(rasio, hal, min_sampel=a.min_sampel)
     estimator = PvlibClearSkyEstimator.from_geometry_yaml(a.geometry, load_albedo_provider=False)
     absolut = gain_absolut(poa, estimator.estimate(poa.index), stabil)
     larik = None
@@ -84,8 +89,8 @@ def main(argv=None) -> None:
         f"{awal:%Y-%m-%d}..{akhir:%Y-%m-%d}",
         "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), galat, offset,
         a.m2f_dir or "-",
-        "stabil 2 %; POA > 300; 09-15; min 2 pembanding; 200 sampel/bulan; penghalang 10 % x 3 bulan; "
-        "bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75"]})
+        f"stabil {a.toleransi * 100:g} %; POA > 300; 09-15; min 2 pembanding; {a.min_sampel} sampel/bulan; "
+        "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75"]})
     os.makedirs(a.output_dir, exist_ok=True)
     dasar = os.path.join(a.output_dir, f"poa_cross_calibration_{awal:%Y%m%d}_{akhir:%Y%m%d}")
     with pd.ExcelWriter(dasar + ".xlsx") as w:

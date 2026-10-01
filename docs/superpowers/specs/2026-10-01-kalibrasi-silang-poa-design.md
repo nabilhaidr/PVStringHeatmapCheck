@@ -28,6 +28,7 @@ Tahap ini **laporan dulu**. Menerapkan koreksi di loader adalah spesifikasi terp
 | Tujuan | Laporan dulu; koreksi di loader lewat langkah terpisah setelah disetujui |
 | Acuan | Tiga acuan: median stasiun cuaca lain (utama), POA langit cerah pvlib (absolut), larik lewat `measured_ratio` M2f (independen dari sensor) |
 | Aturan usulan | Faktor diusulkan hanya bila ≥ 2 acuan sepakat dalam ±3 %; bila tidak, "perlu pemeriksaan lapangan" |
+| Kriteria stabil CLI (2 Okt 2026) | Dilonggarkan dari 2 % / 200 sampel per bulan ke 3 % / 100 (syarat tetangga tetap). Default fungsi pustaka tidak berubah; ambang lama tersedia lewat `--toleransi 0.02 --min-sampel 200`. Dasar: uji kepekaan di bagian Hasil |
 
 ## Arsitektur
 
@@ -66,8 +67,11 @@ Masukan POA berupa `DataFrame` 5 menit berkolom `WS-1..WS-5` (seperti `Pyranomet
 ```
 python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
     [--mulai 2025-01-01] [--akhir 2026-07-31] [--m2f-dir "F:/Downloads part 2/cek pv/m2f"] \
+    [--toleransi 0.03] [--min-sampel 100] \
     [--geometry config/site_geometry.yaml] [--output-dir coba]
 ```
+
+`--toleransi` diteruskan ke `sampel_stabil`, `--min-sampel` ke `gain_bulanan` dan `gain_relatif`; keduanya dicatat di sheet `Catatan`.
 
 1. **Muat POA** lewat `PyranometerLoader`. Path POA relatif diawali `--raw-root`, dan offset waktu diambil dari config, seperti `run_derate_calibration._muat_poa`. Potong ke rentang, lalu buang kolom `avg`.
 2. **Hitung** `sampel_stabil` → `rasio_ke_median` → `gain_bulanan`, `profil_jam`, `penghalang` → `gain_relatif`.
@@ -104,6 +108,7 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
   - sepakat tetapi hanya 1 bulan sah → `perlu_lapangan`, "data bulanan kurang";
   - kasus WS-1 run pertama (rel 0,951, abs 0,968, larik 0,993) → hanya (abs, rel) yang sepakat, `usulan` = 1 ÷ 0,9595.
 - **CLI.** POA dan langit cerah sintetis (monkeypatch loader dan estimator), tanpa `--m2f-dir`. Delapan sheet ada, sheet `Larik` kosong, dan config tidak berubah.
+- **CLI, kriteria stabil.** Dua hari (~146 sampel stabil): median NaN pada `--min-sampel 200`, sah pada default 100. Riak ~2,5 % antar-sampel: tak stabil pada `--toleransi 0.02`, stabil pada default 3 %. `Catatan` memuat ambang yang dipakai.
 
 ## Langkah sesudah laporan (di luar implementasi ini)
 

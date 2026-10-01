@@ -228,3 +228,35 @@ def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatc
     assert s.loc["WS-2", "status"] == "usulan_koreksi"
     assert s.loc["WS-2", "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
     assert config.read_bytes() == sebelum
+
+
+def _pasang(monkeypatch, df):
+    loader = _Loader()
+    loader.df = df
+    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset: (loader, 5.0))
+    monkeypatch.setattr(cli.PvlibClearSkyEstimator, "from_geometry_yaml",
+                        classmethod(lambda cls, *a, **k: _Langit()))
+
+
+def _bulanan(tmp_path, *arg):
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-01-02", "--output-dir", str(tmp_path), *arg])
+    x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260102.xlsx")
+    return x.parse("Bulanan"), x.parse("Catatan").set_index("butir")["nilai"]
+
+
+def test_cli_min_sampel_default_100_membuka_bulan_tipis(tmp_path, monkeypatch):
+    """Langit IKN jarang stabil: pada 200 sampel/bulan hanya 1 bulan sah, ayunan tak terukur (2 Okt 2026)."""
+    _pasang(monkeypatch, _poa().assign(avg=0.0))
+    assert _bulanan(tmp_path, "--min-sampel", "200")[0]["median"].isna().all()   # ~146 sampel < 200
+    b, catatan = _bulanan(tmp_path)
+    assert b["median"].notna().all() and "100 sampel/bulan" in catatan["ambang"]
+
+
+def test_cli_toleransi_default_3_persen(tmp_path, monkeypatch):
+    """Riak ~2,5 % antar-sampel: tak stabil pada 2 % (kriteria lama), stabil pada default 3 %."""
+    p = _poa()
+    p = p.mul(1.0 + 0.0125 * np.where(np.arange(len(p)) % 2 == 0, 1.0, -1.0), axis=0)
+    _pasang(monkeypatch, p.assign(avg=0.0))
+    assert _bulanan(tmp_path, "--toleransi", "0.02")[0].empty
+    b, catatan = _bulanan(tmp_path)
+    assert b["median"].notna().all() and "stabil 3 %" in catatan["ambang"]
