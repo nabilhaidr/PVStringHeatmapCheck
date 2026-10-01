@@ -148,6 +148,22 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
 
 **Usulan YAML dari alat (BELUM diterapkan; JANGAN diterapkan sebelum kedua cacat logika diperbaiki dan data bulanan cukup):** `pyranometer.ws_gain` WS-1 1,033; WS-2 0,975; WS-3 1,043; WS-4 1,000; WS-5 0,990.
 
+### Run kedua, sesudah kedua cacat diperbaiki (1 Okt 2026, commit `5eb5c83`)
+
+Perintah dan data sama. Nilai gain tidak berubah. Kelima WS kini `perlu_lapangan`, dengan alasan "data bulanan kurang: 1 bulan sah < 2". **Tidak ada usulan `ws_gain` yang dicetak**, dan usulan run pertama gugur.
+
+Acuan yang SALING sepakat, seandainya data bulanan cukup (dihitung tangan dari tabel di atas, tol 0,03):
+
+| WS | sepakat | sebaran | faktor hipotetis |
+|---|---|---|---|
+| WS-1 | abs, rel (rel–larik 0,042) | 0,017 | 1,042 (run pertama 1,033) |
+| WS-2 | abs, rel | 0,017 | 0,975 |
+| WS-3 | ketiganya | 0,019 | 1,043 |
+| WS-4 | ketiganya | 0,021 | 1,000 |
+| WS-5 | abs, larik (rel–larik 0,031) | 0,003 | 0,991 (run pertama 0,990) |
+
+Syarat sebelum ada usulan yang sah: ≥ 2 bulan dengan ≥ 200 sampel stabil per WS. Syarat itu bisa dipenuhi dengan data yang lebih panjang, atau dengan kriteria stabil yang dilonggarkan (keputusan pengguna, butir 3 di atas).
+
 ## Di luar cakupan
 
 - Membaca atau menerapkan `ws_gain` di `PyranometerLoader`, M2a, atau M2f.
