@@ -61,7 +61,7 @@ Skrip uji ini sekali pakai dan tidak masuk repo. Hasil dan angkanya dicatat di b
   - `e > 0` dan `t_e ≥ ambang_t` → `"tercampur"`, nilai NaN (debu dan langit tak terpisah).
   - `ayunan_langit < ambang_ayunan`, atau |t_b| < ambang_t dan |t_c| < ambang_t → `"konstanta"`, nilai = `rasio_bersih`.
   - selain itu → `"model_langit"`, nilai NaN (butuh perubahan kode M2f, spesifikasi terpisah).
-- **`validasi(tabel: pd.DataFrame, derate: dict) -> pd.DataFrame`**
+- **`validasi(tabel: pd.DataFrame, fits: dict, derate: dict) -> pd.DataFrame`** (`fits` memberi koefisien `e` per WB)
   - Per WB dan tercile Kt: median sisa `1 − (rasio − e·hari_sejak_hujan)/derate`.
   - Bila keputusan "konstanta" benar, beda median antar-tercile ≤ 0,03.
 
@@ -69,9 +69,12 @@ Skrip uji ini sekali pakai dan tidak masuk repo. Hasil dan angkanya dicatat di b
 
 ```
 python run_derate_calibration.py --m2f-dir "F:/Downloads part 2/cek pv/m2f" \
+    [--raw-root "F:/Downloads part 2"] \
     [--geometry config/site_geometry.yaml] [--precip coba/precipitation_daily_plts_ikn.csv] \
     [--poa-offset-min 5] [--hanya-sesudah "2026-09-29 22:13"] [--output-dir coba]
 ```
+
+`--raw-root` diawalkan pada path POA relatif di `site_geometry.yaml`, karena berkas POA ada di F:, bukan di `raw data input` repo.
 
 1. **Rasio.** `rekap_m2f.build_daily_calib` atas workbook harian di `--m2f-dir`, diambil `measured_ratio` dan `n_calib_string_days` per WB per hari. `--hanya-sesudah` menyaring workbook menurut waktu modifikasi berkas (dipakai bila Langkah 0 gagal).
 2. **Langit.** Per hari dan WB, memakai `PyranometerLoader` (`config/site_geometry.yaml`, offset dari config atau `--poa-offset-min`) dan `PvlibClearSkyEstimator.from_geometry_yaml` pada indeks 5 menit 06:00–18:00:
@@ -109,7 +112,30 @@ python run_derate_calibration.py --m2f-dir "F:/Downloads part 2/cek pv/m2f" \
 
 ## Hasil
 
-Diisi saat implementasi: angka Langkah 0 (selisih offset 0 vs 5 per WB, perbandingan dengan workbook 20260701), lalu ringkasan run pertama (`PerWB`: keputusan dan nilai per WB).
+### Langkah 0 (1 Okt 2026)
+
+`coba/langkah0_offset_20260701.py`, telemetri lokal `coba/01072026/CSV Export/20260701.csv`:
+
+| WB | offset 0 | offset 5 | Drive | \|5 − 0\| | \|5 − Drive\| |
+|---|---|---|---|---|---|
+| WB01 | 0,9648 | 0,9658 | 0,9649 | 0,0010 | 0,0009 |
+| WB02 | 0,9585 | 0,9574 | 0,9591 | 0,0011 | 0,0016 |
+| WB03 | 1,0538 | 1,0550 | 1,0550 | 0,0011 | 0,0000 |
+| WB04 | 1,0431 | 1,0444 | 1,0438 | 0,0013 | 0,0006 |
+| WB05 | 0,8933 | 0,8959 | 0,8953 | 0,0026 | 0,0006 |
+| WB06 | 1,0537 | 1,0602 | 1,0603 | 0,0065 | 0,0001 |
+| WB07 | 0,8788 | 0,8818 | 0,8818 | 0,0029 | 0,0000 |
+| WB08 | 1,0569 | 1,0581 | 1,0543 | 0,0012 | 0,0038 |
+| WB09 | 1,0509 | 1,0526 | 1,0518 | 0,0016 | 0,0007 |
+| WB10 | 1,0304 | 1,0324 | 1,0200 | 0,0019 | **0,0123** |
+
+- **Offset POA:** median |5 − 0| = 0,0014 < 0,01, jadi data versi campur (sebelum/sesudah offset) sah dianalisa bersama.
+- **Selisih dengan Drive:** maks 0,0123 (WB10) > 0,005. Penyebabnya BUKAN offset, karena lokal offset 0 dan 5 sama-sama ~1,03. Kemungkinannya beda versi kode Colab atau beda masukan (xlsx mentah Drive vs CSV Export lokal). Workbook 20260701 dibuat 30 Sep 03:16, sesudah batas 29 Sep 22:13, jadi aturan `--hanya-sesudah` tidak menghapus selisih ini.
+- **Keputusan pengguna (1 Okt 2026):** pakai semua 42 hari. Selisih ~0,01 di WB10 dan 0,004 di WB08 dicatat sebagai ketidakpastian versi/data, di bawah ambang keputusan 0,03. Keputusan WB10 dan WB08 diberi catatan. Ini menyimpang dari aturan literal rencana, karena aturan itu tidak cocok dengan temuan.
+
+### Run pertama
+
+Diisi pada Task 5: `PerWB` (keputusan dan nilai per WB), ringkasan `Validasi`, isi `Catatan`.
 
 ## Di luar cakupan
 
