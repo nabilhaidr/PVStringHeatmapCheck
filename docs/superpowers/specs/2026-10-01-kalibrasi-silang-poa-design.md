@@ -112,7 +112,38 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
 
 ## Hasil
 
-Diisi saat implementasi.
+### Run pertama (1 Okt 2026)
+
+`python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" --m2f-dir "F:/Downloads part 2/cek pv/m2f"` → `coba/poa_cross_calibration_20250101_20260731.xlsx`.
+
+**Kesepakatan (keluaran alat, BELUM layak diterapkan; lihat catatan):**
+
+| WS | gain_rel | gain_abs (dinormalkan) | gain_larik | status alat | usulan |
+|---|---|---|---|---|---|
+| WS-1 | 0,951 | 0,968 | 0,993 | usulan_koreksi | 1,033 |
+| WS-2 | 1,017 | 1,034 | **1,205** | usulan_koreksi (rel+abs) | 0,975 |
+| WS-3 | 0,958 | 0,959 | 0,977 | usulan_koreksi | 1,043 |
+| WS-4 | 1,001 | 1,000 | 0,980 | usulan_koreksi | 1,000 |
+| WS-5 | 1,039 | 1,011 | 1,008 | usulan_koreksi | 0,990 |
+
+- **Penghalang:** tidak ada. Profil jam 11 WS-1 sesekali turun (Mei 2025 0,87; Mei 2026 0,89; Jun 2025 0,93), tetapi tidak 3 bulan.
+- **Catatan run:**
+  - sampel stabil per WS hanya WS-1 1.460, WS-2 2.273, WS-3 1.388, WS-4 2.851, WS-5 2.156 (±5 % sampel 09–15 dalam 19 bulan);
+  - sampel galat 3;
+  - offset POA 5 menit;
+  - acuan larik: 42 workbook Jun–Jul 2026 (n 42–126 WB-hari per WS).
+- **Gain bulanan:** hanya **2026-01** yang memenuhi ≥ 200 sampel per WS (0,963 / 1,022 / 0,949 / 1,006 / 1,054). Bulan lain "data tipis" (9–14 bulan per WS).
+
+**Pemeriksaan kewajaran — usulan TIDAK layak diterapkan:**
+1. **Data bulanan tidak cukup.** Satu bulan sah membuat `ayunan_bulanan` = 0, sehingga `bergeser` = False. Pemeriksaan pergeseran sebenarnya tidak bisa dilakukan, padahal alat tetap mengusulkan. **Cacat logika:** bila < 2 bulan sah, status semestinya `perlu_lapangan` ("data bulanan kurang"), bukan `usulan_koreksi`.
+2. **Kesepakatan berantai.** WS-1 disebut "abs, larik, rel" sepakat, padahal rel–larik berselisih 0,042 > 0,03. Gabungan pasangan membuat ketiganya dihitung. **Cacat logika:** semestinya hanya acuan yang SALING dalam toleransi yang dihitung.
+3. **Kriteria stabil sangat ketat untuk langit IKN.** Stabil di sampel dan kedua tetangganya, di ≥ 3 WS sekaligus, hanya terpenuhi ±5 % waktu. Ambang tidak diubah demi hasil; pelonggaran adalah keputusan pengguna.
+
+**Temuan yang tetap kuat:**
+- **WB05/WB07 (WS-2) ~20 % di bawah armada, bukan karena sensor WS-2.** Dua acuan sensor sepakat WS-2 hampir tanpa bias (1,017 / 1,034), sedangkan acuan larik 1,205. Jadi `rasio_bersih` rendah WB05/07 di kalibrasi derate (0,74–0,76) berasal dari larik atau model (kWp/jumlah string di config, debu, ketersediaan, dan lain-lain), bukan sensor. Perlu diselidiki tersendiri.
+- **WS-1 hanya ~5 % di bawah stasiun lain pada sampel stabil** (0,951 relatif, 0,968 absolut). Kt WS-1 yang rendah di Jun–Jul (rata-rata 0,56 vs 0,68–0,79) jadi bukan bias amplitudo sederhana. Kemungkinannya perilaku saat langit tak stabil, celah data di dalam hari, atau penghalang sesekali.
+
+**Usulan YAML dari alat (BELUM diterapkan; JANGAN diterapkan sebelum kedua cacat logika diperbaiki dan data bulanan cukup):** `pyranometer.ws_gain` WS-1 1,033; WS-2 0,975; WS-3 1,043; WS-4 1,000; WS-5 0,990.
 
 ## Di luar cakupan
 
