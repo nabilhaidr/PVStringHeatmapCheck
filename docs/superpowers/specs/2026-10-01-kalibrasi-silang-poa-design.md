@@ -206,6 +206,42 @@ Acuan yang SALING sepakat, seandainya data bulanan cukup (dihitung tangan dari t
 
 Syarat sebelum ada usulan yang sah: ≥ 2 bulan dengan ≥ 200 sampel stabil per WS. Syarat itu bisa dipenuhi dengan data yang lebih panjang, atau dengan kriteria stabil yang dilonggarkan (keputusan pengguna, butir 3 di atas).
 
+### Pelonggaran kriteria stabil (2 Okt 2026, commit `21cb8fc`)
+
+Pengguna menyetujui pelonggaran. Uji kepekaan 2025-01..2026-07 (pergeseran = |median bulanan − median bulanan kriteria ketat| pada bulan yang sama):
+
+| kriteria | sampel stabil | bulan sah per WS (min 200 / 100) | pergeseran maks / median |
+|---|---|---|---|
+| 2 % + tetangga (lama) | 10.128 | 1 / 4–6 | – |
+| **3 % + tetangga (dipilih)** | 15.413 | 2–5 / **6–9** | **0,008 / 0,002** |
+| 5 % + tetangga | 24.483 | 5–8 / 7–11 | 0,033 / 0,003 |
+| 2 % tanpa tetangga | 27.280 | 5–8 / 7–11 | 0,021 / 0,004 |
+| 3 % tanpa tetangga | 35.234 | 6–10 / 9–13 | 0,039 / 0,007 |
+
+Dipilih yang terlonggar dengan pergeseran ≤ 1 %. Hanya varian terlonggar yang menangkap Jun–Jul 2026 untuk WS-2 (1,117 / 1,091).
+
+**Run ketiga, 2025-01..2026-07, kriteria 3 % / 100:**
+
+| WS | gain_rel | gain_abs | gain_larik | bulan sah | bergeser | status |
+|---|---|---|---|---|---|---|
+| WS-1 | 0,949 | 0,970 | 0,993 | 7 | ya | perlu_lapangan |
+| WS-2 | 1,017 | 1,032 | 1,205 | 6 | tidak | usulan_koreksi 0,976 (abs, rel) |
+| WS-3 | 0,960 | 0,961 | 0,977 | 5 | ya | perlu_lapangan |
+| WS-4 | 1,005 | 1,000 | 0,980 | 9 | ya | perlu_lapangan |
+| WS-5 | 1,039 | 1,014 | 1,008 | 9 | ya | perlu_lapangan |
+
+- Pemeriksaan `bergeser` kini bekerja: empat WS berayun > 5 % antar-bulan, jadi satu faktor per WS tidak sah untuk rentang ini.
+- **Usulan WS-2 0,976 JANGAN diterapkan.** Keenam bulan sahnya berasal dari periode SEBELUM sensor berubah (lihat "Koreksi"); acuan larik Jun–Jul (1,205) sudah menunjukkan selisihnya. Alat belum tahu tentang periode: ia memperlakukan rentang sebagai satu sensor yang sama.
+
+**Run periode sesudah celah, 2026-06-10..2026-08-31, kriteria 3 % / 100:**
+- sampel stabil per WS per bulan: Jun 21–47, Jul 23–39, Agu 101–141. Hanya Agustus yang sah, sehingga kelima WS `perlu_lapangan` ("data bulanan kurang");
+- gain sampel stabil: WS-2 rel 1,066 / abs 1,061 (sebelum celah 1,017 / 1,032), WS-1 0,969 / 0,975, WS-3 0,981 / 1,000, WS-4 0,979 / 0,994, WS-5 1,003 / 1,002.
+
+**Kesimpulan pelonggaran:**
+1. Pelonggaran bekerja secara mekanis: rentang gabungan kini punya 5–9 bulan sah per WS.
+2. Untuk periode yang penting (WS-2 sesudah Jun 2026), sampel stabil tetap terlalu sedikit; Jun–Jul hampir tanpa langit stabil. Usulan sah untuk periode itu butuh data Sep 2026 dst. atau pemeriksaan lapangan WS-2.
+3. Kalibrasi per periode (dipisah di celah data panjang) belum ada di alat. Saat ini caranya menjalankan CLI dengan `--mulai`/`--akhir` per periode.
+
 ## Di luar cakupan
 
 - Membaca atau menerapkan `ws_gain` di `PyranometerLoader`, M2a, atau M2f.
