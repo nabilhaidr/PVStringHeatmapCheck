@@ -135,7 +135,47 @@ python run_derate_calibration.py --m2f-dir "F:/Downloads part 2/cek pv/m2f" \
 
 ### Run pertama
 
-Diisi pada Task 5: `PerWB` (keputusan dan nilai per WB), ringkasan `Validasi`, isi `Catatan`.
+`python run_derate_calibration.py --m2f-dir "F:/Downloads part 2/cek pv/m2f" --raw-root "F:/Downloads part 2"` (1 Okt 2026) → `coba/derate_calibration_20260601_20260713.xlsx`.
+
+**Catatan run:**
+- rentang 2026-06-01..2026-07-13, 42 workbook, 394 WB-hari;
+- 27 dibuang, semuanya `poa_kosong > 0,5`;
+- offset POA 5 menit, label "satu musim".
+
+| WB | WS | n | b (kt) | t_b | c (mulus) | t_c | e (debu/hari) | t_e | ayunan langit | rasio_bersih | keputusan alat |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| WB01 | WS-5 | 38 | −0,241 | −4,6 | 0,193 | 2,5 | 0,0010 | 0,5 | 0,066 | 0,902 | model_langit |
+| WB02 | WS-5 | 38 | −0,273 | −5,4 | 0,154 | 2,0 | 0,0012 | 0,6 | 0,066 | 0,873 | model_langit |
+| WB03 | WS-4 | 42 | −0,318 | −6,2 | 0,132 | 2,4 | −0,0009 | −0,5 | 0,073 | 0,923 | model_langit |
+| WB04 | WS-4 | 42 | −0,285 | −6,6 | 0,147 | 3,2 | −0,0010 | −0,6 | 0,068 | 0,924 | model_langit |
+| WB05 | WS-2 | 33 | −0,243 | −5,9 | 0,122 | 1,7 | −0,0043 | −2,6 | 0,078 | 0,763 | model_langit |
+| WB06 | WS-3 | 42 | −0,357 | −6,1 | 0,140 | 2,1 | −0,0040 | −1,7 | 0,087 | 0,963 | model_langit |
+| WB07 | WS-2 | 33 | −0,389 | −6,5 | 0,024 | 0,2 | −0,0065 | −2,6 | 0,101 | 0,737 | model_langit |
+| WB08 | WS-1 | 33 | −0,267 | −1,4 | 0,152 | 1,2 | −0,0117 | −2,8 | 0,051 | 0,997 | konstanta* |
+| WB09 | WS-1 | 33 | −0,248 | −1,5 | 0,191 | 1,7 | −0,0094 | −2,5 | 0,054 | 0,977 | konstanta* |
+| WB10 | WS-1 | 33 | −0,256 | −1,4 | 0,173 | 1,5 | −0,0058 | −1,5 | 0,052 | 0,955 | konstanta* |
+
+\* **"Konstanta" WB08–10 ditolak oleh validasinya sendiri:** beda sisa antar-tercile Kt 0,075 / 0,117 / 0,080, padahal batasnya ≤ 0,03.
+- Keputusan itu muncul hanya karena |t_b| < 2. Nilai `b` sama besar dengan WB lain, tetapi galat bakunya 3,5× lebih besar (0,17–0,19 vs 0,04–0,06).
+- Penyebabnya POA **WS-1**: Kt rata-rata 0,56 (stasiun lain 0,68–0,79), sebaran sempit (sd 0,09), dan korelasi dengan stasiun lain 0,88 (antarstasiun lain 0,98–0,99).
+- Ini konsisten dengan memori `poa-telemetry-5min-offset`: WS-1 turun 0,36–0,77× median pada pukul 11–12, dan energi hariannya 0,83–0,91× rata-rata.
+
+**Kesimpulan run pertama:**
+1. **Satu konstanta per WB tidak cukup untuk WB mana pun.**
+   - Rasio turun ~0,24–0,39 per satuan Kt di semua WB, dengan |t| 4,6–6,6 di stasiun yang sehat.
+   - Ayunan akibat langit 5–10 %, di atas ambang 3 %.
+   - `dc_derate_per_wb` **tetap kosong.**
+2. **Perbedaan `rasio_bersih` antar-WB terutama mengikuti stasiun cuaca, bukan modul.**
+   - WS-2 (Kt tertinggi, maks 1,02): WB05/07 0,74–0,76.
+   - WS-1 (Kt terendah): WB08–10 0,96–1,00.
+   - Konstanta per WB akan menyerap bias kalibrasi sensor POA.
+3. **Debu:** `e` negatif di 8/10 WB (−0,001 s.d. −0,012 per hari). Positif di WB01/02 tetapi tidak bermakna (t ≤ 0,6). Tidak ada WB "tercampur".
+4. **Langkah berikutnya** sesuai bagian "Langkah sesudah keputusan": spesifikasi baru. Calon isinya:
+   - koreksi relatif-stasiun cuaca, yaitu kalibrasi silang POA antar-WS pada hari cerah;
+   - derate per hari dari indeks langit di M2f;
+   - pemeriksaan sensor WS-1.
+
+   Dikerjakan setelah ada data musim lain atau keputusan pemilik dokumen.
 
 ## Di luar cakupan
 
