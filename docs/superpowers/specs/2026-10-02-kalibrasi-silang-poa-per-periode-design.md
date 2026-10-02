@@ -161,9 +161,24 @@ Gain bulanan 2026 dihitung ulang dengan **himpunan pembanding tetap WS-3/4/5** (
   WS-3 membaca ~5–7 % di bawah WS-4/5 sejak Jan 2026 lalu kembali ke ~1,0; pola ini cocok dengan kubah kotor yang dibersihkan, atau sensor yang dikalibrasi ulang/diganti. Pada saat yang sama WS-2 tampak turun ~3 % (WS-4 dan WS-5 sama-sama naik ~3 % terhadapnya; rasio bulanan WS-2 1,12 Jul → 1,08 Agu). Kemungkinan satu kunjungan pemeliharaan.
 - **Konsekuensi untuk alat:** lompatan tanpa celah data tidak tertangkap `periode_ws`. Ini bukti pertama bahwa batas periode manual atau deteksi titik ubah (di luar cakupan di bawah) dibutuhkan. Pembanding "median WS lain" juga peka terhadap susunan WS yang ada; pembanding tetap dari WS yang sehat lebih stabil.
 
+## Tambahan: batas periode manual (2 Okt 2026, disetujui pengguna: flag CLI)
+
+Latar: WS-3 melompat ~+6 % sekitar 10 Agu 2026 tanpa celah data (bagian "Ayunan WS-3/4/5"), dan tanggal perbaikan
+lapangan nanti juga tidak meninggalkan celah.
+
+- **`periode_ws(poa, *, min_celah_hari=30, batas=None)`**: `batas` = `{ws: [tanggal, …]}`. Tanggal batas = **hari
+  pertama periode baru**. Potongan dari batas digabung dengan potongan dari celah. Batas sebelum hari berdata pertama,
+  sesudah hari berdata terakhir, atau di dalam celah tidak membuat periode baru (tidak ada periode kosong).
+- **CLI:** `--batas WS-3:2026-08-10`, boleh diulang. Nilai yang dipakai dicatat di sheet `Catatan` (butir "batas periode
+  manual"; "-" bila tidak ada).
+- `kalibrasi_per_periode`, sheet, dan YAML tidak berubah.
+- **Uji (sintetis):** batas 2026-02-15 pada WS-2 tanpa celah → 2 periode (1 Jan – 14 Feb, 15 Feb – 30 Apr); batas di
+  dalam celah → tetap 2 periode; gain WS-2 melompat 1,0 → 0,8 di tanggal batas tanpa celah → usulan ≈ 1,0 dan ≈ 1,25;
+  CLI `--batas WS-3:2026-02-15` → `Kesepakatan` WS-3 periode 1 dan 2, `Catatan` memuat batasnya.
+
 ## Di luar cakupan
 
-- Batas periode manual (misalnya tanggal perbaikan lapangan yang tidak meninggalkan celah).
+- ~~Batas periode manual~~ (ditambahkan 2 Okt 2026, lihat bagian sebelumnya).
 - Flag CLI untuk `min_celah_hari`.
 - Deteksi titik ubah tanpa celah.
 - Penerapan `ws_gain_periode` di loader (spesifikasi terpisah sesudah pemeriksaan lapangan).
