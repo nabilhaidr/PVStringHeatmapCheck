@@ -338,6 +338,17 @@ def _bulanan(tmp_path, *arg):
     return x.parse("Bulanan"), x.parse("Catatan").set_index("butir")["nilai"]
 
 
+def test_cli_batas_manual_memotong_periode(tmp_path, monkeypatch):
+    """Tanggal pemeliharaan tanpa celah data (WS-3 ~10 Agu 2026) masuk lewat --batas."""
+    _pasang(monkeypatch, _poa().assign(avg=0.0))
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-03-31", "--output-dir", str(tmp_path),
+              "--batas", "WS-3:2026-02-15"])
+    x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx")
+    k = x.parse("Kesepakatan")
+    assert list(k.loc[k["ws"] == "WS-3", "periode"]) == [1, 2]
+    assert x.parse("Catatan").set_index("butir").loc["batas periode manual", "nilai"] == "WS-3:2026-02-15"
+
+
 def test_cli_penghalang_dari_hari_cerah(tmp_path, monkeypatch):
     """Bayangan pekat WS-1 harus sampai ke sheet Penghalang (dan usulan ws_jam_penghalang)."""
     _pasang(monkeypatch, _turunkan(_poa(), "WS-1", 11, 0.3).assign(avg=0.0))

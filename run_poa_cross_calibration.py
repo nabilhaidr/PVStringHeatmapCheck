@@ -8,7 +8,7 @@ Gain dan kesepakatan dihitung per (WS, periode); periode dipotong di celah data
 Usage:
     python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
         [--mulai 2025-01-01] [--akhir 2026-07-31] [--m2f-dir "F:/Downloads part 2/cek pv/m2f"] \
-        [--toleransi 0.03] [--min-sampel 100]
+        [--toleransi 0.03] [--min-sampel 100] [--batas WS-3:2026-08-10]
 
 Config dan loader TIDAK diubah: usulan pyranometer.ws_gain_periode / ws_jam_penghalang
 dicetak (BELUM dibaca loader) untuk diputuskan pemilik dokumen.
@@ -62,6 +62,8 @@ def main(argv=None) -> None:
     # 2025-01..2026-07 memberi 6-9 bulan sah dengan gain bulanan bergeser <= 0,008.
     ap.add_argument("--toleransi", type=float, default=0.03, help="ambang mulus sampel stabil (fraksi)")
     ap.add_argument("--min-sampel", type=int, default=100, help="sampel stabil minimum per WS per bulan")
+    ap.add_argument("--batas", action="append", default=[], metavar="WS-n:YYYY-MM-DD",
+                    help="hari pertama periode baru tanpa celah data (boleh diulang)")
     ap.add_argument("--geometry", default=os.path.join("config", "site_geometry.yaml"))
     ap.add_argument("--output-dir", default="coba")
     a = ap.parse_args(argv)
@@ -85,16 +87,20 @@ def main(argv=None) -> None:
     if a.m2f_dir:
         kal = build_daily_calib([load_day(p) for _, p in discover_m2f_xlsx(a.m2f_dir)])
         larik = gain_larik(kal, loader.wb_to_ws)
-    sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, periode_ws(poa), kal, loader.wb_to_ws,
+    batas: dict = {}
+    for b in a.batas:
+        ws, tgl = b.split(":", 1)
+        batas.setdefault(ws, []).append(tgl)
+    sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, periode_ws(poa, batas=batas), kal, loader.wb_to_ws,
                                 min_sampel=a.min_sampel)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
     catatan = pd.DataFrame({"butir": [
         "rentang", "sampel stabil per WS", "sampel galat (<0 atau >1400)", "offset POA (menit)",
-        "acuan larik", "ambang"], "nilai": [
+        "acuan larik", "batas periode manual", "ambang"], "nilai": [
         f"{awal:%Y-%m-%d}..{akhir:%Y-%m-%d}",
         "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), galat, offset,
-        a.m2f_dir or "-",
+        a.m2f_dir or "-", "; ".join(a.batas) or "-",
         f"stabil {a.toleransi * 100:g} %; POA > 300; 09-15; min 2 pembanding; {a.min_sampel} sampel/bulan; "
         "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75; "
         "periode dipotong di celah >= 30 hari"]})
