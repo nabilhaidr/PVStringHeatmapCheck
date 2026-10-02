@@ -9,7 +9,7 @@ import run_poa_cross_calibration as cli
 
 from pv_pipeline.poa.kalibrasi_silang import (
     gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang, periode_ws,
-    profil_jam, rasio_cerah, rasio_harian, rasio_ke_median, sampel_stabil, sepakati, titik_ubah,
+    mutu_data, profil_jam, rasio_cerah, rasio_harian, rasio_ke_median, sampel_stabil, sepakati, titik_ubah,
 )
 
 _GAIN = (1.0, 0.8, 1.05, 1.0, 1.0)
@@ -331,6 +331,17 @@ class TestTitikUbah:
         assert titik_ubah(rasio_harian(p), periode_ws(p)).empty
 
 
+class TestMutuData:
+    def test_nol_saat_cerah_dan_hari_kosong(self):
+        """Logger mati (WS-1 Okt 2025-Mei 2026) dan hari kosong harus terlihat di setiap run."""
+        p = _poa(hari=20)
+        p.loc["2026-01-05", "WS-1"] = 0.0
+        p.loc["2026-01-10", "WS-3"] = np.nan
+        m = mutu_data(p).set_index("ws")
+        assert m.loc["WS-1", "nol_saat_cerah"] == 49                   # 10:00-14:00 inklusif, langit cerah
+        assert m.loc["WS-3", "hari_kosong"] == 1 and m.loc["WS-4", "nol_saat_cerah"] == 0
+
+
 class _Loader:
     def __init__(self):
         self.df = _poa().assign(avg=0.0)
@@ -376,6 +387,17 @@ def _bulanan(tmp_path, *arg):
     cli.main(["--mulai", "2026-01-01", "--akhir", "2026-01-02", "--output-dir", str(tmp_path), *arg])
     x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260102.xlsx")
     return x.parse("Bulanan"), x.parse("Catatan").set_index("butir")["nilai"]
+
+
+def test_cli_mutu_data_di_catatan(tmp_path, monkeypatch):
+    p = _poa()
+    p.loc["2026-01-05", "WS-1"] = 0.0
+    _pasang(monkeypatch, p.assign(avg=0.0))
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-03-31", "--output-dir", str(tmp_path)])
+    c = pd.read_excel(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx",
+                      sheet_name="Catatan").set_index("butir")["nilai"]
+    assert "WS-1: 49" in c["sampel nol saat WS lain cerah (10-14, > 500 W/m2) per WS"]
+    assert "WS-1: 0" in c["hari kosong per WS"] and "WS-1: 0" in c["sampel galat (<0 atau >1400) per WS"]
 
 
 def test_cli_pembanding_tetap(tmp_path, monkeypatch):

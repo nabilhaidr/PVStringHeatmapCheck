@@ -202,6 +202,23 @@ def periode_ws(poa: pd.DataFrame, *, min_celah_hari: int = 30, batas: dict | Non
     return pd.DataFrame(baris, columns=["ws", "periode", "mulai", "akhir"])
 
 
+def mutu_data(poa: pd.DataFrame, *, cerah_min: float = 500.0, jam: tuple = ("10:00", "14:00")) -> pd.DataFrame:
+    """Per WS: hari tanpa data, sampel 0 saat median WS lain > ``cerah_min`` (jam ``jam``), sampel galat.
+
+    Nol di siang cerah = logger/sensor mati (WS-1 Okt 2025-Mei 2026); ditampilkan di setiap
+    run supaya tidak tersembunyi di balik penyaringan.
+    """
+    hari = poa.notna().groupby(poa.index.normalize()).any()
+    siang = poa.iloc[poa.index.indexer_between_time(*jam)]
+    baris = []
+    for ws in poa.columns:
+        lain = siang.drop(columns=ws).median(axis=1)
+        baris.append({"ws": ws, "hari_kosong": int((~hari[ws]).sum()),
+                      "nol_saat_cerah": int(((siang[ws] == 0.0) & (lain > cerah_min)).sum()),
+                      "galat": int(((poa[ws] < 0.0) | (poa[ws] > POA_MAKS)).sum())})
+    return pd.DataFrame(baris, columns=["ws", "hari_kosong", "nol_saat_cerah", "galat"])
+
+
 def rasio_harian(poa: pd.DataFrame, *, pembanding=None, jam: tuple = ("09:00", "15:00"),
                  min_sampel: int = 40) -> pd.DataFrame:
     """Energi harian WS / energi harian acuan (median stasiun acuan) pada sampel yang sama.

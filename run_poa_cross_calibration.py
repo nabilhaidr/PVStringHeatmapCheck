@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from pv_pipeline.poa.kalibrasi_silang import (  # noqa: E402
-    POA_MAKS, gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang,
+    gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, mutu_data, penghalang,
     periode_ws, profil_jam, rasio_cerah, rasio_harian, rasio_ke_median, sampel_stabil, titik_ubah,
 )
 from pv_pipeline.poa.pvlib_estimator import PvlibClearSkyEstimator  # noqa: E402
@@ -73,7 +73,6 @@ def main(argv=None) -> None:
     loader, offset = _muat_poa(a.geometry, a.raw_root, None)
     kolom = [c for c in loader.df.columns if str(c).startswith("WS-")]
     poa = loader.df.loc[a.mulai:f"{a.akhir} 23:59:59", kolom]
-    galat = int(((poa < 0) | (poa > POA_MAKS)).sum().sum())
 
     pemb = [w.strip() for w in a.pembanding.split(",") if w.strip()] or None
     stabil = sampel_stabil(poa, toleransi=a.toleransi)
@@ -100,11 +99,18 @@ def main(argv=None) -> None:
     tu = titik_ubah(rasio_harian(poa, pembanding=pemb), per)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
+    mutu = mutu_data(poa).set_index("ws")
+
+    def per_ws(kol: str) -> str:
+        return "; ".join(f"{ws}: {int(n)}" for ws, n in mutu[kol].items())
+
     catatan = pd.DataFrame({"butir": [
-        "rentang", "sampel stabil per WS", "sampel galat (<0 atau >1400)", "offset POA (menit)",
-        "acuan larik", "batas periode manual", "pembanding", "ambang"], "nilai": [
+        "rentang", "sampel stabil per WS", "hari kosong per WS",
+        "sampel nol saat WS lain cerah (10-14, > 500 W/m2) per WS", "sampel galat (<0 atau >1400) per WS",
+        "offset POA (menit)", "acuan larik", "batas periode manual", "pembanding", "ambang"], "nilai": [
         f"{awal:%Y-%m-%d}..{akhir:%Y-%m-%d}",
-        "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), galat, offset,
+        "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), per_ws("hari_kosong"),
+        per_ws("nol_saat_cerah"), per_ws("galat"), offset,
         a.m2f_dir or "-", "; ".join(a.batas) or "-", ", ".join(pemb) if pemb else "semua WS lain",
         f"stabil {a.toleransi * 100:g} %; POA > 300; 09-15; min 2 pembanding; {a.min_sampel} sampel/bulan; "
         "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75; "
