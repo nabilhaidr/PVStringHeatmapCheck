@@ -22,6 +22,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from pv_pipeline.poa.kalibrasi_silang import (  # noqa: E402
@@ -49,6 +50,41 @@ def _gambar(bulanan: pd.DataFrame, profil: pd.DataFrame, path: str) -> None:
     a2.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+def _gambar_harian(rasio_hari: pd.DataFrame, periode: pd.DataFrame, titik: pd.DataFrame, judul: str,
+                   path: str) -> None:
+    """Rasio energi harian per WS untuk tim O&M: lompatan dicocokkan dengan log pekerjaan."""
+    kolom = list(rasio_hari.columns)
+    fig, sumbu = plt.subplots(len(kolom), 1, figsize=(12, 2.2 * len(kolom)), sharex=True, squeeze=False)
+    fig.patch.set_facecolor("#fcfcfb")
+    for ax, ws in zip(sumbu[:, 0], kolom):
+        r = rasio_hari[ws].dropna()
+        ax.set_facecolor("#fcfcfb")
+        ax.grid(axis="y", color="#e4e3df", lw=0.6)
+        ax.axhline(1.0, color="#c3c2b7", lw=0.8)
+        ax.set_ylabel(ws, color="#0b0b0b")
+        ax.tick_params(colors="#52514e", labelsize=8)
+        if r.empty:
+            ax.text(0.5, 0.5, "tanpa data", transform=ax.transAxes, ha="center", color="#52514e")
+            continue
+        ax.plot(r.index, r.to_numpy(), "o", ms=3, color="#2a78d6", alpha=0.35, mec="none")
+        ax.plot(r.index, r.rolling("14D", center=True, min_periods=5).median().to_numpy(), color="#2a78d6", lw=2)
+        bawah, atas = np.nanpercentile(r.to_numpy(), [1, 99])
+        ax.set_ylim(bawah - 0.05, atas + 0.05)
+        for m in periode.loc[periode["ws"] == ws, "mulai"].iloc[1:]:
+            ax.axvline(m, color="#52514e", lw=1)
+        for t in titik[titik["ws"] == ws].itertuples():
+            ax.axvline(t.tanggal, color="#eb6834", lw=1.5, ls="--")
+            ax.annotate(f" {t.tanggal:%d %b %Y} {t.lompatan:+.1%}", (t.tanggal, 0.92), xycoords=("data", "axes fraction"),
+                        fontsize=8, color="#52514e")
+    fig.suptitle(judul, color="#0b0b0b", fontsize=11)
+    fig.text(0.5, 0.955, "titik: rasio harian · garis biru: median 14 hari · garis abu: awal periode "
+             "(celah >= 30 hari atau --batas) · garis oranye putus-putus: kandidat titik ubah",
+             ha="center", fontsize=8, color="#52514e")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor())
     plt.close(fig)
 
 
@@ -96,7 +132,8 @@ def main(argv=None) -> None:
     per = periode_ws(poa, batas=batas)
     sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, per, kal, loader.wb_to_ws,
                                 min_sampel=a.min_sampel, pembanding=pemb)
-    tu = titik_ubah(rasio_harian(poa, pembanding=pemb, jam_penghalang=hal), per)
+    rh = rasio_harian(poa, pembanding=pemb, jam_penghalang=hal)
+    tu = titik_ubah(rh, per)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
     mutu = mutu_data(poa).set_index("ws")
@@ -129,6 +166,8 @@ def main(argv=None) -> None:
         tu.to_excel(w, sheet_name="TitikUbah", index=False)
         catatan.to_excel(w, sheet_name="Catatan", index=False)
     _gambar(bulanan, profil, dasar + ".png")
+    _gambar_harian(rh, per, tu, f"Rasio energi harian (09-15) terhadap acuan ({', '.join(pemb) if pemb else 'semua WS lain'}),"
+                   f" {awal:%Y-%m-%d}..{akhir:%Y-%m-%d}", dasar + "_harian.png")
 
     print(f"[poa-silang] {awal:%Y-%m-%d}..{akhir:%Y-%m-%d} -> {dasar}.xlsx")
     print(sep.round(dict.fromkeys(["gain_rel", "gain_abs", "gain_larik", "usulan"], 3)).to_string(index=False))

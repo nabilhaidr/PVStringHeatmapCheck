@@ -405,6 +405,8 @@ def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatc
     assert s.loc["WS-2", "status"] == "usulan_koreksi"
     assert s.loc["WS-2", "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
     assert config.read_bytes() == sebelum
+    # Grafik rasio harian untuk tim O&M: lompatan dicocokkan dengan log pekerjaan.
+    assert (tmp_path / "poa_cross_calibration_20260101_20260331_harian.png").stat().st_size > 0
 
 
 def _pasang(monkeypatch, df):
