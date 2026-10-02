@@ -176,6 +176,21 @@ lapangan nanti juga tidak meninggalkan celah.
   dalam celah → tetap 2 periode; gain WS-2 melompat 1,0 → 0,8 di tanggal batas tanpa celah → usulan ≈ 1,0 dan ≈ 1,25;
   CLI `--batas WS-3:2026-02-15` → `Kesepakatan` WS-3 periode 1 dan 2, `Catatan` memuat batasnya.
 
+### Run ketiga: batas manual WS-3 (2 Okt 2026, commit `f7d88d8`)
+
+`… --akhir 2026-08-31 --batas WS-3:2026-08-10` → `coba/poa_silang_20261002_batas.txt`; tanpa peringatan atau galat.
+
+| WS-3 | rentang | rel / abs / larik | bulan sah | status |
+|---|---|---|---|---|
+| 6 | 2026-01-01 – 2026-08-09 | 0,952 / 0,944 / 0,977 | 4 | usulan 1,055 (abs, rel) |
+| 7 | 2026-08-10 – 2026-08-31 | 0,999 / 1,007 / – | 1 | perlu_lapangan (data kurang) |
+
+- WS-3 membaca ~5 % rendah Jan – 9 Agu 2026 lalu kembali ~1,0, sesuai lompatan di bagian "Ayunan WS-3/4/5". Usulan
+  1,055 untuk periode 6 masuk akal **bila** penyebabnya kubah kotor (koreksi data lama), tetapi tunggu jawaban log
+  pembersihan di daftar periksa lapangan sebelum diterapkan.
+- Baris WS lain, usulan WS-2 (0,978, sebelum celah) dan WS-5 (0,992, awal 2025), serta penghalang WS-1 [11, 12] tidak
+  berubah dari run kedua.
+
 ## Di luar cakupan
 
 - ~~Batas periode manual~~ (ditambahkan 2 Okt 2026, lihat bagian sebelumnya).
