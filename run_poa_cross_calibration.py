@@ -26,7 +26,7 @@ import pandas as pd  # noqa: E402
 
 from pv_pipeline.poa.kalibrasi_silang import (  # noqa: E402
     POA_MAKS, gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang,
-    periode_ws, profil_jam, rasio_ke_median, sampel_stabil,
+    periode_ws, profil_jam, rasio_cerah, rasio_ke_median, sampel_stabil,
 )
 from pv_pipeline.poa.pvlib_estimator import PvlibClearSkyEstimator  # noqa: E402
 from rekap_m2f import build_daily_calib, discover_m2f_xlsx, load_day  # noqa: E402
@@ -74,11 +74,12 @@ def main(argv=None) -> None:
     stabil = sampel_stabil(poa, toleransi=a.toleransi)
     rasio = rasio_ke_median(poa, stabil)
     bulanan = gain_bulanan(rasio, min_sampel=a.min_sampel)
-    profil = profil_jam(rasio)
-    hal = penghalang(profil)
-    rel = gain_relatif(rasio, hal, min_sampel=a.min_sampel)
     estimator = PvlibClearSkyEstimator.from_geometry_yaml(a.geometry, load_albedo_provider=False)
     cerah = estimator.estimate(poa.index)
+    # Profil penghalang dari hari cerah, bukan sampel stabil: bayangan pekat gagal syarat stabil.
+    profil = profil_jam(rasio_cerah(poa, cerah))
+    hal = penghalang(profil)
+    rel = gain_relatif(rasio, hal, min_sampel=a.min_sampel)
     absolut = gain_absolut(poa, cerah, stabil)
     kal = larik = None
     if a.m2f_dir:

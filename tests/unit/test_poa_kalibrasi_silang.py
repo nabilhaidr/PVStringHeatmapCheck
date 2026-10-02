@@ -9,7 +9,7 @@ import run_poa_cross_calibration as cli
 
 from pv_pipeline.poa.kalibrasi_silang import (
     gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang, periode_ws,
-    profil_jam, rasio_ke_median, sampel_stabil, sepakati,
+    profil_jam, rasio_cerah, rasio_ke_median, sampel_stabil, sepakati,
 )
 
 _GAIN = (1.0, 0.8, 1.05, 1.0, 1.0)
@@ -98,6 +98,23 @@ class TestPenghalang:
         """Satu bulan berawan di jam tertentu bukan penghalang tetap."""
         r = _rasio(_turunkan(_poa(), "WS-3", 11, 0.6, sampai="2026-02-01"))
         assert penghalang(profil_jam(r)).empty
+
+    def test_bayangan_pekat_tetap_ditandai(self):
+        """WS-1 Jun-Agu 2026: bayangan menjatuhkan bacaan ke ~0,3-0,4, di bawah syarat sampel stabil.
+
+        Sampel dipilih dari kecerahan menurut WS LAIN, supaya penghalang tidak tersaring
+        keluar dari pengukurannya sendiri.
+        """
+        p = _turunkan(_poa(), "WS-1", 11, 0.3)                    # 0,3 x ~970 W/m2 < POA minimum stabil
+        cerah = _poa(gains=(1.0,) * 5)["WS-1"]
+        hal = penghalang(profil_jam(rasio_cerah(p, cerah)))
+        assert list(zip(hal["ws"], hal["jam"])) == [("WS-1", 11)]
+
+    def test_rasio_cerah_menolak_langit_berawan(self):
+        """Di langit berawan rasio antar-WS ikut awan lokal; bukan bahan profil penghalang."""
+        p = _poa(hari=2, gains=(0.5,) * 5)                         # Kt WS lain 0,5 < 0,75
+        cerah = _poa(hari=2, gains=(1.0,) * 5)["WS-1"]
+        assert rasio_cerah(p, cerah).isna().all().all()
 
 
 class TestGainRelatif:
@@ -285,6 +302,14 @@ def _bulanan(tmp_path, *arg):
     cli.main(["--mulai", "2026-01-01", "--akhir", "2026-01-02", "--output-dir", str(tmp_path), *arg])
     x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260102.xlsx")
     return x.parse("Bulanan"), x.parse("Catatan").set_index("butir")["nilai"]
+
+
+def test_cli_penghalang_dari_hari_cerah(tmp_path, monkeypatch):
+    """Bayangan pekat WS-1 harus sampai ke sheet Penghalang (dan usulan ws_jam_penghalang)."""
+    _pasang(monkeypatch, _turunkan(_poa(), "WS-1", 11, 0.3).assign(avg=0.0))
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-03-31", "--output-dir", str(tmp_path)])
+    hal = pd.read_excel(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx", sheet_name="Penghalang")
+    assert list(zip(hal["ws"], hal["jam"])) == [("WS-1", 11)]
 
 
 def test_cli_min_sampel_default_100_membuka_bulan_tipis(tmp_path, monkeypatch):

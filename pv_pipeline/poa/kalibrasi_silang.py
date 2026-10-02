@@ -49,6 +49,27 @@ def rasio_ke_median(poa: pd.DataFrame, stabil: pd.DataFrame, *, min_pembanding: 
     return pd.DataFrame(hasil, index=p.index)
 
 
+def rasio_cerah(poa: pd.DataFrame, poa_cerah: pd.Series, *, kt_min: float = 0.75,
+                jam: tuple = ("09:00", "15:00")) -> pd.DataFrame:
+    """POA_WS / median POA stasiun LAIN, pada sampel yang cerah menurut stasiun LAIN.
+
+    Bahan ``profil_jam``/``penghalang``. Sampel stabil tidak dipakai: bayangan menjatuhkan
+    bacaan WS itu sendiri sampai gagal syarat mulus/POA minimum, sehingga penghalang
+    tersaring keluar dari pengukurannya sendiri (WS-1 pukul 11-12, Jun-Agu 2026).
+    """
+    p = poa.where((poa >= 0.0) & (poa <= POA_MAKS))
+    c = poa_cerah.reindex(p.index)
+    dalam = np.zeros(len(p), dtype=bool)
+    dalam[p.index.indexer_between_time(*jam)] = True
+    hasil = {}
+    for ws in p.columns:
+        lain = p.drop(columns=ws)
+        acuan = lain.median(axis=1, skipna=True)
+        cerah = (acuan / c >= kt_min) & (lain.notna().sum(axis=1) >= 2) & dalam
+        hasil[ws] = (p[ws] / acuan).where(cerah)
+    return pd.DataFrame(hasil, index=p.index)
+
+
 KOLOM_BULANAN = ["ws", "bulan", "n", "median", "iqr", "alasan"]
 
 
