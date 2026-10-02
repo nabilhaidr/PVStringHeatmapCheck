@@ -2,6 +2,8 @@
 
 **Tanggal:** 2026-10-02
 **Untuk:** tim O&M / weather station PLTS-IKN
+**Versi isian (Word):** `docs/Pemeriksaan_Lapangan_WS1_WS2.docx`, dengan kolom "Hasil", identitas kunjungan, dan kotak
+catatan. Isinya harus sama dengan berkas ini.
 **Kenapa:** sejak Jun 2026 dua sensor POA (pyranometer bidang modul) membaca berbeda dari stasiun lain. Akibatnya energi
 harapan M2f salah: WB05/WB07 (WS-2) tampak ~20 % di bawah armada padahal arus dan tegangan string mereka normal, dan
 WB08–WB10 (WS-1) tampak lebih baik dari sebenarnya. Koreksi di kode tidak bisa dipilih dengan aman sebelum penyebab
