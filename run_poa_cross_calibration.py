@@ -112,7 +112,7 @@ def main(argv=None) -> None:
     _gambar(bulanan, profil, dasar + ".png")
 
     print(f"[poa-silang] {awal:%Y-%m-%d}..{akhir:%Y-%m-%d} -> {dasar}.xlsx")
-    print(sep.round(3).to_string(index=False))
+    print(sep.round(dict.fromkeys(["gain_rel", "gain_abs", "gain_larik", "usulan"], 3)).to_string(index=False))
     usul = sep[sep["status"] == "usulan_koreksi"]
     if len(usul) or len(hal):
         print("\n# usulan (BELUM diterapkan; loader belum membaca kunci ini):\npyranometer:")

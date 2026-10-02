@@ -251,6 +251,7 @@ class _Langit:
         return _poa(gains=(1.0,) * 5)["WS-1"].reindex(idx)
 
 
+@pytest.mark.filterwarnings("error::UserWarning")
 def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatch):
     """Usulan hanya dicetak; config dan loader baru berubah lewat spesifikasi terpisah."""
     monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset: (_Loader(), 5.0))
