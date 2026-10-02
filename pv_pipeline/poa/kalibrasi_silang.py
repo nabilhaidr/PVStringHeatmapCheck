@@ -44,6 +44,15 @@ def _acuan_ws(kolom, ws, pembanding=None) -> list:
     return [c for c in (pembanding or kolom) if c != ws and c in kolom]
 
 
+def _min_acuan(acuan: list, pembanding, minimum: int = 2) -> int:
+    """Jumlah stasiun acuan minimum per sampel.
+
+    Daftar pengguna boleh hanya dua stasiun (2026: hanya WS-4/WS-5 sehat), sehingga tiap
+    anggotanya cuma punya satu acuan; syarat turun ke jumlah acuan itu. Tanpa daftar: tetap ``minimum``.
+    """
+    return min(minimum, len(acuan)) if pembanding else minimum
+
+
 def rasio_ke_median(poa: pd.DataFrame, stabil: pd.DataFrame, *, min_pembanding: int = 2,
                     pembanding=None) -> pd.DataFrame:
     """POA_WS / median POA stasiun LAIN yang stabil di sampel yang sama.
@@ -55,8 +64,10 @@ def rasio_ke_median(poa: pd.DataFrame, stabil: pd.DataFrame, *, min_pembanding: 
     p = poa.where(stabil)
     hasil = {}
     for ws in p.columns:
-        lain = p[_acuan_ws(p.columns, ws, pembanding)]
-        hasil[ws] = (p[ws] / lain.median(axis=1, skipna=True)).where(lain.notna().sum(axis=1) >= min_pembanding)
+        acuan = _acuan_ws(p.columns, ws, pembanding)
+        lain = p[acuan]
+        butuh = _min_acuan(acuan, pembanding, min_pembanding)
+        hasil[ws] = (p[ws] / lain.median(axis=1, skipna=True)).where(lain.notna().sum(axis=1) >= butuh)
     return pd.DataFrame(hasil, index=p.index)
 
 
@@ -76,9 +87,10 @@ def rasio_cerah(poa: pd.DataFrame, poa_cerah: pd.Series, *, kt_min: float = 0.75
     dalam[p.index.indexer_between_time(*jam)] = True
     hasil = {}
     for ws in p.columns:
-        lain = p[_acuan_ws(p.columns, ws, pembanding)]
+        daftar = _acuan_ws(p.columns, ws, pembanding)
+        lain = p[daftar]
         acuan = lain.median(axis=1, skipna=True)
-        cerah = (acuan / c >= kt_min) & (lain.notna().sum(axis=1) >= 2) & dalam
+        cerah = (acuan / c >= kt_min) & (lain.notna().sum(axis=1) >= _min_acuan(daftar, pembanding)) & dalam
         hasil[ws] = (p[ws] / acuan).where(cerah)
     return pd.DataFrame(hasil, index=p.index)
 
@@ -231,8 +243,9 @@ def rasio_harian(poa: pd.DataFrame, *, pembanding=None, jam: tuple = ("09:00", "
     p = p.iloc[p.index.indexer_between_time(*jam)]
     hasil = {}
     for ws in p.columns:
-        lain = p[_acuan_ws(p.columns, ws, pembanding)]
-        acuan = lain.median(axis=1).where(lain.notna().sum(axis=1) >= 2)
+        daftar = _acuan_ws(p.columns, ws, pembanding)
+        lain = p[daftar]
+        acuan = lain.median(axis=1).where(lain.notna().sum(axis=1) >= _min_acuan(daftar, pembanding))
         buang = (set(jam_penghalang.loc[jam_penghalang["ws"] == ws, "jam"])
                  if jam_penghalang is not None and len(jam_penghalang) else set())
         x = p[ws].where(~p.index.hour.isin(sorted(buang)))

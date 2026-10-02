@@ -304,6 +304,21 @@ class TestPembanding:
                              pd.DataFrame(columns=["ws", "jam"])).set_index("ws")
         assert not bool(tetap.loc["WS-4", "bergeser"]) and tetap.loc["WS-4", "ayunan_bulanan"] < 0.01
 
+    def test_dua_pembanding_saling_mengukur(self):
+        """2026: hanya WS-4/WS-5 sehat; masing-masing cukup satu acuan bila daftar diberikan pengguna."""
+        p = _poa()
+        pb = ["WS-4", "WS-5"]
+        g = gain_bulanan(rasio_ke_median(p, sampel_stabil(p), pembanding=pb))
+        ws4 = g[g["ws"] == "WS-4"]["median"].to_numpy()
+        assert ws4 == pytest.approx([1.0] * 3, rel=0.01)                 # WS-4 / WS-5
+        assert rasio_cerah(p, _poa(gains=(1.0,) * 5)["WS-1"], pembanding=pb)["WS-4"].notna().any()
+        assert rasio_harian(p, pembanding=pb)["WS-4"].dropna().to_numpy() == pytest.approx(1.0)
+
+    def test_tanpa_daftar_tetap_dua_pembanding(self):
+        """Tanpa daftar pengguna, acuan satu stasiun tidak cukup (perilaku lama)."""
+        p = _poa(hari=2)[["WS-4", "WS-5"]]
+        assert rasio_ke_median(p, sampel_stabil(p)).isna().all().all()
+
     def test_sepakati_normalisasi_abs_ke_pembanding(self):
         absolut = pd.DataFrame({"ws": ["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"],
                                 "gain": [1.1, 1.2, 0.98, 1.0, 1.02], "n": 500})
