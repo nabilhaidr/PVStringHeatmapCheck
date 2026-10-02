@@ -207,3 +207,32 @@ def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.
         baris.append({**dasar, "status": "perlu_lapangan", "usulan": np.nan, "alasan": alasan})
     return pd.DataFrame(baris, columns=["ws", "gain_rel", "gain_abs", "gain_larik", "n_bulan_sah", "bergeser",
                                         "status", "usulan", "alasan"])
+
+
+KOLOM_PERIODE = ["ws", "periode", "mulai", "akhir", "gain_rel", "gain_abs", "gain_larik", "n_bulan_sah",
+                 "bergeser", "status", "usulan", "alasan"]
+
+
+def kalibrasi_per_periode(poa: pd.DataFrame, stabil: pd.DataFrame, rasio: pd.DataFrame,
+                          jam_penghalang: pd.DataFrame, poa_cerah: pd.Series, periode: pd.DataFrame,
+                          kalibrasi_harian=None, wb_to_ws=None, *, min_sampel: int = 200,
+                          tol: float = 0.03) -> pd.DataFrame:
+    """``sepakati`` per (WS, periode); ketiga acuan dihitung pada jendela periode itu.
+
+    ``gain_absolut`` dihitung untuk SEMUA WS di jendela yang sama, supaya normalisasi
+    median di ``sepakati`` tidak mencampur waktu.
+    """
+    baris = []
+    for p in periode.itertuples(index=False):
+        j = slice(p.mulai, p.akhir + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
+        rel = gain_relatif(rasio.loc[j, [p.ws]], jam_penghalang, min_sampel=min_sampel)
+        absolut = gain_absolut(poa.loc[j], poa_cerah, stabil.loc[j])
+        larik = None
+        if kalibrasi_harian is not None:
+            tgl = pd.to_datetime(kalibrasi_harian["date"])
+            k = kalibrasi_harian[(tgl >= p.mulai) & (tgl <= p.akhir)]
+            larik = gain_larik(k, wb_to_ws) if len(k) else None
+        s = sepakati(rel, absolut, larik, tol=tol).iloc[0]
+        baris.append({"ws": p.ws, "periode": p.periode, "mulai": p.mulai, "akhir": p.akhir,
+                      **{k: s[k] for k in KOLOM_PERIODE[4:]}})
+    return pd.DataFrame(baris, columns=KOLOM_PERIODE)

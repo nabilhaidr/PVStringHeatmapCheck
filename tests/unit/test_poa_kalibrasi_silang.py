@@ -8,8 +8,8 @@ import pytest
 import run_poa_cross_calibration as cli
 
 from pv_pipeline.poa.kalibrasi_silang import (
-    gain_absolut, gain_bulanan, gain_larik, gain_relatif, penghalang, periode_ws, profil_jam,
-    rasio_ke_median, sampel_stabil, sepakati,
+    gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang, periode_ws,
+    profil_jam, rasio_ke_median, sampel_stabil, sepakati,
 )
 
 _GAIN = (1.0, 0.8, 1.05, 1.0, 1.0)
@@ -222,6 +222,22 @@ class TestSepakati:
         s = sepakati(_rel(0.951), _acuan(0.968), _acuan(0.993)).set_index("ws")
         assert s.loc["WS-2", "alasan"] == "sepakat: abs, rel"
         assert s.loc["WS-2", "usulan"] == pytest.approx(1 / np.median([0.951, 0.968]))
+
+
+class TestKalibrasiPerPeriode:
+    def test_sensor_dipasang_ulang_dua_usulan(self):
+        """Satu faktor untuk seluruh rentang mencampur dua sensor; per periode masing-masing benar."""
+        p = _poa(hari=151, gains=(1.0, 1.0, 1.05, 1.0, 1.0))      # 2026-01-01..2026-05-31
+        p.loc["2026-03-01":"2026-04-10", "WS-2"] = np.nan          # 41 hari kosong
+        p.loc["2026-04-11":, "WS-2"] *= 0.8                        # kembali 0,8
+        stabil = sampel_stabil(p)
+        rasio = rasio_ke_median(p, stabil)
+        cerah = _poa(hari=151, gains=(1.0,) * 5)["WS-1"]
+        h = kalibrasi_per_periode(p, stabil, rasio, penghalang(profil_jam(rasio)), cerah,
+                                  periode_ws(p)).set_index(["ws", "periode"])
+        assert h.loc[("WS-2", 1), "usulan"] == pytest.approx(1.0, rel=0.01)
+        assert h.loc[("WS-2", 2), "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
+        assert h.loc[("WS-2", 2), "mulai"] == pd.Timestamp("2026-04-11")
 
 
 class _Loader:
