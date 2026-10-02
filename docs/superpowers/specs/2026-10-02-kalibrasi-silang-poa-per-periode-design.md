@@ -116,6 +116,27 @@ Kalibrasi atas rentang gabungan tidak sah untuk WS yang berubah di tengah rentan
 3. **WS-3, WS-4, WS-5 (2026):** gain berayun > 5 % antar-bulan, sehingga satu faktor per periode tidak sah. Penyebab ayunan belum diselidiki (musim, kebersihan kubah, atau acuan yang ikut bergeser).
 4. Pulau data pendek (WS-1 periode 2, WS-3 periode 2–5) muncul sebagai baris `perlu_lapangan` tanpa logika khusus, sesuai rancangan.
 
+### Run kedua: penghalang dari hari cerah (2 Okt 2026, commit `13f759e` + `2ac2ffd`)
+
+Perintah sama. `profil_jam`/`penghalang` kini dari `rasio_cerah` (sampel cerah menurut WS lain, bacaan ≤ 0 dibuang).
+
+- **Penghalang: WS-1 pukul 11 dan 12 (3 bulan masing-masing).** Profil hari cerah WS-1:
+
+  | jam | Jan 2025 – Mei 2026 (13 bulan berdata) | Jun 2026 | Jul 2026 | Agu 2026 |
+  |---|---|---|---|---|
+  | 11 | 0,97–1,02 | 0,32 | 0,41 | 0,40 |
+  | 12 | 0,96–1,10 | 0,40 | 0,41 | 0,39 |
+
+  Jun 2025 (posisi matahari sama dengan Jun 2026): 0,97 / 1,03. **Bayangan baru muncul Jun 2026**, bersamaan dengan data
+  WS-1 kosong 1–10 Jun 2026 dan WS-2 kembali 10 Jun 2026. Penilaian "musiman" di run pertama keliru.
+- **WS-1 periode 3:** jam 11–12 kini dibuang dari gain relatif (0,959 → 0,962); statusnya berubah dari usulan 1,043 ke
+  `perlu_lapangan` (bergeser). Periode 1: 1 bulan sah (sebelumnya 3), karena jam 11–12 ikut dibuang.
+- Usulan tersisa: WS-2 0,978 (2025-01-15 – 2026-02-28) dan WS-5 0,992 (2025-01-01 – 2025-06-01). Baris WS lain sama
+  dengan run pertama.
+- **Bacaan nol:** WS-1 mencatat 0 W/m² saat median WS lain > 500 W/m² (10–14): Okt 2025 11 sampel, Nov 28, Des 24,
+  Jan 2026 6, Apr 2, Mei 5. Seluruh sampel cerah Nov–Des 2025 bernilai 0 (logger/sensor mati). Kini dibuang dari
+  `rasio_cerah`; jalur sampel stabil sudah membuangnya lewat POA > 300.
+
 ## Di luar cakupan
 
 - Batas periode manual (misalnya tanggal perbaikan lapangan yang tidak meninggalkan celah).
