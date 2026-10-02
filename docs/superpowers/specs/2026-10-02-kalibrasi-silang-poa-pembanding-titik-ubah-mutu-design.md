@@ -148,6 +148,17 @@ Dengan `--pembanding WS-4,WS-5`, WS-4 dan WS-5 masing-masing cukup satu acuan; d
 - Selisih WS-4 vs WS-5 (~2 %) tidak bisa diputuskan tanpa acuan mutlak (sertifikat kalibrasi pyranometer).
 - Semua tanggal batas masih kandidat sampai dikonfirmasi log O&M.
 
+## Run per tahun dan grafik rasio harian (2 Okt 2026)
+
+- 2025 (`--mulai 2025-01-01 --akhir 2025-12-31 --pembanding WS-3,WS-4,WS-5`): satu usulan, WS-2 0,990 (15 Jan – 31 Des
+  2025, 4 bulan sah). WS-4/WS-5 data kurang: pembanding tiga stasiun hanya lengkap Jan–Mar 2025.
+- 2026 (`--mulai 2026-01-01 --akhir 2026-08-31 --pembanding WS-4,WS-5` + tiga batas kandidat): WS-3 1,060 (1 Jan –
+  10 Agu), WS-4 1,021, WS-5 0,993 (11 Jan – 31 Agu); WS-2 Jan–Feb 2026 acuan berselisih; WS-1 1,053 jangan dipakai.
+  Kandidat WS-4 2026-01-11 (−7,7 %) = cermin lompatan WS-5 (acuan WS-4 hanya WS-5).
+- Ringkasan untuk pemilik dokumen: `docs/Ringkasan_Usulan_Koreksi_POA.md` (+ `.docx`).
+- CLI kini menulis `…_harian.png`: satu panel per WS, titik rasio harian, median 14 hari (terputus di celah data), garis
+  abu di awal periode, garis oranye putus-putus di kandidat titik ubah (label berselang). Diperiksa visual pada kedua run.
+
 ## Di luar cakupan
 
 - Menerapkan kandidat titik ubah otomatis.
