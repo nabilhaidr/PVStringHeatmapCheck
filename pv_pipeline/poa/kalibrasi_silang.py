@@ -56,8 +56,10 @@ def rasio_cerah(poa: pd.DataFrame, poa_cerah: pd.Series, *, kt_min: float = 0.75
     Bahan ``profil_jam``/``penghalang``. Sampel stabil tidak dipakai: bayangan menjatuhkan
     bacaan WS itu sendiri sampai gagal syarat mulus/POA minimum, sehingga penghalang
     tersaring keluar dari pengukurannya sendiri (WS-1 pukul 11-12, Jun-Agu 2026).
+    Bacaan <= 0 dibuang: bayangan menyisakan cahaya baur, jadi nol di langit cerah adalah
+    sensor/logger mati (WS-1 Okt 2025-Mei 2026), bukan penghalang.
     """
-    p = poa.where((poa >= 0.0) & (poa <= POA_MAKS))
+    p = poa.where((poa > 0.0) & (poa <= POA_MAKS))
     c = poa_cerah.reindex(p.index)
     dalam = np.zeros(len(p), dtype=bool)
     dalam[p.index.indexer_between_time(*jam)] = True

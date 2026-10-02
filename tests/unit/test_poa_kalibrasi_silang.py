@@ -110,6 +110,15 @@ class TestPenghalang:
         hal = penghalang(profil_jam(rasio_cerah(p, cerah)))
         assert list(zip(hal["ws"], hal["jam"])) == [("WS-1", 11)]
 
+    def test_bacaan_nol_bukan_bayangan(self):
+        """WS-1 Okt 2025-Mei 2026 mencatat 0 W/m2 di siang cerah: logger/sensor mati, bukan penghalang.
+
+        Bayangan selalu menyisakan cahaya baur (WS-1 di bawah bayangan 0,34-0,45), tidak pernah 0.
+        """
+        p = _turunkan(_poa(), "WS-1", 11, 0.0)
+        cerah = _poa(gains=(1.0,) * 5)["WS-1"]
+        assert penghalang(profil_jam(rasio_cerah(p, cerah))).empty
+
     def test_rasio_cerah_menolak_langit_berawan(self):
         """Di langit berawan rasio antar-WS ikut awan lokal; bukan bahan profil penghalang."""
         p = _poa(hari=2, gains=(0.5,) * 5)                         # Kt WS lain 0,5 < 0,75
