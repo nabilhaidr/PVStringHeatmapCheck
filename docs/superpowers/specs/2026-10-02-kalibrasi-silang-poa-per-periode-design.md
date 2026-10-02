@@ -85,6 +85,37 @@ Kalibrasi atas rentang gabungan tidak sah untuk WS yang berubah di tengah rentan
   seluruh rentang mencampur kedua sensor.
 - **CLI:** uji yang ada tetap lolos (tanpa celah = 1 periode per WS); ditambah `Kesepakatan` punya kolom `periode` = 1.
 
+## Hasil
+
+### Run pertama (2 Okt 2026, commit `482d1d7`)
+
+`python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" --m2f-dir "F:/Downloads part 2/cek pv/m2f" --akhir 2026-08-31`
+→ `coba/poa_cross_calibration_20250101_20260831.xlsx` (kriteria stabil 3 % / 100).
+
+| WS | periode | rentang | rel / abs / larik | bulan sah | status |
+|---|---|---|---|---|---|
+| WS-1 | 1 | 2025-01-12 – 2025-06-18 | 0,880 / 0,960 / – | 3 | perlu_lapangan (berselisih) |
+| WS-1 | 2 | 2025-07-24 (1 hari) | – | 0 | perlu_lapangan (data kurang) |
+| WS-1 | 3 | 2025-08-26 – 2026-08-31 | 0,959 / 0,959 / 0,993 | 5 | usulan 1,043 (abs, rel) |
+| WS-2 | 1 | 2025-01-15 – 2026-02-28 | 1,015 / 1,029 / – | 6 | usulan 0,978 (abs, rel) |
+| WS-2 | 2 | 2026-06-10 – 2026-08-31 | 1,066 / 1,061 / 1,205 | 1 | perlu_lapangan (data kurang) |
+| WS-3 | 1 | 2025-01-12 – 2025-03-14 | 1,013 / 1,014 / – | 1 | perlu_lapangan (data kurang) |
+| WS-3 | 2–5 | pulau data 2025 (1–22 hari) | – | 0 | perlu_lapangan (data kurang) |
+| WS-3 | 6 | 2026-01-01 – 2026-08-31 | 0,953 / 0,957 / 0,977 | 5 | perlu_lapangan (bergeser) |
+| WS-4 | 1 | 2025-01-12 – 2026-08-31 | 1,002 / 1,000 / 0,980 | 10 | perlu_lapangan (bergeser) |
+| WS-5 | 1 | 2025-01-01 – 2025-06-01 | 1,016 / 1,000 / – | 4 | usulan 0,992 (abs, rel) |
+| WS-5 | 2 | 2025-07-07 – 2025-09-30 | – / 1,000 / – | 0 | perlu_lapangan (data kurang) |
+| WS-5 | 3 | 2026-01-01 – 2026-08-31 | 1,050 / 1,000 / 1,008 | 6 | perlu_lapangan (bergeser) |
+
+- Penghalang: tidak ada yang lolos ambang 10 % × 3 bulan.
+- Hari M2f untuk acuan larik hanya Jun–Jul 2026, jadi kolom larik hanya terisi pada periode yang mencakupnya.
+
+**Penilaian kewajaran (pemeriksaan lapangan belum ada):**
+1. **WS-2 kini dipisah dengan benar.** Usulan 0,978 hanya untuk periode sebelum celah. Periode sesudah celah (rel 1,066 / abs 1,061) menunggu ≥ 2 bulan sah atau hasil lapangan. Usulan gabungan 0,976 yang menyesatkan (run 2 Okt di spesifikasi 2026-10-01) tidak muncul lagi.
+2. **WS-1 periode 3: usulan 1,043 hanya untuk amplitudo.** Ia sejalan dengan taksiran orientasi (gain 0,966 di luar jam bayangan, 1/0,966 = 1,035). Bayangan pukul 11:24–12:49 di bulan matahari-utara (Jun–Agu 2026) TIDAK tertangkap `penghalang`, karena sampel stabil di bulan-bulan itu sedikit. Usulan ini jangan diterapkan sebelum penghalang WS-1 diperiksa (`docs/Pemeriksaan_Lapangan_WS1_WS2.md`).
+3. **WS-3, WS-4, WS-5 (2026):** gain berayun > 5 % antar-bulan, sehingga satu faktor per periode tidak sah. Penyebab ayunan belum diselidiki (musim, kebersihan kubah, atau acuan yang ikut bergeser).
+4. Pulau data pendek (WS-1 periode 2, WS-3 periode 2–5) muncul sebagai baris `perlu_lapangan` tanpa logika khusus, sesuai rancangan.
+
 ## Di luar cakupan
 
 - Batas periode manual (misalnya tanggal perbaikan lapangan yang tidak meninggalkan celah).
