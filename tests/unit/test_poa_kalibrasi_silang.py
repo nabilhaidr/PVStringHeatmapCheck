@@ -266,6 +266,7 @@ def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatc
                              "Kesepakatan", "Catatan"]
     assert x.parse("Larik").empty
     s = x.parse("Kesepakatan").set_index("ws")
+    assert (s["periode"] == 1).all()                                   # tanpa celah: satu periode per WS
     assert s.loc["WS-2", "status"] == "usulan_koreksi"
     assert s.loc["WS-2", "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
     assert config.read_bytes() == sebelum

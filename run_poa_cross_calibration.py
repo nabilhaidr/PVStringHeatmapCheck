@@ -2,12 +2,15 @@
 
 Rancangan: docs/superpowers/specs/2026-10-01-kalibrasi-silang-poa-design.md
 
+Gain dan kesepakatan dihitung per (WS, periode); periode dipotong di celah data
+>= 30 hari (docs/superpowers/specs/2026-10-02-kalibrasi-silang-poa-per-periode-design.md).
+
 Usage:
     python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
         [--mulai 2025-01-01] [--akhir 2026-07-31] [--m2f-dir "F:/Downloads part 2/cek pv/m2f"] \
         [--toleransi 0.03] [--min-sampel 100]
 
-Config dan loader TIDAK diubah: usulan pyranometer.ws_gain / ws_jam_penghalang
+Config dan loader TIDAK diubah: usulan pyranometer.ws_gain_periode / ws_jam_penghalang
 dicetak (BELUM dibaca loader) untuk diputuskan pemilik dokumen.
 """
 from __future__ import annotations
@@ -22,8 +25,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from pv_pipeline.poa.kalibrasi_silang import (  # noqa: E402
-    POA_MAKS, gain_absolut, gain_bulanan, gain_larik, gain_relatif, penghalang, profil_jam,
-    rasio_ke_median, sampel_stabil, sepakati,
+    POA_MAKS, gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang,
+    periode_ws, profil_jam, rasio_ke_median, sampel_stabil,
 )
 from pv_pipeline.poa.pvlib_estimator import PvlibClearSkyEstimator  # noqa: E402
 from rekap_m2f import build_daily_calib, discover_m2f_xlsx, load_day  # noqa: E402
@@ -75,12 +78,14 @@ def main(argv=None) -> None:
     hal = penghalang(profil)
     rel = gain_relatif(rasio, hal, min_sampel=a.min_sampel)
     estimator = PvlibClearSkyEstimator.from_geometry_yaml(a.geometry, load_albedo_provider=False)
-    absolut = gain_absolut(poa, estimator.estimate(poa.index), stabil)
-    larik = None
+    cerah = estimator.estimate(poa.index)
+    absolut = gain_absolut(poa, cerah, stabil)
+    kal = larik = None
     if a.m2f_dir:
         kal = build_daily_calib([load_day(p) for _, p in discover_m2f_xlsx(a.m2f_dir)])
         larik = gain_larik(kal, loader.wb_to_ws)
-    sep = sepakati(rel, absolut, larik)
+    sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, periode_ws(poa), kal, loader.wb_to_ws,
+                                min_sampel=a.min_sampel)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
     catatan = pd.DataFrame({"butir": [
@@ -90,7 +95,8 @@ def main(argv=None) -> None:
         "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), galat, offset,
         a.m2f_dir or "-",
         f"stabil {a.toleransi * 100:g} %; POA > 300; 09-15; min 2 pembanding; {a.min_sampel} sampel/bulan; "
-        "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75"]})
+        "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75; "
+        "periode dipotong di celah >= 30 hari"]})
     os.makedirs(a.output_dir, exist_ok=True)
     dasar = os.path.join(a.output_dir, f"poa_cross_calibration_{awal:%Y%m%d}_{akhir:%Y%m%d}")
     with pd.ExcelWriter(dasar + ".xlsx") as w:
@@ -111,9 +117,11 @@ def main(argv=None) -> None:
     if len(usul) or len(hal):
         print("\n# usulan (BELUM diterapkan; loader belum membaca kunci ini):\npyranometer:")
         if len(usul):
-            print("  ws_gain:")
-            for r in usul.itertuples():
-                print(f"    {r.ws}: {r.usulan:.3f}")
+            print("  ws_gain_periode:")
+            for ws, g in usul.groupby("ws"):
+                print(f"    {ws}:")
+                for r in g.itertuples():
+                    print(f"      - {{mulai: {r.mulai:%Y-%m-%d}, akhir: {r.akhir:%Y-%m-%d}, gain: {r.usulan:.3f}}}")
         if len(hal):
             print("  ws_jam_penghalang:")
             for ws, g in hal.groupby("ws"):
