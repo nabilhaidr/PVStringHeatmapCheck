@@ -291,6 +291,26 @@ class TestKalibrasiPerPeriode:
         assert h.loc[("WS-2", 2), "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
 
 
+class TestPembanding:
+    def test_acuan_tetap_meredam_ayunan_palsu(self):
+        """WS-2 hilang lalu kembali bias: median 'semua WS lain' bergeser, pembanding tetap tidak."""
+        p = _poa(hari=120, gains=(0.95, 1.0, 0.95, 1.0, 1.05))
+        p.loc["2026-02-01":"2026-02-28", "WS-2"] = np.nan
+        p.loc["2026-03-01":, "WS-2"] *= 1.12
+        st = sampel_stabil(p)
+        semua = gain_relatif(rasio_ke_median(p, st), pd.DataFrame(columns=["ws", "jam"])).set_index("ws")
+        assert bool(semua.loc["WS-4", "bergeser"])                      # prasyarat: skenario memang mengayun
+        tetap = gain_relatif(rasio_ke_median(p, st, pembanding=["WS-3", "WS-4", "WS-5"]),
+                             pd.DataFrame(columns=["ws", "jam"])).set_index("ws")
+        assert not bool(tetap.loc["WS-4", "bergeser"]) and tetap.loc["WS-4", "ayunan_bulanan"] < 0.01
+
+    def test_sepakati_normalisasi_abs_ke_pembanding(self):
+        absolut = pd.DataFrame({"ws": ["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"],
+                                "gain": [1.1, 1.2, 0.98, 1.0, 1.02], "n": 500})
+        s = sepakati(_rel(), absolut, None, pembanding=["WS-3", "WS-4", "WS-5"]).set_index("ws")
+        assert s.loc["WS-4", "gain_abs"] == pytest.approx(1.0)
+
+
 class _Loader:
     def __init__(self):
         self.df = _poa().assign(avg=0.0)
@@ -336,6 +356,19 @@ def _bulanan(tmp_path, *arg):
     cli.main(["--mulai", "2026-01-01", "--akhir", "2026-01-02", "--output-dir", str(tmp_path), *arg])
     x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260102.xlsx")
     return x.parse("Bulanan"), x.parse("Catatan").set_index("butir")["nilai"]
+
+
+def test_cli_pembanding_tetap(tmp_path, monkeypatch):
+    """--pembanding diteruskan: ayunan palsu WS-4 akibat WS-2 yang hilang lalu bias tidak muncul."""
+    p = _poa(hari=120, gains=(0.95, 1.0, 0.95, 1.0, 1.05))
+    p.loc["2026-02-01":"2026-02-28", "WS-2"] = np.nan
+    p.loc["2026-03-01":, "WS-2"] *= 1.12
+    _pasang(monkeypatch, p.assign(avg=0.0))
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-04-30", "--output-dir", str(tmp_path),
+              "--pembanding", "WS-3,WS-4,WS-5"])
+    x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260430.xlsx")
+    assert not bool(x.parse("Kesepakatan").set_index("ws").loc["WS-4", "bergeser"])
+    assert x.parse("Catatan").set_index("butir").loc["pembanding", "nilai"] == "WS-3, WS-4, WS-5"
 
 
 def test_cli_batas_manual_memotong_periode(tmp_path, monkeypatch):

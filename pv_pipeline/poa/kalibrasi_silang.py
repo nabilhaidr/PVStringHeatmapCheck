@@ -35,22 +35,33 @@ def sampel_stabil(poa: pd.DataFrame, *, toleransi: float = 0.02, poa_min: float 
     return stabil & (p > poa_min) & jendela
 
 
-def rasio_ke_median(poa: pd.DataFrame, stabil: pd.DataFrame, *, min_pembanding: int = 2) -> pd.DataFrame:
+def _acuan_ws(kolom, ws, pembanding=None) -> list:
+    """Stasiun acuan untuk ``ws``: ``pembanding`` tanpa ws itu sendiri, atau semua WS lain.
+
+    Pembanding tetap dari WS yang sehat menahan acuan agar tidak bergeser ketika susunan
+    WS berubah (WS-2 hilang Mar-Jun 2026 lalu kembali +12 %).
+    """
+    return [c for c in (pembanding or kolom) if c != ws and c in kolom]
+
+
+def rasio_ke_median(poa: pd.DataFrame, stabil: pd.DataFrame, *, min_pembanding: int = 2,
+                    pembanding=None) -> pd.DataFrame:
     """POA_WS / median POA stasiun LAIN yang stabil di sampel yang sama.
 
     NaN bila WS itu tak stabil atau pembandingnya < ``min_pembanding``. WS
     yang kosong tidak diisi rata-rata situs: isi rata-rata menarik rasio ke 1.
+    ``pembanding`` membatasi stasiun acuan (lihat ``_acuan_ws``).
     """
     p = poa.where(stabil)
     hasil = {}
     for ws in p.columns:
-        lain = p.drop(columns=ws)
+        lain = p[_acuan_ws(p.columns, ws, pembanding)]
         hasil[ws] = (p[ws] / lain.median(axis=1, skipna=True)).where(lain.notna().sum(axis=1) >= min_pembanding)
     return pd.DataFrame(hasil, index=p.index)
 
 
 def rasio_cerah(poa: pd.DataFrame, poa_cerah: pd.Series, *, kt_min: float = 0.75,
-                jam: tuple = ("09:00", "15:00")) -> pd.DataFrame:
+                jam: tuple = ("09:00", "15:00"), pembanding=None) -> pd.DataFrame:
     """POA_WS / median POA stasiun LAIN, pada sampel yang cerah menurut stasiun LAIN.
 
     Bahan ``profil_jam``/``penghalang``. Sampel stabil tidak dipakai: bayangan menjatuhkan
@@ -65,7 +76,7 @@ def rasio_cerah(poa: pd.DataFrame, poa_cerah: pd.Series, *, kt_min: float = 0.75
     dalam[p.index.indexer_between_time(*jam)] = True
     hasil = {}
     for ws in p.columns:
-        lain = p.drop(columns=ws)
+        lain = p[_acuan_ws(p.columns, ws, pembanding)]
         acuan = lain.median(axis=1, skipna=True)
         cerah = (acuan / c >= kt_min) & (lain.notna().sum(axis=1) >= 2) & dalam
         hasil[ws] = (p[ws] / acuan).where(cerah)
@@ -206,7 +217,7 @@ def _saling_sepakat(ada: dict, tol: float) -> set:
 
 
 def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.03,
-             min_bulan: int = 2) -> pd.DataFrame:
+             min_bulan: int = 2, pembanding=None) -> pd.DataFrame:
     """Usulan faktor (1/gain) bila >= 2 acuan saling sepakat dalam ``tol`` dan gain terbukti tak bergeser.
 
     "Terbukti tak bergeser" butuh >= ``min_bulan`` bulan sah. ``gain_abs``
@@ -214,7 +225,8 @@ def sepakati(rel: pd.DataFrame, absolut: pd.DataFrame, larik, *, tol: float = 0.
     (kekeruhan, albedo) yang bukan milik satu sensor.
     """
     a = absolut.set_index("ws")["gain"]
-    a = a / a.median()
+    # Normalkan ke WS pembanding bila ada: satu sensor bias tidak boleh menggeser acuan.
+    a = a / (a[a.index.isin(pembanding)].median() if pembanding else a.median())
     lr = larik.set_index("ws")["gain"] if larik is not None and len(larik) else pd.Series(dtype=float)
     baris = []
     for r in rel.itertuples(index=False):
@@ -246,7 +258,7 @@ KOLOM_PERIODE = ["ws", "periode", "mulai", "akhir", "gain_rel", "gain_abs", "gai
 def kalibrasi_per_periode(poa: pd.DataFrame, stabil: pd.DataFrame, rasio: pd.DataFrame,
                           jam_penghalang: pd.DataFrame, poa_cerah: pd.Series, periode: pd.DataFrame,
                           kalibrasi_harian=None, wb_to_ws=None, *, min_sampel: int = 200,
-                          tol: float = 0.03) -> pd.DataFrame:
+                          tol: float = 0.03, pembanding=None) -> pd.DataFrame:
     """``sepakati`` per (WS, periode); ketiga acuan dihitung pada jendela periode itu.
 
     ``gain_absolut`` dihitung untuk SEMUA WS di jendela yang sama, supaya normalisasi
@@ -262,7 +274,7 @@ def kalibrasi_per_periode(poa: pd.DataFrame, stabil: pd.DataFrame, rasio: pd.Dat
             tgl = pd.to_datetime(kalibrasi_harian["date"])
             k = kalibrasi_harian[(tgl >= p.mulai) & (tgl <= p.akhir)]
             larik = gain_larik(k, wb_to_ws) if len(k) else None
-        s = sepakati(rel, absolut, larik, tol=tol).iloc[0]
+        s = sepakati(rel, absolut, larik, tol=tol, pembanding=pembanding).iloc[0]
         baris.append({"ws": p.ws, "periode": p.periode, "mulai": p.mulai, "akhir": p.akhir,
                       **{k: s[k] for k in KOLOM_PERIODE[4:]}})
     return pd.DataFrame(baris, columns=KOLOM_PERIODE)

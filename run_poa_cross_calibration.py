@@ -64,6 +64,8 @@ def main(argv=None) -> None:
     ap.add_argument("--min-sampel", type=int, default=100, help="sampel stabil minimum per WS per bulan")
     ap.add_argument("--batas", action="append", default=[], metavar="WS-n:YYYY-MM-DD",
                     help="hari pertama periode baru tanpa celah data (boleh diulang)")
+    ap.add_argument("--pembanding", default="", metavar="WS-3,WS-4,WS-5",
+                    help="stasiun acuan tetap (kosong = semua WS lain)")
     ap.add_argument("--geometry", default=os.path.join("config", "site_geometry.yaml"))
     ap.add_argument("--output-dir", default="coba")
     a = ap.parse_args(argv)
@@ -73,13 +75,14 @@ def main(argv=None) -> None:
     poa = loader.df.loc[a.mulai:f"{a.akhir} 23:59:59", kolom]
     galat = int(((poa < 0) | (poa > POA_MAKS)).sum().sum())
 
+    pemb = [w.strip() for w in a.pembanding.split(",") if w.strip()] or None
     stabil = sampel_stabil(poa, toleransi=a.toleransi)
-    rasio = rasio_ke_median(poa, stabil)
+    rasio = rasio_ke_median(poa, stabil, pembanding=pemb)
     bulanan = gain_bulanan(rasio, min_sampel=a.min_sampel)
     estimator = PvlibClearSkyEstimator.from_geometry_yaml(a.geometry, load_albedo_provider=False)
     cerah = estimator.estimate(poa.index)
     # Profil penghalang dari hari cerah, bukan sampel stabil: bayangan pekat gagal syarat stabil.
-    profil = profil_jam(rasio_cerah(poa, cerah))
+    profil = profil_jam(rasio_cerah(poa, cerah, pembanding=pemb))
     hal = penghalang(profil)
     rel = gain_relatif(rasio, hal, min_sampel=a.min_sampel)
     absolut = gain_absolut(poa, cerah, stabil)
@@ -92,15 +95,15 @@ def main(argv=None) -> None:
         ws, tgl = b.split(":", 1)
         batas.setdefault(ws, []).append(tgl)
     sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, periode_ws(poa, batas=batas), kal, loader.wb_to_ws,
-                                min_sampel=a.min_sampel)
+                                min_sampel=a.min_sampel, pembanding=pemb)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
     catatan = pd.DataFrame({"butir": [
         "rentang", "sampel stabil per WS", "sampel galat (<0 atau >1400)", "offset POA (menit)",
-        "acuan larik", "batas periode manual", "ambang"], "nilai": [
+        "acuan larik", "batas periode manual", "pembanding", "ambang"], "nilai": [
         f"{awal:%Y-%m-%d}..{akhir:%Y-%m-%d}",
         "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), galat, offset,
-        a.m2f_dir or "-", "; ".join(a.batas) or "-",
+        a.m2f_dir or "-", "; ".join(a.batas) or "-", ", ".join(pemb) if pemb else "semua WS lain",
         f"stabil {a.toleransi * 100:g} %; POA > 300; 09-15; min 2 pembanding; {a.min_sampel} sampel/bulan; "
         "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75; "
         "periode dipotong di celah >= 30 hari"]})
