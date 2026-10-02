@@ -70,15 +70,20 @@ def _gambar_harian(rasio_hari: pd.DataFrame, periode: pd.DataFrame, titik: pd.Da
             ax.text(0.5, 0.5, "tanpa data", transform=ax.transAxes, ha="center", color="#52514e")
             continue
         ax.plot(r.index, r.to_numpy(), "o", ms=3, color="#2a78d6", alpha=0.35, mec="none")
-        ax.plot(r.index, r.rolling("14D", center=True, min_periods=5).median().to_numpy(), color="#2a78d6", lw=2)
+        # Hari tanpa data jadi NaN supaya garis median terputus di celah, tidak menyambung lurus.
+        harian = r.asfreq("D")
+        ax.plot(harian.index, harian.rolling("14D", center=True, min_periods=5).median().to_numpy(),
+                color="#2a78d6", lw=2)
         bawah, atas = np.nanpercentile(r.to_numpy(), [1, 99])
         ax.set_ylim(bawah - 0.05, atas + 0.05)
         for m in periode.loc[periode["ws"] == ws, "mulai"].iloc[1:]:
             ax.axvline(m, color="#52514e", lw=1)
-        for t in titik[titik["ws"] == ws].itertuples():
+        for i, t in enumerate(titik[titik["ws"] == ws].itertuples()):
             ax.axvline(t.tanggal, color="#eb6834", lw=1.5, ls="--")
-            ax.annotate(f" {t.tanggal:%d %b %Y} {t.lompatan:+.1%}", (t.tanggal, 0.92), xycoords=("data", "axes fraction"),
-                        fontsize=8, color="#52514e")
+            # Tinggi label berselang supaya kandidat yang berdekatan tidak bertumpuk.
+            ax.annotate(f" {t.tanggal:%d %b %Y} {t.lompatan:+.1%}", (t.tanggal, 0.92 - 0.13 * (i % 3)),
+                        xycoords=("data", "axes fraction"), fontsize=8, color="#52514e",
+                        bbox={"fc": "#fcfcfb", "ec": "none", "alpha": 0.85, "pad": 0.5})
     fig.suptitle(judul, color="#0b0b0b", fontsize=11)
     fig.text(0.5, 0.955, "titik: rasio harian · garis biru: median 14 hari · garis abu: awal periode "
              "(celah >= 30 hari atau --batas) · garis oranye putus-putus: kandidat titik ubah",
