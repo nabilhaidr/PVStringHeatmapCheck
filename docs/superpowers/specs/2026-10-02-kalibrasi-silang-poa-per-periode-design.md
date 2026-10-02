@@ -137,6 +137,30 @@ Perintah sama. `profil_jam`/`penghalang` kini dari `rasio_cerah` (sampel cerah m
   Jan 2026 6, Apr 2, Mei 5. Seluruh sampel cerah Nov–Des 2025 bernilai 0 (logger/sensor mati). Kini dibuang dari
   `rasio_cerah`; jalur sampel stabil sudah membuangnya lewat POA > 300.
 
+### Ayunan WS-3/4/5 di 2026 (2 Okt 2026)
+
+Gain bulanan 2026 dihitung ulang dengan **himpunan pembanding tetap WS-3/4/5** (tanpa WS-1 dan WS-2), kriteria 3 % / 100:
+
+| WS | ayunan, pembanding 5 WS (alat) | ayunan, pembanding tetap WS-3/4/5 |
+|---|---|---|
+| WS-3 | 0,053 | 0,067 |
+| WS-4 | 0,063 | **0,023** |
+| WS-5 | 0,067 | **0,040** |
+
+- **WS-4 dan WS-5:** ayunan > 5 % di alat adalah artefak acuan. "Median WS lain" berubah susunan: tanpa WS-2 pada Mar–Jun 2026 (median turun, rasio naik), lalu dengan WS-2 yang +12 % sejak Jun (median naik, rasio turun). Dengan pembanding tetap, keduanya stabil di bawah 5 %.
+- **WS-3: lompatan ~+6 % sekitar 10 Agu 2026.** Energi harian 09–15, median sebelum 10 Agu (10 Jun – 9 Agu, 60 hari) vs sesudah (22 hari):
+
+  | pasangan | sebelum | sesudah | lompatan |
+  |---|---|---|---|
+  | WS-4 / WS-5 | 0,962 | 0,968 | +0,6 % |
+  | WS-3 / rata(WS-4, WS-5) | 0,981 | 1,037 | +5,7 % |
+  | WS-3 / WS-2 | 0,899 | 0,992 | +10,3 % |
+  | WS-4 / WS-2 | 0,901 | 0,932 | +3,5 % |
+  | WS-5 / WS-2 | 0,939 | 0,969 | +3,2 % |
+
+  WS-3 membaca ~5–7 % di bawah WS-4/5 sejak Jan 2026 lalu kembali ke ~1,0; pola ini cocok dengan kubah kotor yang dibersihkan, atau sensor yang dikalibrasi ulang/diganti. Pada saat yang sama WS-2 tampak turun ~3 % (WS-4 dan WS-5 sama-sama naik ~3 % terhadapnya; rasio bulanan WS-2 1,12 Jul → 1,08 Agu). Kemungkinan satu kunjungan pemeliharaan.
+- **Konsekuensi untuk alat:** lompatan tanpa celah data tidak tertangkap `periode_ws`. Ini bukti pertama bahwa batas periode manual atau deteksi titik ubah (di luar cakupan di bawah) dibutuhkan. Pembanding "median WS lain" juga peka terhadap susunan WS yang ada; pembanding tetap dari WS yang sehat lebih stabil.
+
 ## Di luar cakupan
 
 - Batas periode manual (misalnya tanggal perbaikan lapangan yang tidak meninggalkan celah).

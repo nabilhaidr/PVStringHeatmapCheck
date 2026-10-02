@@ -93,7 +93,27 @@ dipasang saat pekerjaan sekitar **1–10 Jun 2026**, kemungkinan dalam kegiatan 
 
 ---
 
-## 3. Sesudah kunjungan
+## 3. Semua stasiun: log pembersihan dan pemeliharaan pyranometer
+
+### Yang terlihat di data
+
+- **WS-3 naik ~6 % sekitar 10 Agu 2026** terhadap WS-4/WS-5 (yang stabil satu sama lain, +0,6 %). Sejak Jan 2026 WS-3
+  membaca ~5–7 % di bawah WS-4/5, lalu kembali ke ~1,0. Pola ini cocok dengan kubah kotor yang dibersihkan, atau sensor
+  yang dikalibrasi ulang/diganti.
+- Pada saat yang sama **WS-2 tampak turun ~3 %**.
+
+### Yang ditanyakan
+
+| # | Butir | Cara | Catat |
+|---|---|---|---|
+| 1 | Pekerjaan di WS-3 sekitar 10 Agu 2026 (dibersihkan, dikalibrasi, diganti?) | log pekerjaan O&M | tanggal, jenis pekerjaan |
+| 2 | Apakah WS-2 juga dikerjakan sekitar 10 Agu 2026 | log pekerjaan O&M | tanggal, jenis pekerjaan |
+| 3 | Log pembersihan kubah pyranometer semua WS, 2025–2026 | log/jadwal O&M | tanggal per WS |
+| 4 | Jadwal pembersihan rutin pyranometer | SOP O&M | frekuensi |
+
+---
+
+## 4. Sesudah kunjungan
 
 - Kirim isian tabel dan foto ke tim analitik.
 - **Bila kemiringan/arah WS-2 salah:** perbaiki di lapangan. Data Jun 2026 sampai tanggal perbaikan diberi gain per
