@@ -65,6 +65,57 @@ Lanjutan dari `2026-10-01-kalibrasi-silang-poa-design.md` dan `2026-10-02-kalibr
   1.
 - **CLI:** sembilan sheet termasuk `TitikUbah`; `Catatan` memuat baris pembanding dan mutu data per WS.
 
+## Perbaikan saat verifikasi (2 Okt 2026)
+
+Run nyata pertama memperlihatkan dua cacat `titik_ubah`; keduanya diperbaiki dengan uji gagal lebih dulu:
+
+1. **Lompatan berlawanan arah digabung.** Turun lalu naik dalam ≤ 14 hari jadi satu kelompok, dan hanya yang terbesar
+   dilaporkan. Kini kelompok dipisah bila tanda lompatan berbalik.
+2. **Jam penghalang ikut dalam rasio harian.** Bayangan WS-1 yang berubah mengikuti matahari terbaca sebagai lompatan
+   (+13 % pada 28 Jun 2026). Kini `rasio_harian(..., jam_penghalang=...)` membuang jam penghalang WS itu, konsisten dengan
+   `gain_relatif`; CLI meneruskan sheet `Penghalang`.
+
+Keterbatasan yang tersisa: lompatan yang bertepatan dengan celah < 30 hari (penurunan WS-1 saat kosong 1–10 Jun 2026)
+tidak terdeteksi, karena jendela sebelumnya kurang dari 10 hari berdata.
+
+## Hasil (2 Okt 2026)
+
+`python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" --m2f-dir "F:/Downloads part 2/cek pv/m2f"
+--akhir 2026-08-31 --pembanding WS-3,WS-4,WS-5` → `coba/poa_silang_20261002_pembanding.txt`; tanpa peringatan atau galat.
+
+**Kesepakatan, dibanding acuan semua WS:**
+
+| WS | periode | acuan semua WS | pembanding WS-3/4/5 |
+|---|---|---|---|
+| WS-2 | 2025-01-15 – 2026-02-28 | usulan 0,978 | usulan 0,983 |
+| WS-3 | 2026-01-01 – 2026-08-31 (tanpa `--batas`) | bergeser | bergeser (rel 0,945 / abs 0,957 / larik 0,977) |
+| WS-4 | 2025-01-12 – 2026-08-31 | bergeser | **usulan 1,000** (abs, larik, rel) |
+| WS-5 | 2026-01-01 – 2026-08-31 | bergeser | usulan 0,996 (abs, larik; rel 1,048) |
+
+- WS-4 sehat; ayunannya artefak acuan.
+- Catatan: WS-3 sendiri ada di pembanding padahal membaca ~5 % rendah Jan – 9 Agu 2026. Median (WS-3, WS-4) yang menjadi
+  acuan WS-5 ikut rendah, sehingga rel WS-5 1,048 berselisih dengan abs/larik. Pembanding yang benar-benar sehat untuk 2026
+  mungkin hanya WS-4 dan WS-5; ini keputusan pengguna.
+
+**Kandidat titik ubah (`TitikUbah`):**
+
+| WS | tanggal | lompatan | penilaian |
+|---|---|---|---|
+| WS-3 | 2026-08-11 | +7,9 % | lompatan yang diketahui (taksiran tangan ~10 Agu) |
+| WS-2 | 2026-08-11 | −5,6 % | sebagian karena acuan ikut naik saat WS-3 melompat; terhadap WS-4/WS-5 masing-masing ~3 % |
+| WS-5 | 2026-01-11 | +8,2 % | **baru**: 10 hari pertama sesudah kosong Okt–Des 2025 ~8 % rendah. Ditanyakan ke lapangan |
+| WS-1 | 10 kandidat, Mar 2025 – Agu 2026 | ±5–11 % | WS-1 tidak stabil (tepi bayangan, bacaan nol, celah); jangan dipakai sampai diperbaiki |
+
+**Mutu data (`Catatan`, 2025-01-01..2026-08-31):**
+
+| WS | hari kosong | sampel nol saat WS lain cerah | sampel galat |
+|---|---|---|---|
+| WS-1 | 108 | 91 | 0 |
+| WS-2 | 117 | 0 | 1 |
+| WS-3 | 296 | 2 | 1 |
+| WS-4 | 13 | 0 | 0 |
+| WS-5 | 165 | 16 | 1 |
+
 ## Di luar cakupan
 
 - Menerapkan kandidat titik ubah otomatis.

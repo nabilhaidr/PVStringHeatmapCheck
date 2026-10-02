@@ -323,6 +323,23 @@ class TestTitikUbah:
     def test_tanpa_lompatan_kosong(self):
         assert titik_ubah(rasio_harian(_poa()), periode_ws(_poa())).empty
 
+    def test_turun_lalu_naik_dua_kandidat(self):
+        """Dua lompatan berlawanan arah yang berdekatan adalah dua peristiwa, bukan satu (WS-1 Jul-Agu 2026)."""
+        p = _poa()
+        p.loc["2026-02-01":"2026-02-09", "WS-2"] *= 0.8
+        tu = titik_ubah(rasio_harian(p), periode_ws(p))
+        assert list(np.sign(tu["lompatan"])) == [-1.0, 1.0]
+        assert abs((tu["tanggal"].iloc[0] - pd.Timestamp("2026-02-01")).days) <= 4
+        assert abs((tu["tanggal"].iloc[1] - pd.Timestamp("2026-02-10")).days) <= 4
+
+    def test_jam_penghalang_dibuang_dari_rasio_harian(self):
+        """Bayangan yang berubah mengikuti matahari bukan lompatan gain; jamnya sudah ditandai penghalang."""
+        p = _poa()
+        p.loc[(p.index.hour == 11) & (p.index >= "2026-02-15"), "WS-1"] *= 0.3
+        hal = pd.DataFrame({"ws": ["WS-1"], "jam": [11]})
+        assert not titik_ubah(rasio_harian(p), periode_ws(p)).empty                  # prasyarat
+        assert titik_ubah(rasio_harian(p, jam_penghalang=hal), periode_ws(p)).empty
+
     def test_lompatan_di_batas_celah_sudah_periode(self):
         """Celah >= 30 hari sudah memotong periode; lompatan di situ bukan kandidat baru."""
         p = _poa(hari=120)
@@ -387,6 +404,20 @@ def _bulanan(tmp_path, *arg):
     cli.main(["--mulai", "2026-01-01", "--akhir", "2026-01-02", "--output-dir", str(tmp_path), *arg])
     x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260102.xlsx")
     return x.parse("Bulanan"), x.parse("Catatan").set_index("butir")["nilai"]
+
+
+def test_cli_titik_ubah_tanpa_jam_penghalang(tmp_path, monkeypatch):
+    """Bayangan yang makin pekat di jam penghalang tidak muncul sebagai kandidat --batas."""
+    p = _poa()
+    jam11 = p.index.hour == 11
+    p.loc[jam11, "WS-1"] *= 0.6
+    p.loc[jam11 & (p.index >= "2026-03-01"), "WS-1"] *= 1 / 3                  # 0,6 -> 0,2
+    _pasang(monkeypatch, p.assign(avg=0.0))
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-03-31", "--output-dir", str(tmp_path)])
+    x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx")
+    hal = x.parse("Penghalang")
+    assert list(zip(hal["ws"], hal["jam"])) == [("WS-1", 11)]
+    assert x.parse("TitikUbah").empty
 
 
 def test_cli_mutu_data_di_catatan(tmp_path, monkeypatch):

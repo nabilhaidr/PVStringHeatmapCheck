@@ -220,11 +220,12 @@ def mutu_data(poa: pd.DataFrame, *, cerah_min: float = 500.0, jam: tuple = ("10:
 
 
 def rasio_harian(poa: pd.DataFrame, *, pembanding=None, jam: tuple = ("09:00", "15:00"),
-                 min_sampel: int = 40) -> pd.DataFrame:
+                 min_sampel: int = 40, jam_penghalang: pd.DataFrame | None = None) -> pd.DataFrame:
     """Energi harian WS / energi harian acuan (median stasiun acuan) pada sampel yang sama.
 
     Bahan ``titik_ubah``. Bacaan <= 0 atau > 1400 dibuang; hari dengan < ``min_sampel``
-    sampel bersama = NaN.
+    sampel bersama = NaN. Jam penghalang WS itu dibuang (seperti ``gain_relatif``): bayangan
+    yang berubah mengikuti matahari bukan lompatan gain (WS-1 Jun-Agu 2026).
     """
     p = poa.where((poa > 0.0) & (poa <= POA_MAKS))
     p = p.iloc[p.index.indexer_between_time(*jam)]
@@ -232,8 +233,11 @@ def rasio_harian(poa: pd.DataFrame, *, pembanding=None, jam: tuple = ("09:00", "
     for ws in p.columns:
         lain = p[_acuan_ws(p.columns, ws, pembanding)]
         acuan = lain.median(axis=1).where(lain.notna().sum(axis=1) >= 2)
-        ada = p[ws].notna() & acuan.notna()
-        hasil[ws] = (p[ws].where(ada).resample("D").sum(min_count=min_sampel)
+        buang = (set(jam_penghalang.loc[jam_penghalang["ws"] == ws, "jam"])
+                 if jam_penghalang is not None and len(jam_penghalang) else set())
+        x = p[ws].where(~p.index.hour.isin(sorted(buang)))
+        ada = x.notna() & acuan.notna()
+        hasil[ws] = (x.where(ada).resample("D").sum(min_count=min_sampel)
                      / acuan.where(ada).resample("D").sum(min_count=min_sampel))
     return pd.DataFrame(hasil)
 
@@ -260,8 +264,10 @@ def titik_ubah(rasio_hari: pd.DataFrame, periode: pd.DataFrame, *, jendela_hari:
         calon = lompat[lompat.abs() >= ambang]
         if calon.empty:
             continue
-        kelompok = (calon.index.to_series().diff() > w).cumsum()
-        for _, g in calon.groupby(kelompok.to_numpy()):
+        # Kelompok baru bila jarak > jendela ATAU arah berbalik: turun lalu naik = dua peristiwa.
+        pisah = ((calon.index.to_series().diff() > w).to_numpy()
+                 | (np.sign(calon).diff().fillna(0.0).to_numpy() != 0.0))
+        for _, g in calon.groupby(pisah.cumsum()):
             puncak = g.index[np.isclose(g.abs(), g.abs().max(), rtol=0.0, atol=1e-9)]
             d = puncak[len(puncak) // 2]
             baris.append({"ws": p.ws, "periode": p.periode, "tanggal": d, "sebelum": nilai[d][0],

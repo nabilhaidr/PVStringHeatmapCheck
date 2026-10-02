@@ -110,6 +110,7 @@ dipasang saat pekerjaan sekitar **1–10 Jun 2026**, kemungkinan dalam kegiatan 
 | 2 | Apakah WS-2 juga dikerjakan sekitar 10 Agu 2026 | log pekerjaan O&M | tanggal, jenis pekerjaan |
 | 3 | Log pembersihan kubah pyranometer semua WS, 2025–2026 | log/jadwal O&M | tanggal per WS |
 | 4 | Jadwal pembersihan rutin pyranometer | SOP O&M | frekuensi |
+| 5 | Pekerjaan di WS-5 sekitar 11 Jan 2026 (sesudah data kosong Okt–Des 2025; WS-5 naik ~8 % sesudahnya) | log pekerjaan O&M | tanggal, jenis pekerjaan |
 
 ---
 

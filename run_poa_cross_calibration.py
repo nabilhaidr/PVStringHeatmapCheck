@@ -96,7 +96,7 @@ def main(argv=None) -> None:
     per = periode_ws(poa, batas=batas)
     sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, per, kal, loader.wb_to_ws,
                                 min_sampel=a.min_sampel, pembanding=pemb)
-    tu = titik_ubah(rasio_harian(poa, pembanding=pemb), per)
+    tu = titik_ubah(rasio_harian(poa, pembanding=pemb, jam_penghalang=hal), per)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
     mutu = mutu_data(poa).set_index("ws")
