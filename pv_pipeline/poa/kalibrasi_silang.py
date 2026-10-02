@@ -202,6 +202,56 @@ def periode_ws(poa: pd.DataFrame, *, min_celah_hari: int = 30, batas: dict | Non
     return pd.DataFrame(baris, columns=["ws", "periode", "mulai", "akhir"])
 
 
+def rasio_harian(poa: pd.DataFrame, *, pembanding=None, jam: tuple = ("09:00", "15:00"),
+                 min_sampel: int = 40) -> pd.DataFrame:
+    """Energi harian WS / energi harian acuan (median stasiun acuan) pada sampel yang sama.
+
+    Bahan ``titik_ubah``. Bacaan <= 0 atau > 1400 dibuang; hari dengan < ``min_sampel``
+    sampel bersama = NaN.
+    """
+    p = poa.where((poa > 0.0) & (poa <= POA_MAKS))
+    p = p.iloc[p.index.indexer_between_time(*jam)]
+    hasil = {}
+    for ws in p.columns:
+        lain = p[_acuan_ws(p.columns, ws, pembanding)]
+        acuan = lain.median(axis=1).where(lain.notna().sum(axis=1) >= 2)
+        ada = p[ws].notna() & acuan.notna()
+        hasil[ws] = (p[ws].where(ada).resample("D").sum(min_count=min_sampel)
+                     / acuan.where(ada).resample("D").sum(min_count=min_sampel))
+    return pd.DataFrame(hasil)
+
+
+def titik_ubah(rasio_hari: pd.DataFrame, periode: pd.DataFrame, *, jendela_hari: int = 14,
+               ambang: float = 0.05, min_hari: int = 10) -> pd.DataFrame:
+    """Kandidat lompatan tanpa celah data, per (WS, periode): saran ``--batas``, bukan batas otomatis.
+
+    Untuk tiap hari d: median rasio ``jendela_hari`` sebelum d vs sesudahnya (>= ``min_hari``
+    hari per sisi). Hari dengan |lompatan| >= ``ambang`` dikelompokkan; per kelompok diambil
+    tengah dataran |lompatan| maksimum. Jendela tak melintasi batas periode, jadi celah yang
+    sudah memotong periode tidak muncul lagi (WS-3 ~10 Agu 2026: +5,7 % tanpa celah).
+    """
+    w = pd.Timedelta(days=jendela_hari)
+    baris = []
+    for p in periode.itertuples(index=False):
+        r = rasio_hari.loc[p.mulai:p.akhir, p.ws].dropna()
+        nilai = {}
+        for d in r.index:
+            a, b = r[(r.index >= d - w) & (r.index < d)], r[(r.index >= d) & (r.index < d + w)]
+            if len(a) >= min_hari and len(b) >= min_hari:
+                nilai[d] = (a.median(), b.median())
+        lompat = pd.Series({d: b / a - 1.0 for d, (a, b) in nilai.items()}, dtype=float)
+        calon = lompat[lompat.abs() >= ambang]
+        if calon.empty:
+            continue
+        kelompok = (calon.index.to_series().diff() > w).cumsum()
+        for _, g in calon.groupby(kelompok.to_numpy()):
+            puncak = g.index[np.isclose(g.abs(), g.abs().max(), rtol=0.0, atol=1e-9)]
+            d = puncak[len(puncak) // 2]
+            baris.append({"ws": p.ws, "periode": p.periode, "tanggal": d, "sebelum": nilai[d][0],
+                          "sesudah": nilai[d][1], "lompatan": float(lompat[d])})
+    return pd.DataFrame(baris, columns=["ws", "periode", "tanggal", "sebelum", "sesudah", "lompatan"])
+
+
 def _saling_sepakat(ada: dict, tol: float) -> set:
     """Himpunan acuan terbesar yang SEMUA pasangannya dalam ``tol``; seri -> sebaran terkecil.
 

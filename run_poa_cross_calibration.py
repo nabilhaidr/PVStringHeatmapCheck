@@ -26,7 +26,7 @@ import pandas as pd  # noqa: E402
 
 from pv_pipeline.poa.kalibrasi_silang import (  # noqa: E402
     POA_MAKS, gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang,
-    periode_ws, profil_jam, rasio_cerah, rasio_ke_median, sampel_stabil,
+    periode_ws, profil_jam, rasio_cerah, rasio_harian, rasio_ke_median, sampel_stabil, titik_ubah,
 )
 from pv_pipeline.poa.pvlib_estimator import PvlibClearSkyEstimator  # noqa: E402
 from rekap_m2f import build_daily_calib, discover_m2f_xlsx, load_day  # noqa: E402
@@ -94,8 +94,10 @@ def main(argv=None) -> None:
     for b in a.batas:
         ws, tgl = b.split(":", 1)
         batas.setdefault(ws, []).append(tgl)
-    sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, periode_ws(poa, batas=batas), kal, loader.wb_to_ws,
+    per = periode_ws(poa, batas=batas)
+    sep = kalibrasi_per_periode(poa, stabil, rasio, hal, cerah, per, kal, loader.wb_to_ws,
                                 min_sampel=a.min_sampel, pembanding=pemb)
+    tu = titik_ubah(rasio_harian(poa, pembanding=pemb), per)
 
     awal, akhir = pd.Timestamp(a.mulai), pd.Timestamp(a.akhir)
     catatan = pd.DataFrame({"butir": [
@@ -118,6 +120,7 @@ def main(argv=None) -> None:
         (larik if larik is not None else pd.DataFrame(columns=["ws", "gain", "n"])).to_excel(
             w, sheet_name="Larik", index=False)
         sep.to_excel(w, sheet_name="Kesepakatan", index=False)
+        tu.to_excel(w, sheet_name="TitikUbah", index=False)
         catatan.to_excel(w, sheet_name="Catatan", index=False)
     _gambar(bulanan, profil, dasar + ".png")
 
@@ -136,6 +139,10 @@ def main(argv=None) -> None:
             print("  ws_jam_penghalang:")
             for ws, g in hal.groupby("ws"):
                 print(f"    {ws}: {sorted(int(j) for j in g['jam'])}")
+    if len(tu):
+        print("\n# kandidat titik ubah (periksa dulu; bukan batas otomatis):")
+        for r in tu.itertuples():
+            print(f"  --batas {r.ws}:{r.tanggal:%Y-%m-%d}   # lompatan {r.lompatan:+.1%}")
 
 
 if __name__ == "__main__":

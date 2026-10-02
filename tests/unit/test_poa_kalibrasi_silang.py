@@ -9,7 +9,7 @@ import run_poa_cross_calibration as cli
 
 from pv_pipeline.poa.kalibrasi_silang import (
     gain_absolut, gain_bulanan, gain_larik, gain_relatif, kalibrasi_per_periode, penghalang, periode_ws,
-    profil_jam, rasio_cerah, rasio_ke_median, sampel_stabil, sepakati,
+    profil_jam, rasio_cerah, rasio_harian, rasio_ke_median, sampel_stabil, sepakati, titik_ubah,
 )
 
 _GAIN = (1.0, 0.8, 1.05, 1.0, 1.0)
@@ -311,6 +311,26 @@ class TestPembanding:
         assert s.loc["WS-4", "gain_abs"] == pytest.approx(1.0)
 
 
+class TestTitikUbah:
+    def test_lompatan_tanpa_celah_disarankan(self):
+        """WS-3 ~10 Agu 2026: lompatan tanpa celah harus muncul sebagai kandidat --batas."""
+        p = _poa()
+        p.loc["2026-02-15":, "WS-2"] *= 0.9
+        tu = titik_ubah(rasio_harian(p), periode_ws(p))
+        assert list(zip(tu["ws"], tu["tanggal"])) == [("WS-2", pd.Timestamp("2026-02-15"))]
+        assert tu["lompatan"].iloc[0] == pytest.approx(-0.10, abs=0.005)
+
+    def test_tanpa_lompatan_kosong(self):
+        assert titik_ubah(rasio_harian(_poa()), periode_ws(_poa())).empty
+
+    def test_lompatan_di_batas_celah_sudah_periode(self):
+        """Celah >= 30 hari sudah memotong periode; lompatan di situ bukan kandidat baru."""
+        p = _poa(hari=120)
+        p.loc["2026-02-01":"2026-03-12", "WS-2"] = np.nan
+        p.loc["2026-03-13":, "WS-2"] *= 0.9
+        assert titik_ubah(rasio_harian(p), periode_ws(p)).empty
+
+
 class _Loader:
     def __init__(self):
         self.df = _poa().assign(avg=0.0)
@@ -335,7 +355,7 @@ def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatc
 
     x = pd.ExcelFile(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx")
     assert x.sheet_names == ["Bulanan", "ProfilJam", "Penghalang", "Relatif", "Absolut", "Larik",
-                             "Kesepakatan", "Catatan"]
+                             "Kesepakatan", "TitikUbah", "Catatan"]
     assert x.parse("Larik").empty
     s = x.parse("Kesepakatan").set_index("ws")
     assert (s["periode"] == 1).all()                                   # tanpa celah: satu periode per WS
