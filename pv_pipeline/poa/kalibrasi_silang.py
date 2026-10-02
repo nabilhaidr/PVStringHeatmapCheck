@@ -163,12 +163,13 @@ def gain_larik(kalibrasi_harian: pd.DataFrame, wb_to_ws: dict) -> pd.DataFrame:
     return out[["ws", "gain", "n"]]
 
 
-def periode_ws(poa: pd.DataFrame, *, min_celah_hari: int = 30) -> pd.DataFrame:
+def periode_ws(poa: pd.DataFrame, *, min_celah_hari: int = 30, batas: dict | None = None) -> pd.DataFrame:
     """Potong rentang tiap WS di celah >= ``min_celah_hari`` hari tanpa data.
 
     Sensor yang dilepas lalu dipasang ulang (WS-2, Mar-Jun 2026) bisa kembali dengan
     orientasi atau kalibrasi lain; gain atas rentang gabungan mencampur keduanya.
-    Hari kosong di awal/akhir rentang bukan periode.
+    Hari kosong di awal/akhir rentang bukan periode. ``batas`` = {ws: [tanggal]}: hari
+    pertama periode baru untuk perubahan tanpa celah data (WS-3 ~10 Agu 2026, +6 %).
     """
     hari = poa.notna().groupby(poa.index.normalize()).any()
     baris = []
@@ -177,7 +178,13 @@ def periode_ws(poa: pd.DataFrame, *, min_celah_hari: int = 30) -> pd.DataFrame:
         if not len(tgl):
             continue
         # N hari kosong di antara dua hari berdata = selisih tanggal N + 1 hari.
-        putus = np.flatnonzero(np.diff(tgl.to_numpy()) > np.timedelta64(min_celah_hari, "D"))
+        putus = set(np.flatnonzero(np.diff(tgl.to_numpy()) > np.timedelta64(min_celah_hari, "D")).tolist())
+        for d in (batas or {}).get(ws, []):
+            # Batas = hari pertama periode baru; di luar data atau di dalam celah tidak menambah potongan.
+            k = int(tgl.searchsorted(pd.Timestamp(d).normalize()))
+            if 0 < k < len(tgl):
+                putus.add(k - 1)
+        putus = np.array(sorted(putus), dtype=int)
         awal, akhir = np.r_[0, putus + 1], np.r_[putus, len(tgl) - 1]
         for i, (a, b) in enumerate(zip(awal, akhir), start=1):
             baris.append({"ws": ws, "periode": i, "mulai": tgl[a], "akhir": tgl[b]})

@@ -199,6 +199,19 @@ class TestPeriodeWs:
         ws3 = periode_ws(p).query("ws == 'WS-3'")
         assert list(ws3["mulai"]) == [pd.Timestamp("2026-02-16")]
 
+    def test_batas_manual_memotong_tanpa_celah(self):
+        """WS-3 ~10 Agu 2026: lompatan tanpa celah data (kubah dibersihkan?); batas manual memotong periode."""
+        per = periode_ws(_poa(hari=120), batas={"WS-2": ["2026-02-15"]})
+        ws2 = per[per["ws"] == "WS-2"]
+        assert list(ws2["mulai"]) == [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-02-15")]
+        assert list(ws2["akhir"]) == [pd.Timestamp("2026-02-14"), pd.Timestamp("2026-04-30")]
+        assert (per["ws"] == "WS-1").sum() == 1
+
+    def test_batas_di_dalam_celah_tidak_menambah_periode(self):
+        p = _poa(hari=120)
+        p.loc["2026-02-01":"2026-03-12", "WS-2"] = np.nan
+        assert (periode_ws(p, batas={"WS-2": ["2026-02-20"]})["ws"] == "WS-2").sum() == 2
+
 
 def _rel(gain_ws2=0.8, bergeser=False, n_bulan_sah=3):
     return pd.DataFrame({"ws": ["WS-1", "WS-2", "WS-3", "WS-4", "WS-5"],
@@ -264,6 +277,18 @@ class TestKalibrasiPerPeriode:
         assert h.loc[("WS-2", 1), "usulan"] == pytest.approx(1.0, rel=0.01)
         assert h.loc[("WS-2", 2), "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
         assert h.loc[("WS-2", 2), "mulai"] == pd.Timestamp("2026-04-11")
+
+    def test_lompatan_tanpa_celah_dengan_batas_manual(self):
+        """Tanpa batas, satu periode mencampur sensor sebelum dan sesudah pemeliharaan."""
+        p = _poa(hari=151, gains=(1.0, 1.0, 1.05, 1.0, 1.0))
+        p.loc["2026-03-15":, "WS-2"] *= 0.8
+        stabil = sampel_stabil(p)
+        rasio = rasio_ke_median(p, stabil)
+        cerah = _poa(hari=151, gains=(1.0,) * 5)["WS-1"]
+        h = kalibrasi_per_periode(p, stabil, rasio, penghalang(profil_jam(rasio)), cerah,
+                                  periode_ws(p, batas={"WS-2": ["2026-03-15"]})).set_index(["ws", "periode"])
+        assert h.loc[("WS-2", 1), "usulan"] == pytest.approx(1.0, rel=0.01)
+        assert h.loc[("WS-2", 2), "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
 
 
 class _Loader:
