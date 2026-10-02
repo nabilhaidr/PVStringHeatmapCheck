@@ -181,7 +181,18 @@ python run_poa_cross_calibration.py --raw-root "F:/Downloads part 2" \
 | median 5 WS | 1,01–1,02 | 0,94–0,96 | 0,93–0,95 | 10 % |
 | median WS-3..5 | 1,02–1,04 | 0,96–0,97 | 0,94–0,97 | 10 % |
 
-Sebagian besar selisih WB05/07 hilang saat POA disamakan. Sisa ~6 % di hari itu tidak tampak di arus string (1 Jul: WB05/07 1,00 vs WB03/04/06 1,01–1,02); diduga dari masker kalibrasi M2f (run lokal tanpa data set point tidak membuang jam plafon). Belum diselidiki.
+Sebagian besar selisih WB05/07 hilang saat POA disamakan. Sisa ~6 % di hari itu tidak tampak di arus string (1 Jul: WB05/07 1,00 vs WB03/04/06 1,01–1,02).
+
+**Sisa ~6 % = derau hari berawan, bukan artefak** (2 Okt 2026, `coba/wb0507_poa_bersama.py`). Rasio WB05 / WB07 terhadap median WB03/04/06:
+
+| hari | langit (POA WS-3..5) | POA per WS | POA bersama median 5 WS | POA bersama WS-4 |
+|---|---|---|---|---|
+| 1 Jul 2026 | berawan (~2,5 kWh/m²) | 0,85 / 0,84 | 0,94 / 0,93 | – |
+| 29 Jul 2026 | lebih cerah (~4,0 kWh/m²) | 0,90 / 0,93 | 0,98 / 1,01 | 0,99 / 1,005 |
+| 1 Des 2025 (sebelum WS-2 berubah; WS-2 ≈ WS-4) | berawan (~3,0 kWh/m²) | 0,97 / 0,93 | – | 0,96 / 0,93 |
+
+- Pada hari yang lebih cerah, dengan POA disamakan, WB05/07 setara WB03/04/06 dalam 2 %. Dugaan "masker kalibrasi tanpa data set point" tidak diperlukan.
+- WB05 konsisten ~2–4 % di bawah WB03/04/06 (tiga hari ini; arus string 42 hari 0,974 vs ~1,01). Besarnya setara sebaran antar-blok lain (WB09 0,976, WB10 0,982); tidak dikejar.
 
 **Kesimpulan:**
 1. `rasio_bersih` rendah WB05/07 (0,74–0,76) terutama artefak POA WS-2 sesudah Jun 2026, bukan larik, config, debu, atau ketersediaan.
