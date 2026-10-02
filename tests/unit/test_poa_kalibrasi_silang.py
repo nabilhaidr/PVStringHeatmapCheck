@@ -8,7 +8,7 @@ import pytest
 import run_poa_cross_calibration as cli
 
 from pv_pipeline.poa.kalibrasi_silang import (
-    gain_absolut, gain_bulanan, gain_larik, gain_relatif, penghalang, profil_jam,
+    gain_absolut, gain_bulanan, gain_larik, gain_relatif, penghalang, periode_ws, profil_jam,
     rasio_ke_median, sampel_stabil, sepakati,
 )
 
@@ -147,6 +147,31 @@ class TestGainLarik:
                           for d in pd.date_range("2026-06-01", periods=3) for wb, ws in wb_to_ws.items()])
         g = gain_larik(k, wb_to_ws).set_index("ws")["gain"]
         assert g["WS-2"] == pytest.approx(0.8, rel=0.01) and g["WS-3"] == pytest.approx(1.05, rel=0.01)
+
+
+class TestPeriodeWs:
+    def test_celah_40_hari_memotong(self):
+        """Sensor yang dilepas lalu dipasang ulang bisa kembali dengan orientasi lain: dua periode."""
+        p = _poa(hari=120)                                         # 2026-01-01..2026-04-30
+        p.loc["2026-02-01":"2026-03-12", "WS-2"] = np.nan          # 40 hari kosong
+        per = periode_ws(p)
+        ws2 = per[per["ws"] == "WS-2"]
+        assert list(ws2["periode"]) == [1, 2]
+        assert list(ws2["mulai"]) == [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-03-13")]
+        assert list(ws2["akhir"]) == [pd.Timestamp("2026-01-31"), pd.Timestamp("2026-04-30")]
+        assert (per["ws"] == "WS-1").sum() == 1
+
+    def test_celah_20_hari_tidak_memotong(self):
+        """Celah singkat (gangguan logger) belum tentu berarti sensor berubah."""
+        p = _poa(hari=120)
+        p.loc["2026-02-01":"2026-02-20", "WS-2"] = np.nan
+        assert (periode_ws(p)["ws"] == "WS-2").sum() == 1
+
+    def test_kosong_di_awal_bukan_periode(self):
+        p = _poa(hari=120)
+        p.loc[:"2026-02-15", "WS-3"] = np.nan
+        ws3 = periode_ws(p).query("ws == 'WS-3'")
+        assert list(ws3["mulai"]) == [pd.Timestamp("2026-02-16")]
 
 
 def _rel(gain_ws2=0.8, bergeser=False, n_bulan_sah=3):

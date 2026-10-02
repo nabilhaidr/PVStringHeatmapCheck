@@ -140,6 +140,27 @@ def gain_larik(kalibrasi_harian: pd.DataFrame, wb_to_ws: dict) -> pd.DataFrame:
     return out[["ws", "gain", "n"]]
 
 
+def periode_ws(poa: pd.DataFrame, *, min_celah_hari: int = 30) -> pd.DataFrame:
+    """Potong rentang tiap WS di celah >= ``min_celah_hari`` hari tanpa data.
+
+    Sensor yang dilepas lalu dipasang ulang (WS-2, Mar-Jun 2026) bisa kembali dengan
+    orientasi atau kalibrasi lain; gain atas rentang gabungan mencampur keduanya.
+    Hari kosong di awal/akhir rentang bukan periode.
+    """
+    hari = poa.notna().groupby(poa.index.normalize()).any()
+    baris = []
+    for ws in poa.columns:
+        tgl = hari.index[hari[ws].to_numpy()]
+        if not len(tgl):
+            continue
+        # N hari kosong di antara dua hari berdata = selisih tanggal N + 1 hari.
+        putus = np.flatnonzero(np.diff(tgl.to_numpy()) > np.timedelta64(min_celah_hari, "D"))
+        awal, akhir = np.r_[0, putus + 1], np.r_[putus, len(tgl) - 1]
+        for i, (a, b) in enumerate(zip(awal, akhir), start=1):
+            baris.append({"ws": ws, "periode": i, "mulai": tgl[a], "akhir": tgl[b]})
+    return pd.DataFrame(baris, columns=["ws", "periode", "mulai", "akhir"])
+
+
 def _saling_sepakat(ada: dict, tol: float) -> set:
     """Himpunan acuan terbesar yang SEMUA pasangannya dalam ``tol``; seri -> sebaran terkecil.
 
