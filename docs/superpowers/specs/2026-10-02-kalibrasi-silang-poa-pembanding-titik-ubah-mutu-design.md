@@ -116,6 +116,38 @@ tidak terdeteksi, karena jendela sebelumnya kurang dari 10 hari berdata.
 | WS-4 | 13 | 0 | 0 |
 | WS-5 | 165 | 16 | 1 |
 
+## Tambahan: pembanding dua stasiun (2 Okt 2026, commit `b24b630`)
+
+Syarat acuan per sampel = `min(2, jumlah stasiun acuan di daftar)` bila `--pembanding` diberikan (tanpa daftar: tetap 2).
+Dengan `--pembanding WS-4,WS-5`, WS-4 dan WS-5 masing-masing cukup satu acuan; daftar ≥ 3 stasiun tidak berubah.
+
+## Hasil gabungan dengan batas kandidat (2 Okt 2026)
+
+`… --akhir 2026-08-31 --batas WS-3:2026-08-11 --batas WS-2:2026-08-11 --batas WS-5:2026-01-11`, dua pembanding →
+`coba/run_pb_WS-3WS-4WS-5/`, `coba/run_pb_WS-4WS-5/`; keduanya tanpa peringatan atau galat. Usulan = faktor koreksi.
+
+| WS | periode | pembanding WS-3/4/5 | pembanding WS-4/5 | penilaian |
+|---|---|---|---|---|
+| WS-3 | 2026-01-01 – 2026-08-10 | 1,060 (abs, rel) | 1,060 (abs, rel) | kokoh: ~6 % rendah |
+| WS-3 | 2026-08-11 – 2026-08-31 | data kurang (rel 0,998 / abs 1,007) | data kurang | kembali normal |
+| WS-5 | 2026-01-11 – 2026-08-31 | 0,996 (abs, larik) | 0,993 (ketiganya) | kokoh: praktis tanpa koreksi |
+| WS-5 | 2026-01-01 – 2026-01-10 | data kurang (abs 0,893) | data kurang (abs 0,885) | ~11 % rendah sesudah celah Okt–Des 2025 |
+| WS-2 | 2026-06-10 – 2026-08-10 | data kurang (abs 1,108; larik 1,205) | data kurang (abs 1,104) | ~+10 % |
+| WS-2 | 2026-08-11 – 2026-08-31 | data kurang (rel 1,050 / abs 1,056) | data kurang (1,051 / 1,059) | ~+5 %; lompatan −5 % terkonfirmasi |
+| WS-2 | 2025-01-15 – 2026-02-28 | 0,983 (abs, rel) | bergeser | peka acuan |
+| WS-4 | 2025-01-12 – 2026-08-31 | 1,000 (ketiganya) | 1,021 (ketiganya) | peka acuan: WS-4 vs WS-5 ~2 % |
+| WS-5 | 2025-01-01 – 2025-06-01 | data kurang | 0,979 (abs, rel) | peka acuan |
+| WS-1 | 2025-08-26 – 2026-08-31 | bergeser | 1,051 (abs, rel) | jangan dipakai: WS-1 tidak stabil |
+
+- Kandidat titik ubah WS-2/WS-3/WS-5 hilang sesudah batas dipasang (lompatannya kini batas periode); yang tersisa hanya
+  kandidat WS-1.
+- **Pembanding terbaik berbeda per tahun.** 2025: WS-3/4/5 lebih kokoh, karena WS-5 (165 hari kosong) dan WS-3 (296)
+  sering absen, sehingga pembanding dua stasiun sering tinggal WS-4 saja dan acuannya bergeser lagi (WS-2 2025 jadi
+  "bergeser" dengan WS-4/5). 2026: WS-4/5 lebih tepat karena WS-3 bias sampai 10 Agu. Cara sekarang: jalankan CLI per
+  tahun (`--mulai`/`--akhir`) dengan pembanding masing-masing.
+- Selisih WS-4 vs WS-5 (~2 %) tidak bisa diputuskan tanpa acuan mutlak (sertifikat kalibrasi pyranometer).
+- Semua tanggal batas masih kandidat sampai dikonfirmasi log O&M.
+
 ## Di luar cakupan
 
 - Menerapkan kandidat titik ubah otomatis.
