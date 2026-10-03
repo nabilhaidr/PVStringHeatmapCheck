@@ -1,8 +1,9 @@
 # Penerapan koreksi POA di loader — rancangan
 
 Tanggal: 2 Oktober 2026. Status: disetujui pengguna (letak di `PyranometerLoader`; pengisi = rata-rata WS terkoreksi;
-WS-1 lewat `ws_dikecualikan`). Isi koreksi (angka, tanggal) **belum** diputuskan; spesifikasi ini tidak bergantung
-padanya. Konteks: `docs/Ringkasan_Usulan_Koreksi_POA.md`.
+WS-1 lewat `ws_dikecualikan`); **diimplementasikan 3 Oktober 2026, config belum diubah** (blok `pyranometer.koreksi`
+belum ada, jadi semua hasil masih mentah). Isi koreksi (angka, tanggal) **belum** diputuskan; spesifikasi ini tidak
+bergantung padanya. Konteks: `docs/Ringkasan_Usulan_Koreksi_POA.md`.
 
 ## Tujuan
 
@@ -88,7 +89,8 @@ pyranometer:
 
 ### Penyelarasan cetakan CLI kalibrasi silang
 
-- `ws_gain_periode` → `ws_faktor_periode`, `gain:` → `faktor:`.
+- `ws_gain_periode` → `ws_faktor_periode`, `gain:` → `faktor:`; dicetak di bawah `pyranometer:` → `koreksi:` dengan
+  indentasi config, sehingga bisa disalin apa adanya.
 - `ws_jam_penghalang` dicetak dalam bentuk entri config: `- {mulai: <isi>, akhir: <isi>, jam: [11, 12]}` (alat tidak
   menaksir tanggal mulai penghalang).
 
