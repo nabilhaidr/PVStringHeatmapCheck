@@ -1,7 +1,8 @@
 # Ringkasan Usulan Koreksi Sensor POA
 
-**Tanggal:** 2 Oktober 2026 · **Untuk:** pemilik dokumen kalibrasi POA PLTS-IKN ·
-**Status:** bahan keputusan; belum ada koreksi yang diterapkan (loader belum membaca kunci koreksi).
+**Tanggal:** 2 Oktober 2026 (status diperbarui 3 Oktober 2026) · **Untuk:** pemilik dokumen kalibrasi POA PLTS-IKN ·
+**Status:** bahan keputusan; belum ada koreksi yang diterapkan (loader sudah membaca blok `pyranometer.koreksi` sejak
+3 Okt 2026, tetapi config belum memuatnya). Draf blok: `docs/Draf_Blok_Koreksi_POA.md`.
 
 **Dasar:** `run_poa_cross_calibration.py`. Tahun 2025 dengan pembanding WS-3/4/5; tahun 2026 dengan pembanding WS-4/5
 dan batas kandidat (WS-3 dan WS-2: 11 Agu 2026; WS-5: 11 Jan 2026). **Faktor** = pengali bacaan POA (1 ÷ gain sensor).
@@ -19,7 +20,7 @@ Versi Word: `docs/Ringkasan_Usulan_Koreksi_POA.docx`.
 | WS-2 | 11 – 31 Agu 2026 | indikasi ~0,95 | Data kurang | Sama |
 | WS-4 | 2026 | 1,000–1,021 | **Peka acuan** (1,000 vs WS-3/4/5; 1,021 vs WS-5 saja) | Sertifikat kalibrasi WS-4 dan WS-5 |
 | WS-4, WS-5 | 2025 | — | Data kurang (WS-3/WS-5 sering kosong) | — |
-| WS-1 | semua | **jangan dipakai** | Penghalang pukul 11–12 sejak Jun 2026, bacaan nol Okt 2025 – Mei 2026, banyak kandidat lompatan | Perbaikan lapangan |
+| WS-1 | semua | **jangan dipakai** | Penghalang pukul 11–12 sejak Jun 2026, bacaan nol saat cerah Agu 2025 – Mei 2026, banyak kandidat lompatan | Perbaikan lapangan |
 
 **Keputusan yang diminta**
 
@@ -30,7 +31,8 @@ Versi Word: `docs/Ringkasan_Usulan_Koreksi_POA.docx`.
 4. **Yang diterapkan lebih dulu:** hanya WS-3 1,060 (1 Jan – 10 Agu 2026), sesudah log O&M mengonfirmasi. WS-5 tidak
    perlu koreksi; yang lain menunggu lapangan, data, atau sertifikat.
 
-**Catatan:** penerapan koreksi butuh spesifikasi loader terpisah; sesudahnya kalibrasi derate diulang. Kandidat lompatan
+**Catatan:** loader sudah bisa menerapkan koreksi (spesifikasi 2026-10-02-penerapan-koreksi-poa-loader); sesudah blok
+masuk config, M2f dan kalibrasi derate diulang. Kandidat lompatan
 WS-4 pada 11 Jan 2026 (−7,7 %) adalah cermin lompatan WS-5 (acuan WS-4 hanya WS-5), bukan perubahan WS-4. Rincian:
 `docs/superpowers/specs/2026-10-02-kalibrasi-silang-poa-pembanding-titik-ubah-mutu-design.md`. Grafik rasio harian per
 WS: berkas `…_harian.png` di folder keluaran tiap run.
