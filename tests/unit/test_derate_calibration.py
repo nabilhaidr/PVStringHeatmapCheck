@@ -210,3 +210,44 @@ def test_cli_menulis_empat_sheet_tanpa_mengubah_config(tmp_path, monkeypatch):
     assert config.read_bytes() == sebelum
     # Derate dari POA terkoreksi vs mentah berbeda angkanya: laporan harus menyebut yang mana.
     assert x.parse("Catatan").set_index("butir")["nilai"]["koreksi POA"] == "tidak aktif"
+
+
+def test_cli_catatan_menyebut_sumber_koreksi_poa(tmp_path, monkeypatch):
+    """Derate dari POA terkoreksi harus bisa dilacak ke keputusan koreksi yang dipakai."""
+    m2f = tmp_path / "m2f"
+    m2f.mkdir()
+    _tulis_hari(m2f, "2026-06-01", {"WB03": 0.90, "WB04": 0.95})
+    _tulis_hari(m2f, "2026-06-02", {"WB03": 0.88, "WB04": 0.93})
+    hujan = tmp_path / "hujan.csv"
+    pd.DataFrame({"date": ["2026-05-31", "2026-06-01", "2026-06-02"],
+                  "precipitation_mm": [12.0, 0.0, 0.0]}).to_csv(hujan, index=False)
+    loader = _Loader()
+    loader.koreksi_aktif, loader.koreksi = True, {"aktif": True, "sumber": "keputusan 2026-10-03"}
+    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset: (loader, 5.0))
+    monkeypatch.setattr(cli.PvlibClearSkyEstimator, "from_geometry_yaml",
+                        classmethod(lambda cls, *a, **k: _Langit()))
+
+    cli.main(["--m2f-dir", str(m2f), "--precip", str(hujan), "--output-dir", str(tmp_path)])
+
+    catatan = pd.read_excel(tmp_path / "derate_calibration_20260601_20260602.xlsx", sheet_name="Catatan")
+    assert catatan.set_index("butir")["nilai"]["koreksi POA"] == "aktif (keputusan 2026-10-03)"
+
+
+def test_muat_poa_meneruskan_koreksi_dari_geometri(synthetic_pyranometer_xlsx, tmp_path):
+    """Derate membaca POA terkoreksi; koreksi=False (kalibrasi silang) tetap mentah."""
+    geo = tmp_path / "geo.yaml"
+    geo.write_text(
+        "pyranometer:\n"
+        f"  xlsx_path: {synthetic_pyranometer_xlsx!r}\n"
+        "  koreksi:\n"
+        "    aktif: true\n"
+        "    ws_faktor_periode:\n"
+        "      WS-3:\n"
+        "        - {mulai: 2026-05-14, akhir: null, faktor: 1.1}\n",
+        encoding="utf-8",
+    )
+    terkoreksi, _ = cli._muat_poa(str(geo), str(tmp_path), None)
+    mentah, _ = cli._muat_poa(str(geo), str(tmp_path), None, koreksi=False)
+    t = pd.Timestamp("2026-05-14 12:00")
+    assert terkoreksi.koreksi_aktif and not mentah.koreksi_aktif
+    assert terkoreksi.df.loc[t, "WS-3"] == pytest.approx(1.1 * mentah.df.loc[t, "WS-3"])
