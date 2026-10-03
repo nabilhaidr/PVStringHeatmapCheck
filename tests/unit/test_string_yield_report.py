@@ -688,6 +688,7 @@ def test_poa_uses_mapped_ws_and_labels_only_gap_fallback_as_avg(tmp_path):
     assert report.five_minute.loc[:1, "poa_source"].tolist() == ["WS-2", "avg"]
     assert report.metadata["mapped_ws"] == "WS-2"
     assert report.metadata["poa_fallback_samples"] == 1
+    assert report.metadata["poa_koreksi"] == "tidak aktif"
     assert report.metadata["loaded_poa_files"] == ["POA PLTS IKN 2026.xlsx"]
     assert report.metadata["source_url_csv"] == manifest.url_csv
     assert report.metadata["source_url_poa"] == manifest.url_poa
@@ -1230,3 +1231,32 @@ def test_notebook_cell_2_has_exactly_five_approved_literal_defaults():
         ("START_DATE", "2026-05-01"),
         ("END_DATE", "2026-05-14"),
     ]
+
+
+def test_poa_memakai_koreksi_sensor_dari_geometri(tmp_path):
+    """Kurva POA WB05 mengikuti koreksi WS-2 yang diputuskan, dan laporan menyebut sumbernya."""
+    csv_path = tmp_path / "20260501.csv"
+    poa_path = tmp_path / "POA PLTS IKN 2026.xlsx"
+    pd.DataFrame({
+        "Start Time": ["2026-05-01 00:00"],
+        "Inverter_ID": ["WB05-INV01"],
+        "PV3 Power(kW)": [4.0],
+    }).to_csv(csv_path, index=False)
+    _write_poa(poa_path, pd.date_range("2026-05-01", periods=2, freq="5min"), [500.0, 500.0], [600.0, 600.0])
+    geometry = tmp_path / "site_geometry.yaml"
+    geometry.write_text(
+        "ws_to_wb:\n  WS-2: [WB05]\npyranometer:\n  sheet: POA PLTS IKN\n  koreksi:\n"
+        "    aktif: true\n    sumber: uji\n    ws_faktor_periode:\n      WS-2:\n"
+        "        - {mulai: 2026-05-01, akhir: null, faktor: 0.9}\n",
+        encoding="utf-8",
+    )
+
+    report = build_report_data(
+        {date(2026, 5, 1): csv_path}, {2026: poa_path},
+        parse_string_selection("WB05-INV01-PV3"),
+        parse_date_range("2026-05-01", "2026-05-01"),
+        geometry,
+    )
+
+    assert report.five_minute.loc[:1, "poa_wm2"].tolist() == pytest.approx([450.0, 450.0])
+    assert report.metadata["poa_koreksi"] == "aktif (uji)"

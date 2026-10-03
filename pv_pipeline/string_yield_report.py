@@ -427,6 +427,7 @@ def build_report_data(
         if not isinstance(pyranometer, dict):
             raise TypeError("POA geometry pyranometer must be a mapping.")
         sheet = str(pyranometer.get("sheet", "POA PLTS IKN"))
+        koreksi = pyranometer.get("koreksi")
     except Exception as exc:
         geometry_failed = True
         poa_read_errors[f"POA geometry: {geometry_path.name}"] = (
@@ -434,11 +435,13 @@ def build_report_data(
         )
         ws_to_wb = {}
         sheet = "POA PLTS IKN"
+        koreksi = None
     poa = pd.Series(index=grid, dtype="float64", name="poa_wm2")
     poa_source = pd.Series(index=grid, dtype="object", name="poa_source")
     loaded_poa_files = []
     poa_fallback_samples = 0
     mapped_ws = None
+    poa_koreksi = "tidak aktif"
 
     for year, raw_path in sorted(poa_by_year.items()):
         year_grid = grid[grid.year == int(year)]
@@ -446,7 +449,7 @@ def build_report_data(
             continue
         path = Path(raw_path)
         try:
-            loader = PyranometerLoader(str(path), sheet=sheet, ws_to_wb=ws_to_wb)
+            loader = PyranometerLoader(str(path), sheet=sheet, ws_to_wb=ws_to_wb, koreksi=koreksi)
             strict = loader.get_per_ws(
                 year_grid,
                 selection.wb_id,
@@ -461,6 +464,8 @@ def build_report_data(
             poa_read_errors[path.name] = f"{type(exc).__name__}: {exc}"
             continue
         loaded_poa_files.append(path.name)
+        if loader.koreksi_aktif:
+            poa_koreksi = f"aktif ({loader.koreksi.get('sumber', '-')})"
         mapped_ws = strict.attrs.get("ws_label") or mapped_ws
         fallback_mask = strict.isna() & final.notna()
         poa.loc[year_grid] = final.to_numpy()
@@ -573,6 +578,7 @@ def build_report_data(
         "mapped_ws": mapped_ws,
         "ws_to_wb": ws_to_wb,
         "poa_fallback_samples": poa_fallback_samples,
+        "poa_koreksi": poa_koreksi,
         "yield_formula": "sum(power_kw_valid * 5/60)",
         "interval_minutes": 5,
         "warnings": warnings_list,

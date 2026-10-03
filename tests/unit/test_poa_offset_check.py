@@ -1,7 +1,9 @@
 """Tes deteksi offset waktu POA terhadap telemetri inverter."""
 import numpy as np
 import pandas as pd
+import pytest
 
+import run_poa_offset_check as cli
 from pv_pipeline.poa.offset_check import OFFSET_COLUMNS, best_lag_by_ws
 
 
@@ -48,3 +50,29 @@ def test_too_few_points_skips_ws():
     # menyumbang lag palsu ke rekap batch.
     power, poa = _frames(5)
     assert best_lag_by_ws(power.iloc[:10], poa).empty
+
+
+def test_cli_membaca_poa_mentah_walau_koreksi_aktif(synthetic_pyranometer_xlsx, tmp_path, monkeypatch):
+    """Diagnostik sensor: jeda waktu diukur pada bacaan asli; WS yang dikecualikan tetap terukur."""
+    geo = tmp_path / "geo.yaml"
+    geo.write_text(
+        "pyranometer:\n"
+        f"  xlsx_path: {synthetic_pyranometer_xlsx!r}\n"
+        "  koreksi:\n"
+        "    aktif: true\n"
+        "    ws_dikecualikan:\n"
+        "      WS-1:\n"
+        "        - {mulai: 2026-05-14, akhir: null}\n",
+        encoding="utf-8",
+    )
+    jendela = []
+
+    def lag(power, window):
+        jendela.append(window)
+        return pd.DataFrame()
+    monkeypatch.setattr(cli, "discover_baseline_csvs", lambda *a: [(pd.Timestamp("2026-05-14"), "baseline.csv")])
+    monkeypatch.setattr(cli, "power_by_ws", lambda path, wb_to_ws: pd.DataFrame())
+    monkeypatch.setattr(cli, "best_lag_by_ws", lag)
+    with pytest.raises(SystemExit):
+        cli.main(["--geometry", str(geo)])
+    assert jendela[0].loc["2026-05-14 12:00", "WS-1"] > 0

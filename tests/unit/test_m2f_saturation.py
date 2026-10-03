@@ -3,7 +3,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import run_saturation_check as cli
 from pv_pipeline.m2f.saturation import SATURATION_METRICS, saturation_metrics
+from pv_pipeline.poa.loader import PyranometerLoader
 
 TS = pd.date_range("2026-08-10 06:30", "2026-08-10 17:30", freq="5min")
 HRS = np.asarray(TS.hour + TS.minute / 60.0)
@@ -79,3 +81,35 @@ def test_day_without_stable_readings_gives_nan_not_numbers():
     assert m["n_calib"] == 0
     assert np.isnan(m["r_high_stable"])
     assert np.isnan(m["ceiling_loss_pct"])
+
+
+def test_cli_memakai_poa_terkoreksi_dan_mencetak_statusnya(synthetic_pyranometer_xlsx, tmp_path, monkeypatch,
+                                                           capsys):
+    """Bias sensor WS (mis. WS-2 +8..14 % sejak Jun 2026) terbaca sebagai kekurangan daya bila POA mentah."""
+    geo = tmp_path / "geo.yaml"
+    geo.write_text(
+        "pyranometer:\n"
+        f"  xlsx_path: {synthetic_pyranometer_xlsx!r}\n"
+        "  koreksi:\n"
+        "    aktif: true\n"
+        "    sumber: uji\n"
+        "    ws_faktor_periode:\n"
+        "      WS-3:\n"
+        "        - {mulai: 2026-05-14, akhir: null, faktor: 1.1}\n",
+        encoding="utf-8",
+    )
+    terbaca = []
+
+    def mulus(poa_df, day):
+        terbaca.append(poa_df)
+        return 0.0                                   # hari dilewati sebelum telemetri dibaca
+    monkeypatch.setattr(cli, "discover_baseline_csvs", lambda *a: [(pd.Timestamp("2026-05-14"), "baseline.csv")])
+    monkeypatch.setattr(cli, "poa_smooth_share", mulus)
+    for kelas in (cli.CellTempProvider, cli.PvlibClearSkyEstimator, cli.SetpointCaps):
+        monkeypatch.setattr(kelas, "from_geometry_yaml", classmethod(lambda cls, *a, **k: None))
+    with pytest.raises(SystemExit):
+        cli.main(["--geometry", str(geo)])
+    t = pd.Timestamp("2026-05-14 12:00")
+    mentah = PyranometerLoader(synthetic_pyranometer_xlsx).df
+    assert terbaca[0].loc[t, "WS-3"] == pytest.approx(1.1 * mentah.loc[t, "WS-3"])
+    assert "koreksi POA aktif (uji)" in capsys.readouterr().out

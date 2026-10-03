@@ -121,11 +121,13 @@ def main(argv=None) -> None:
     loader = PyranometerLoader(
         pyr["xlsx_path"], sheet=str(pyr.get("sheet", "POA PLTS IKN")),
         ws_to_wb=geo.get("ws_to_wb") or {}, time_offset_minutes=offset,
+        koreksi=pyr.get("koreksi"),
     )
+    koreksi = f"aktif ({loader.koreksi.get('sumber', '-')})" if loader.koreksi_aktif else "tidak aktif"
     tcell_p = CellTempProvider.from_geometry_yaml(args.geometry)
     solar = PvlibClearSkyEstimator.from_geometry_yaml(args.geometry)
     caps = SetpointCaps.from_geometry_yaml(args.geometry)  # None = plateau saja
-    print(f"[saturation] {len(files)} hari, offset POA {offset} menit, Tcell {tcell_source}")
+    print(f"[saturation] {len(files)} hari, offset POA {offset} menit, Tcell {tcell_source}, koreksi POA {koreksi}")
 
     rows = []
     for day, path in files:

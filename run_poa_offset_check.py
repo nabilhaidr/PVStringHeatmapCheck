@@ -67,7 +67,8 @@ def main(argv=None) -> None:
     files = discover_baseline_csvs(args.baseline_dir, args.start_date, args.end_date)
     if not files:
         raise SystemExit(f"[poa-offset] tidak ada baseline CSV di {args.baseline_dir!r}")
-    loader = PyranometerLoader.from_geometry_yaml(args.geometry)
+    # Diagnostik sensor: selalu bacaan mentah (koreksi akan menyembunyikan WS yang dikecualikan).
+    loader = PyranometerLoader.from_geometry_yaml(args.geometry, koreksi=False)
 
     rows = []
     for day, path in files:

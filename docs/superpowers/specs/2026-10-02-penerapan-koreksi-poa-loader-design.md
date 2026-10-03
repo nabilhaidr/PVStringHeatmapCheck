@@ -85,7 +85,15 @@ pyranometer:
   `koreksi aktif` + `sumber` di sheet catatan.
 - `run_poa_cross_calibration.py` memanggil `_muat_poa(..., koreksi=False)`: kalibrasi silang **selalu** atas data
   mentah (kalau tidak, ia mengukur koreksinya sendiri). `Catatan` mencatat "POA mentah (koreksi tidak diterapkan)".
-- `run_saturation_check.py`, `string_yield_report.py`, notebook probe: tetap mentah; ditinjau terpisah.
+- Tinjauan 3 Oktober 2026 (disetujui pengguna):
+  - `run_saturation_check.py` **terkoreksi** (rasio daya/POA di iradiansi tinggi; bias WS terbaca sebagai kekurangan
+    daya), status dicetak di baris pembuka;
+  - `pv_pipeline/string_yield_report.py` **terkoreksi** (kurva POA per WB), metadata `poa_koreksi`; catatan: alat ini
+    belum menerapkan `time_offset_minutes` (perbedaan terpisah, belum diubah);
+  - `run_poa_offset_check.py` **mentah** (`from_geometry_yaml(..., koreksi=False)`): diagnostik sensor, seperti
+    kalibrasi silang;
+  - notebook Drive Probe: tidak diubah (cabang `from_geometry_yaml` ikut config; `POA_XLSX` sengaja mentah; peringkat
+    variabilitas hari tidak peka faktor beberapa persen).
 
 ### Penyelarasan cetakan CLI kalibrasi silang
 
@@ -119,4 +127,4 @@ pyranometer:
 - Model bayangan per jam (penghalang diperlakukan sebagai data hilang, bukan dikoreksi).
 - Impor otomatis keluaran CLI kalibrasi silang ke config.
 - Koreksi Tcell atau sensor cuaca lain.
-- `run_saturation_check.py`, `string_yield_report.py`, notebook probe.
+- Offset waktu di `string_yield_report.py` (lihat tinjauan 3 Oktober di atas).
