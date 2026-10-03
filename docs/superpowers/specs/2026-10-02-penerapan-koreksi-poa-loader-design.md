@@ -88,8 +88,9 @@ pyranometer:
 - Tinjauan 3 Oktober 2026 (disetujui pengguna):
   - `run_saturation_check.py` **terkoreksi** (rasio daya/POA di iradiansi tinggi; bias WS terbaca sebagai kekurangan
     daya), status dicetak di baris pembuka;
-  - `pv_pipeline/string_yield_report.py` **terkoreksi** (kurva POA per WB), metadata `poa_koreksi`; catatan: alat ini
-    belum menerapkan `time_offset_minutes` (perbedaan terpisah, belum diubah);
+  - `pv_pipeline/string_yield_report.py` **terkoreksi** (kurva POA per WB), metadata `poa_koreksi`; sejak 3 Oktober
+    juga menerapkan `pyranometer.time_offset_minutes` (metadata `poa_offset_minutes`; bentuk daftar per berkas
+    ditolak loader dan tercatat di `poa_read_errors`);
   - `run_poa_offset_check.py` **mentah** (`from_geometry_yaml(..., koreksi=False)`): diagnostik sensor, seperti
     kalibrasi silang;
   - notebook Drive Probe: tidak diubah (cabang `from_geometry_yaml` ikut config; `POA_XLSX` sengaja mentah; peringkat
@@ -127,4 +128,3 @@ pyranometer:
 - Model bayangan per jam (penghalang diperlakukan sebagai data hilang, bukan dikoreksi).
 - Impor otomatis keluaran CLI kalibrasi silang ke config.
 - Koreksi Tcell atau sensor cuaca lain.
-- Offset waktu di `string_yield_report.py` (lihat tinjauan 3 Oktober di atas).

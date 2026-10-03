@@ -428,6 +428,7 @@ def build_report_data(
             raise TypeError("POA geometry pyranometer must be a mapping.")
         sheet = str(pyranometer.get("sheet", "POA PLTS IKN"))
         koreksi = pyranometer.get("koreksi")
+        offset = pyranometer.get("time_offset_minutes", 0.0)
     except Exception as exc:
         geometry_failed = True
         poa_read_errors[f"POA geometry: {geometry_path.name}"] = (
@@ -436,6 +437,7 @@ def build_report_data(
         ws_to_wb = {}
         sheet = "POA PLTS IKN"
         koreksi = None
+        offset = 0.0
     poa = pd.Series(index=grid, dtype="float64", name="poa_wm2")
     poa_source = pd.Series(index=grid, dtype="object", name="poa_source")
     loaded_poa_files = []
@@ -449,7 +451,8 @@ def build_report_data(
             continue
         path = Path(raw_path)
         try:
-            loader = PyranometerLoader(str(path), sheet=sheet, ws_to_wb=ws_to_wb, koreksi=koreksi)
+            loader = PyranometerLoader(str(path), sheet=sheet, ws_to_wb=ws_to_wb,
+                                       time_offset_minutes=offset, koreksi=koreksi)
             strict = loader.get_per_ws(
                 year_grid,
                 selection.wb_id,
@@ -579,6 +582,7 @@ def build_report_data(
         "ws_to_wb": ws_to_wb,
         "poa_fallback_samples": poa_fallback_samples,
         "poa_koreksi": poa_koreksi,
+        "poa_offset_minutes": offset,
         "yield_formula": "sum(power_kw_valid * 5/60)",
         "interval_minutes": 5,
         "warnings": warnings_list,

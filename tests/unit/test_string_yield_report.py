@@ -689,6 +689,7 @@ def test_poa_uses_mapped_ws_and_labels_only_gap_fallback_as_avg(tmp_path):
     assert report.metadata["mapped_ws"] == "WS-2"
     assert report.metadata["poa_fallback_samples"] == 1
     assert report.metadata["poa_koreksi"] == "tidak aktif"
+    assert report.metadata["poa_offset_minutes"] == 0.0
     assert report.metadata["loaded_poa_files"] == ["POA PLTS IKN 2026.xlsx"]
     assert report.metadata["source_url_csv"] == manifest.url_csv
     assert report.metadata["source_url_poa"] == manifest.url_poa
@@ -1260,3 +1261,33 @@ def test_poa_memakai_koreksi_sensor_dari_geometri(tmp_path):
 
     assert report.five_minute.loc[:1, "poa_wm2"].tolist() == pytest.approx([450.0, 450.0])
     assert report.metadata["poa_koreksi"] == "aktif (uji)"
+
+
+def test_poa_mengikuti_offset_waktu_dari_geometri(tmp_path):
+    """Stempel POA ~5 menit lebih awal dari telemetri: tanpa offset, kurva POA dan daya string bergeser satu sampel."""
+    csv_path = tmp_path / "20260501.csv"
+    poa_path = tmp_path / "POA PLTS IKN 2026.xlsx"
+    pd.DataFrame({
+        "Start Time": ["2026-05-01 00:00"],
+        "Inverter_ID": ["WB05-INV01"],
+        "PV3 Power(kW)": [4.0],
+    }).to_csv(csv_path, index=False)
+    _write_poa(poa_path, pd.date_range("2026-05-01", periods=3, freq="5min"), [100.0, 200.0, 300.0],
+               [100.0, 200.0, 300.0])
+    geometry = tmp_path / "site_geometry.yaml"
+    geometry.write_text(
+        "ws_to_wb:\n  WS-2: [WB05]\npyranometer:\n  sheet: POA PLTS IKN\n  time_offset_minutes: 5\n",
+        encoding="utf-8",
+    )
+
+    report = build_report_data(
+        {date(2026, 5, 1): csv_path}, {2026: poa_path},
+        parse_string_selection("WB05-INV01-PV3"),
+        parse_date_range("2026-05-01", "2026-05-01"),
+        geometry,
+    )
+
+    poa = report.five_minute.loc[:3, "poa_wm2"]
+    assert pd.isna(poa.iloc[0])                       # stempel 00:00 bergeser ke 00:05
+    assert poa.iloc[1:].tolist() == pytest.approx([100.0, 200.0, 300.0])
+    assert report.metadata["poa_offset_minutes"] == 5
