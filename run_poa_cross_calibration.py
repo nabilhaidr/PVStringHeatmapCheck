@@ -10,8 +10,9 @@ Usage:
         [--mulai 2025-01-01] [--akhir 2026-07-31] [--m2f-dir "F:/Downloads part 2/cek pv/m2f"] \
         [--toleransi 0.03] [--min-sampel 100] [--batas WS-3:2026-08-10]
 
-Config dan loader TIDAK diubah: usulan pyranometer.ws_gain_periode / ws_jam_penghalang
-dicetak (BELUM dibaca loader) untuk diputuskan pemilik dokumen.
+Config TIDAK diubah: usulan pyranometer.koreksi.ws_faktor_periode / ws_jam_penghalang
+dicetak untuk diputuskan pemilik dokumen. POA selalu dibaca mentah (koreksi=False): kalibrasi
+silang atas POA terkoreksi akan mengukur koreksinya sendiri.
 """
 from __future__ import annotations
 
@@ -111,7 +112,7 @@ def main(argv=None) -> None:
     ap.add_argument("--output-dir", default="coba")
     a = ap.parse_args(argv)
 
-    loader, offset = _muat_poa(a.geometry, a.raw_root, None)
+    loader, offset = _muat_poa(a.geometry, a.raw_root, None, koreksi=False)
     kolom = [c for c in loader.df.columns if str(c).startswith("WS-")]
     poa = loader.df.loc[a.mulai:f"{a.akhir} 23:59:59", kolom]
 
@@ -149,10 +150,10 @@ def main(argv=None) -> None:
     catatan = pd.DataFrame({"butir": [
         "rentang", "sampel stabil per WS", "hari kosong per WS",
         "sampel nol saat WS lain cerah (10-14, > 500 W/m2) per WS", "sampel galat (<0 atau >1400) per WS",
-        "offset POA (menit)", "acuan larik", "batas periode manual", "pembanding", "ambang"], "nilai": [
+        "offset POA (menit)", "POA", "acuan larik", "batas periode manual", "pembanding", "ambang"], "nilai": [
         f"{awal:%Y-%m-%d}..{akhir:%Y-%m-%d}",
         "; ".join(f"{ws}: {int(n)}" for ws, n in stabil.sum().items()), per_ws("hari_kosong"),
-        per_ws("nol_saat_cerah"), per_ws("galat"), offset,
+        per_ws("nol_saat_cerah"), per_ws("galat"), offset, "mentah (koreksi tidak diterapkan)",
         a.m2f_dir or "-", "; ".join(a.batas) or "-", ", ".join(pemb) if pemb else "semua WS lain",
         f"stabil {a.toleransi * 100:g} %; POA > 300; 09-15; min 2 pembanding; {a.min_sampel} sampel/bulan; "
         "penghalang 10 % x 3 bulan; bergeser 5 %; sepakat 3 %; Kt sangat cerah 0,75; "
@@ -178,17 +179,18 @@ def main(argv=None) -> None:
     print(sep.round(dict.fromkeys(["gain_rel", "gain_abs", "gain_larik", "usulan"], 3)).to_string(index=False))
     usul = sep[sep["status"] == "usulan_koreksi"]
     if len(usul) or len(hal):
-        print("\n# usulan (BELUM diterapkan; loader belum membaca kunci ini):\npyranometer:")
+        print("\n# usulan (BELUM diterapkan; salin ke config sesudah disetujui, lalu aktif: true):\n"
+              "pyranometer:\n  koreksi:")
         if len(usul):
-            print("  ws_gain_periode:")
+            print("    ws_faktor_periode:")
             for ws, g in usul.groupby("ws"):
-                print(f"    {ws}:")
+                print(f"      {ws}:")
                 for r in g.itertuples():
-                    print(f"      - {{mulai: {r.mulai:%Y-%m-%d}, akhir: {r.akhir:%Y-%m-%d}, gain: {r.usulan:.3f}}}")
+                    print(f"        - {{mulai: {r.mulai:%Y-%m-%d}, akhir: {r.akhir:%Y-%m-%d}, faktor: {r.usulan:.3f}}}")
         if len(hal):
-            print("  ws_jam_penghalang:")
+            print("    ws_jam_penghalang:")
             for ws, g in hal.groupby("ws"):
-                print(f"    {ws}: {sorted(int(j) for j in g['jam'])}")
+                print(f"      {ws}:\n        - {{mulai: <isi>, akhir: <isi>, jam: {sorted(int(j) for j in g['jam'])}}}")
     if len(tu):
         print("\n# kandidat titik ubah (periksa dulu; bukan batas otomatis):")
         for r in tu.itertuples():

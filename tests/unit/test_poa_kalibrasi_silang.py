@@ -386,9 +386,9 @@ class _Langit:
 
 
 @pytest.mark.filterwarnings("error::UserWarning")
-def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatch):
+def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatch, capsys):
     """Usulan hanya dicetak; config dan loader baru berubah lewat spesifikasi terpisah."""
-    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset: (_Loader(), 5.0))
+    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset, **kw: (_Loader(), 5.0))
     monkeypatch.setattr(cli.PvlibClearSkyEstimator, "from_geometry_yaml",
                         classmethod(lambda cls, *a, **k: _Langit()))
     config = Path("config/site_geometry.yaml")
@@ -405,14 +405,33 @@ def test_cli_delapan_sheet_usulan_ws2_tanpa_mengubah_config(tmp_path, monkeypatc
     assert s.loc["WS-2", "status"] == "usulan_koreksi"
     assert s.loc["WS-2", "usulan"] == pytest.approx(1 / 0.8, rel=0.01)
     assert config.read_bytes() == sebelum
+    # Cetakan = entri config pyranometer.koreksi: angkanya faktor pengali, bukan gain sensor.
+    out = capsys.readouterr().out
+    assert "  koreksi:\n    ws_faktor_periode:" in out and "faktor: 1.250" in out and "gain:" not in out
     # Grafik rasio harian untuk tim O&M: lompatan dicocokkan dengan log pekerjaan.
     assert (tmp_path / "poa_cross_calibration_20260101_20260331_harian.png").stat().st_size > 0
+
+
+def test_cli_kalibrasi_silang_membaca_poa_mentah(tmp_path, monkeypatch):
+    """Kalibrasi silang atas POA terkoreksi akan mengukur koreksinya sendiri."""
+    dipanggil = {}
+
+    def muat(geometry, raw_root, offset, **kw):
+        dipanggil.update(kw)
+        return _Loader(), 5.0
+    monkeypatch.setattr(cli, "_muat_poa", muat)
+    monkeypatch.setattr(cli.PvlibClearSkyEstimator, "from_geometry_yaml",
+                        classmethod(lambda cls, *a, **k: _Langit()))
+    cli.main(["--mulai", "2026-01-01", "--akhir", "2026-03-31", "--output-dir", str(tmp_path)])
+    assert dipanggil == {"koreksi": False}
+    catatan = pd.read_excel(tmp_path / "poa_cross_calibration_20260101_20260331.xlsx", sheet_name="Catatan")
+    assert catatan.set_index("butir")["nilai"]["POA"] == "mentah (koreksi tidak diterapkan)"
 
 
 def _pasang(monkeypatch, df):
     loader = _Loader()
     loader.df = df
-    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset: (loader, 5.0))
+    monkeypatch.setattr(cli, "_muat_poa", lambda geometry, raw_root, offset, **kw: (loader, 5.0))
     monkeypatch.setattr(cli.PvlibClearSkyEstimator, "from_geometry_yaml",
                         classmethod(lambda cls, *a, **k: _Langit()))
 

@@ -34,8 +34,11 @@ MIN_N_CALIB = 100
 MAKS_POA_KOSONG = 0.5
 
 
-def _muat_poa(geometry: str, raw_root: str, offset):
-    """PyranometerLoader dari geometri; path POA relatif diawali ``raw_root``."""
+def _muat_poa(geometry: str, raw_root: str, offset, *, koreksi: bool = True):
+    """PyranometerLoader dari geometri; path POA relatif diawali ``raw_root``.
+
+    ``koreksi=False`` mengabaikan blok ``pyranometer.koreksi`` (POA mentah).
+    """
     with open(geometry, "r", encoding="utf-8") as fp:
         geo = yaml.safe_load(fp) or {}
     pyr = geo.get("pyranometer") or {}
@@ -43,7 +46,8 @@ def _muat_poa(geometry: str, raw_root: str, offset):
     paths = [p if os.path.isabs(p) else os.path.join(raw_root, p) for p in paths]
     off = float(pyr.get("time_offset_minutes", 0.0) if offset is None else offset)
     loader = PyranometerLoader(paths, sheet=str(pyr.get("sheet", "POA PLTS IKN")),
-                               ws_to_wb=geo.get("ws_to_wb") or {}, time_offset_minutes=off)
+                               ws_to_wb=geo.get("ws_to_wb") or {}, time_offset_minutes=off,
+                               koreksi=(pyr.get("koreksi") if koreksi else None))
     return loader, off
 
 
@@ -128,12 +132,13 @@ def main(argv=None) -> None:
     dibuang = harian.loc[harian["dibuang"], "alasan"].value_counts()
     catatan = pd.DataFrame({"butir": [
         "rentang", "workbook", "WB-hari", "WB-hari dibuang", "offset POA (menit)", "label musim",
-        "ambang", "hanya_sesudah"], "nilai": [
+        "ambang", "hanya_sesudah", "koreksi POA"], "nilai": [
         f"{awal:%Y-%m-%d}..{akhir:%Y-%m-%d}", len(found), len(harian),
         "; ".join(f"{k}: {v}" for k, v in dibuang.items()) or "0",
         offset, "satu musim" if bulan < 3 else f"{bulan} bulan",
         f"ayunan 0.03; |t| 2; min 20 hari; n_calib {MIN_N_CALIB}; poa_kosong {MAKS_POA_KOSONG}; hujan 5 mm; maks 30",
-        a.hanya_sesudah or "-"]})
+        a.hanya_sesudah or "-",
+        f"aktif ({loader.koreksi.get('sumber', '-')})" if getattr(loader, "koreksi_aktif", False) else "tidak aktif"]})
     os.makedirs(a.output_dir, exist_ok=True)
     dasar = os.path.join(a.output_dir, f"derate_calibration_{awal:%Y%m%d}_{akhir:%Y%m%d}")
     with pd.ExcelWriter(dasar + ".xlsx") as w:

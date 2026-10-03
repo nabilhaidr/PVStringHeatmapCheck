@@ -208,3 +208,5 @@ def test_cli_menulis_empat_sheet_tanpa_mengubah_config(tmp_path, monkeypatch):
     assert harian["kt"].round(3).eq(0.7).all()
     assert list(harian["hari_sejak_hujan"]) == [1, 1, 2, 2]
     assert config.read_bytes() == sebelum
+    # Derate dari POA terkoreksi vs mentah berbeda angkanya: laporan harus menyebut yang mana.
+    assert x.parse("Catatan").set_index("butir")["nilai"]["koreksi POA"] == "tidak aktif"
