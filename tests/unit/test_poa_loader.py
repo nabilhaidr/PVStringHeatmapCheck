@@ -230,3 +230,93 @@ def test_from_geometry_yaml_reads_time_offset(synthetic_pyranometer_xlsx, tmp_pa
     loader = PyranometerLoader.from_geometry_yaml(str(geo))
     base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
     assert _ws1(loader, "2026-05-14 09:05") == pytest.approx(_ws1(base, "2026-05-14 09:00"))
+
+
+# ---------- Koreksi sensor (spec 2026-10-02-penerapan-koreksi-poa-loader) ----------
+
+def _k(**isi):
+    return {"aktif": True, **isi}
+
+
+def _poa(loader, ws, t):
+    return float(loader.df.loc[pd.Timestamp(t), ws])
+
+
+def test_koreksi_tidak_aktif_identik_mentah(synthetic_pyranometer_xlsx):
+    """Blok koreksi yang belum disetujui (aktif: false) tidak boleh mengubah satu angka pun."""
+    base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
+    off = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, koreksi={
+        "aktif": False, "ws_faktor_periode": {"WS-3": [{"mulai": "2026-05-14", "akhir": None, "faktor": 1.1}]}})
+    pd.testing.assert_frame_equal(base.df, off.df)
+    assert not off.koreksi_aktif and off.ringkasan_koreksi.empty
+
+
+def test_faktor_hanya_di_rentang(synthetic_pyranometer_xlsx):
+    """WS-3 1 Jan-10 Agu 2026 membaca ~6 % rendah: faktor berlaku tepat di rentangnya saja."""
+    base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
+    k = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, koreksi=_k(ws_faktor_periode={
+        "WS-3": [{"mulai": "2026-05-14", "akhir": "2026-05-14", "faktor": 1.1}],
+        "WS-4": [{"mulai": "2026-05-15", "akhir": None, "faktor": 1.1}]}))
+    assert _poa(k, "WS-3", "2026-05-14 12:00") == pytest.approx(1.1 * _poa(base, "WS-3", "2026-05-14 12:00"))
+    assert _poa(k, "WS-3", "2026-05-14 23:55") == pytest.approx(1.1 * _poa(base, "WS-3", "2026-05-14 23:55"))
+    assert _poa(k, "WS-4", "2026-05-14 12:00") == pytest.approx(_poa(base, "WS-4", "2026-05-14 12:00"))
+
+
+def test_penghalang_hanya_jam_dan_rentangnya(synthetic_pyranometer_xlsx):
+    """WS-1 terbayangi pukul 11-12 sejak Jun 2026: hanya jam itu yang dibuang."""
+    k = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, koreksi=_k(ws_jam_penghalang={
+        "WS-1": [{"mulai": "2026-05-14", "akhir": None, "jam": [11]}]}))
+    assert k.df.loc["2026-05-14 11:00":"2026-05-14 11:55", "WS-1"].isna().all()
+    assert k.df.loc["2026-05-14 10:55", "WS-1"] > 0 and k.df.loc["2026-05-14 12:00", "WS-1"] > 0
+
+
+def test_dikecualikan_diisi_avg_terkoreksi(synthetic_pyranometer_xlsx):
+    """WS-1 dikeluarkan: WB08 diisi rata-rata WS lain yang SUDAH dikoreksi, bukan avg xlsx yang tercemar."""
+    k = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, koreksi=_k(
+        ws_dikecualikan={"WS-1": [{"mulai": "2026-05-14", "akhir": None}]},
+        ws_faktor_periode={"WS-3": [{"mulai": "2026-05-14", "akhir": None, "faktor": 1.2}]}))
+    t = pd.DatetimeIndex(["2026-05-14 12:00"])
+    s = k.get_per_ws(t, "WB08")
+    p = float(k.df_mentah.loc[t[0], "WS-4"])                 # semua WS mentah sama; WS-2 NaN pukul 8-14
+    assert s.iloc[0] == pytest.approx((1.2 * p + p + p) / 3)  # WS-3 x1,2; WS-4; WS-5
+    assert s.attrs["koreksi_aktif"] and s.attrs["fallback_filled"] == 1
+
+
+def test_ringkasan_koreksi_menghitung_sampel(synthetic_pyranometer_xlsx):
+    k = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, koreksi=_k(ws_jam_penghalang={
+        "WS-1": [{"mulai": "2026-05-14", "akhir": "2026-05-14", "jam": [11]}]}))
+    r = k.ringkasan_koreksi.iloc[0]
+    assert (r["ws"], r["jenis"], r["n_sampel"]) == ("WS-1", "ws_jam_penghalang", 12)
+
+
+@pytest.mark.parametrize("koreksi", [
+    _k(ws_faktor_periode={"WS-3": [{"mulai": "2026-05-14", "akhir": None, "faktor": 1.5}]}),
+    _k(ws_faktor_periode={"WS-3": [{"mulai": "2026-05-01", "akhir": "2026-05-20", "faktor": 1.1},
+                                   {"mulai": "2026-05-14", "akhir": None, "faktor": 1.05}]}),
+    _k(ws_dikecualikan={"WS-9": [{"mulai": "2026-05-14", "akhir": None}]}),
+    _k(ws_jam_penghalang={"WS-1": [{"mulai": "2026-05-14", "akhir": None, "jam": [24]}]}),
+    {"aktif": "ya"},
+])
+def test_koreksi_tidak_sah_ditolak(synthetic_pyranometer_xlsx, koreksi):
+    """Salah ketik di config tidak boleh diam-diam menghasilkan POA yang salah."""
+    with pytest.raises(ValueError):
+        PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP, koreksi=koreksi)
+
+
+def test_from_geometry_yaml_membaca_dan_bisa_mematikan_koreksi(synthetic_pyranometer_xlsx, tmp_path):
+    geo = tmp_path / "geo.yaml"
+    geo.write_text(
+        "pyranometer:\n"
+        f"  xlsx_path: {synthetic_pyranometer_xlsx!r}\n"
+        "  koreksi:\n"
+        "    aktif: true\n"
+        "    ws_faktor_periode:\n"
+        "      WS-3:\n"
+        "        - {mulai: 2026-05-14, akhir: null, faktor: 1.1}\n",
+        encoding="utf-8",
+    )
+    base = PyranometerLoader(synthetic_pyranometer_xlsx, ws_to_wb=WS_TO_WB_MAP)
+    t = "2026-05-14 12:00"
+    assert _poa(PyranometerLoader.from_geometry_yaml(str(geo)), "WS-3", t) == pytest.approx(1.1 * _poa(base, "WS-3", t))
+    assert _poa(PyranometerLoader.from_geometry_yaml(str(geo), koreksi=False), "WS-3", t) == pytest.approx(
+        _poa(base, "WS-3", t))

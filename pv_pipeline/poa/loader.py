@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 
 
@@ -80,6 +81,44 @@ def _parse_ws_num(ws_label: str) -> Optional[int]:
         return None
 
 
+# Koreksi sensor (blok ``pyranometer.koreksi``; spec 2026-10-02-penerapan-koreksi-poa-loader).
+KOREKSI_KUNCI = ("ws_faktor_periode", "ws_jam_penghalang", "ws_dikecualikan")
+KOREKSI_WS = {f"WS-{i}" for i in range(1, 6)}
+KOREKSI_FAKTOR = (0.8, 1.25)
+
+
+def _rentang_koreksi(entri: dict) -> Tuple[pd.Timestamp, pd.Timestamp]:
+    """(mulai 00:00, akhir 23:59:59) inklusif; ``akhir`` None = terbuka."""
+    mulai = pd.Timestamp(entri["mulai"]).normalize()
+    akhir = (pd.Timestamp.max if entri.get("akhir") is None
+             else pd.Timestamp(entri["akhir"]).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
+    return mulai, akhir
+
+
+def _validasi_koreksi(koreksi: dict) -> None:
+    """Salah ketik di config harus gagal keras, bukan diam-diam memberi POA yang salah."""
+    if not isinstance(koreksi.get("aktif"), bool):
+        raise ValueError(f"[pyranometer] koreksi.aktif harus true/false, bukan {koreksi.get('aktif')!r}")
+    for kunci in KOREKSI_KUNCI:
+        for ws, daftar in (koreksi.get(kunci) or {}).items():
+            if ws not in KOREKSI_WS:
+                raise ValueError(f"[pyranometer] koreksi.{kunci}: WS tak dikenal {ws!r}")
+            rentang = []
+            for e in daftar:
+                a, b = _rentang_koreksi(e)
+                if a > b:
+                    raise ValueError(f"[pyranometer] koreksi.{kunci}.{ws}: mulai > akhir pada {e!r}")
+                if kunci == "ws_faktor_periode" and not KOREKSI_FAKTOR[0] < float(e["faktor"]) <= KOREKSI_FAKTOR[1]:
+                    raise ValueError(f"[pyranometer] koreksi.{kunci}.{ws}: faktor {e['faktor']} di luar (0,8; 1,25]")
+                if kunci == "ws_jam_penghalang" and not all(isinstance(j, int) and 0 <= j <= 23 for j in e["jam"]):
+                    raise ValueError(f"[pyranometer] koreksi.{kunci}.{ws}: jam harus bilangan bulat 0-23")
+                rentang.append((a, b))
+            rentang.sort()
+            for (_, b1), (a2, _) in zip(rentang, rentang[1:]):
+                if a2 <= b1:
+                    raise ValueError(f"[pyranometer] koreksi.{kunci}.{ws}: periode tumpang tindih")
+
+
 class PyranometerLoader:
     """Stateful loader: load xlsx sekali di constructor, query banyak kali.
 
@@ -92,12 +131,22 @@ class PyranometerLoader:
         Nama sheet (default ``"POA PLTS IKN"``).
     ws_to_wb : Dict[str, List[str]]
         Mapping ``{"WS-1": ["WB08","WB09","WB10"], ...}``.
+    koreksi : dict, optional
+        Blok ``pyranometer.koreksi`` (``aktif``, ``ws_faktor_periode``,
+        ``ws_jam_penghalang``, ``ws_dikecualikan``). ``None`` atau
+        ``aktif: false`` = mentah. Bila aktif, ``avg`` dihitung ulang dari WS
+        terkoreksi.
 
     Attributes
     ----------
     df : pd.DataFrame
         DataFrame ber-index ``DatetimeIndex`` (naive), sort ascending.
         Kolom = WS labels (mis. ``"WS-1"``) + ``"avg"`` untuk rata-rata.
+    df_mentah : pd.DataFrame
+        ``df`` sebelum koreksi (objek yang sama bila koreksi tidak aktif).
+    koreksi_aktif : bool
+    ringkasan_koreksi : pd.DataFrame
+        Satu baris per entri koreksi: ``ws, jenis, mulai, akhir, nilai, n_sampel``.
     wb_to_ws : Dict[str, str]
         Reverse map ``{"WB01": "WS-5", "WB02": "WS-5", ...}``.
     xlsx_paths : List[str]
@@ -110,6 +159,7 @@ class PyranometerLoader:
         sheet: str = "POA PLTS IKN",
         ws_to_wb: Optional[Dict[str, List[str]]] = None,
         time_offset_minutes: Union[float, Sequence[float]] = 0.0,
+        koreksi: Optional[dict] = None,
     ):
         # Normalize ke list of paths.
         if isinstance(xlsx_path, (list, tuple)):
@@ -195,6 +245,15 @@ class PyranometerLoader:
         self.xlsx_path: str = paths[0]
         self.sheet: str = sheet
 
+        self.df_mentah: pd.DataFrame = self.df
+        self.koreksi: Optional[dict] = None
+        self.koreksi_aktif: bool = False
+        self.ringkasan_koreksi = pd.DataFrame(columns=["ws", "jenis", "mulai", "akhir", "nilai", "n_sampel"])
+        if koreksi is not None:
+            _validasi_koreksi(koreksi)
+            if koreksi["aktif"]:
+                self._terapkan_koreksi(koreksi)
+
         # Build reverse map WB -> WS (uppercase keys).
         self.ws_to_wb: Dict[str, List[str]] = {}
         self.wb_to_ws: Dict[str, str] = {}
@@ -213,8 +272,11 @@ class PyranometerLoader:
     # ---------- IO helpers ----------
 
     @classmethod
-    def from_geometry_yaml(cls, geometry_path: str) -> "PyranometerLoader":
-        """Convenience: load dari ``config/site_geometry.yaml``."""
+    def from_geometry_yaml(cls, geometry_path: str, *, koreksi: bool = True) -> "PyranometerLoader":
+        """Convenience: load dari ``config/site_geometry.yaml``.
+
+        ``koreksi=False`` mengabaikan blok ``pyranometer.koreksi`` (POA mentah).
+        """
         if not os.path.exists(geometry_path):
             raise FileNotFoundError(
                 f"[pyranometer] geometry yaml {geometry_path!r} not found."
@@ -238,6 +300,7 @@ class PyranometerLoader:
         return cls(
             xlsx_path=xlsx_path, sheet=sheet, ws_to_wb=ws_to_wb,
             time_offset_minutes=pyr.get("time_offset_minutes", 0.0),
+            koreksi=(pyr.get("koreksi") if koreksi else None),
         )
 
     # ---------- Query API ----------
@@ -293,6 +356,7 @@ class PyranometerLoader:
             empty.attrs["ws_label"] = None
             empty.attrs["fallback_filled"] = 0
             empty.attrs["fallback_total"] = len(idx)
+            empty.attrs["koreksi_aktif"] = self.koreksi_aktif
             return empty
         series = self._reindex_nearest(self.df[ws_label], idx, tolerance=tolerance)
 
@@ -313,6 +377,7 @@ class PyranometerLoader:
         series.attrs["ws_label"] = ws_label
         series.attrs["fallback_filled"] = n_filled
         series.attrs["fallback_total"] = len(idx)
+        series.attrs["koreksi_aktif"] = self.koreksi_aktif
         return series
 
     def get_avg(
@@ -354,6 +419,33 @@ class PyranometerLoader:
         return series
 
     # ---------- Internal ----------
+
+    def _terapkan_koreksi(self, koreksi: dict) -> None:
+        """Faktor -> penghalang -> dikecualikan -> avg dihitung ulang dari WS terkoreksi (spec 2026-10-02)."""
+        self.df_mentah = self.df.copy()
+        df, idx, baris = self.df, self.df.index, []
+        for kunci in KOREKSI_KUNCI:
+            for ws, daftar in (koreksi.get(kunci) or {}).items():
+                if ws not in df.columns:
+                    raise ValueError(f"[pyranometer] koreksi.{kunci}: kolom {ws} tidak ada di xlsx")
+                for e in daftar:
+                    a, b = _rentang_koreksi(e)
+                    m = (idx >= a) & (idx <= b)
+                    if kunci == "ws_jam_penghalang":
+                        m &= idx.hour.isin(e["jam"])
+                    n = int(df.loc[m, ws].notna().sum())
+                    if kunci == "ws_faktor_periode":
+                        df.loc[m, ws] = df.loc[m, ws] * float(e["faktor"])
+                        nilai = float(e["faktor"])
+                    else:
+                        df.loc[m, ws] = np.nan
+                        nilai = e.get("jam", e.get("alasan"))
+                    baris.append({"ws": ws, "jenis": kunci, "mulai": a, "akhir": e.get("akhir"), "nilai": nilai,
+                                  "n_sampel": n})
+        kol_ws = [c for c in df.columns if str(c).startswith("WS-")]
+        df["avg"] = df[kol_ws].mean(axis=1, skipna=True)
+        self.koreksi, self.koreksi_aktif = koreksi, True
+        self.ringkasan_koreksi = pd.DataFrame(baris, columns=self.ringkasan_koreksi.columns)
 
     @staticmethod
     def _normalize_ws_label(label: str) -> str:
